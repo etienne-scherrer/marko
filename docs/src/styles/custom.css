@@ -113,6 +113,17 @@ body::after {
   );
 }
 
+/* Cut a hole in the overlay over elements marked [data-no-scanlines] (e.g. video
+   embeds). Starlight isolates .main-pane, so z-index can't lift them above it;
+   the rect is kept in sync by a script in astro.config.mjs. */
+body.has-no-scanlines::after {
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-size: 100% 100%, var(--no-scanlines-w, 0) var(--no-scanlines-h, 0);
+  mask-position: 0 0, var(--no-scanlines-x, 0) var(--no-scanlines-y, 0);
+  mask-repeat: no-repeat;
+  mask-composite: exclude;
+}
+
 /* ============================================
    SELECTION & SCROLLBAR (from design-guide/shared.css)
    ============================================ */
