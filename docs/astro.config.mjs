@@ -86,6 +86,14 @@ export default defineConfig({
 					tag: 'script',
 					content: `document.addEventListener('DOMContentLoaded',()=>{document.documentElement.dataset.theme='dark';document.querySelectorAll('.social-icons a').forEach(a=>{a.setAttribute('target','_blank');a.setAttribute('rel','me noopener')})})`,
 				},
+				{
+					tag: 'script',
+					content: `document.addEventListener('DOMContentLoaded',()=>{const el=document.querySelector('[data-no-scanlines]');if(!el)return;const b=document.body;b.classList.add('has-no-scanlines');const header=document.querySelector('header');const sync=()=>{const r=el.getBoundingClientRect();const top=Math.max(r.top,header?header.getBoundingClientRect().bottom:0);b.style.setProperty('--no-scanlines-x',r.left+'px');b.style.setProperty('--no-scanlines-y',top+'px');b.style.setProperty('--no-scanlines-w',r.width+'px');b.style.setProperty('--no-scanlines-h',Math.max(0,r.bottom-top)+'px')};sync();addEventListener('scroll',sync,{passive:true});addEventListener('resize',sync)})`,
+				},
+				{
+					tag: 'script',
+					content: `document.addEventListener('DOMContentLoaded',()=>{const frames=[...document.querySelectorAll('iframe[data-no-captions]')];if(!frames.length)return;const send=(f,msg)=>f.contentWindow&&f.contentWindow.postMessage(JSON.stringify(msg),'*');frames.forEach(f=>{const listen=()=>send(f,{event:'listening',id:f.src});f.addEventListener('load',listen);listen()});addEventListener('message',e=>{if(!/youtube(-nocookie)?\\.com$/.test(new URL(e.origin).hostname))return;let d;try{d=JSON.parse(e.data)}catch{return}const state=d.event==='onStateChange'?d.info:d.info&&d.info.playerState;if(state!==1)return;const f=frames.find(f=>f.contentWindow===e.source);if(!f)return;send(f,{event:'command',func:'unloadModule',args:['captions']});send(f,{event:'command',func:'unloadModule',args:['cc']})})})`,
+				},
 			],
 			sidebar: [
 				{
