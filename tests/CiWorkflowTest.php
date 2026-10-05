@@ -58,6 +58,18 @@ it('runs the destructive group on a schedule instead of on every PR', function (
         ->and($ci)->not->toContain('test:all');
 });
 
+it(
+    'provides a redis service so the redis integration suites never silently skip',
+    function () use ($ci, $nightly): void {
+        $redisService = "    services:\n      # Redis integration suites (packages/cache-redis, packages/ratelimiter)\n"
+            . "      # skip without a server; this keeps them running on every build.\n"
+            . "      redis:\n        image: redis:7-alpine\n        ports:\n          - 6379:6379\n";
+
+        expect($ci)->toContain("    name: Tests\n    runs-on: ubuntu-latest\n" . $redisService)
+            ->and($nightly)->toContain($redisService);
+    },
+);
+
 it('installs the roadrunner binary in the nightly workflow', function () use ($nightly): void {
     // Without this, packages/roadrunner's end-to-end suite finds no `rr`
     // binary on the nightly runner and every one of its security-critical
