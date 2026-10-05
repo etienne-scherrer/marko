@@ -5,18 +5,20 @@ declare(strict_types=1);
 namespace Marko\Database\PgSql\Connection;
 
 use JsonException;
+use Marko\Core\Contracts\ResettableInterface;
 use Marko\Database\Config\DatabaseConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
 use Marko\Database\Exceptions\TransactionException;
 use Marko\Database\PgSql\Exceptions\ConnectionException;
+use Override;
 use PDO;
 use PDOException;
 use PDOStatement;
 use Throwable;
 
-class PgSqlConnection implements ConnectionInterface, TransactionInterface
+class PgSqlConnection implements ConnectionInterface, TransactionInterface, ResettableInterface
 {
     private ?PDO $pdo = null;
 
@@ -290,6 +292,20 @@ class PgSqlConnection implements ConnectionInterface, TransactionInterface
             $this->rollback();
 
             throw $e;
+        }
+    }
+
+    /**
+     * Rolls back a transaction abandoned by a request that threw before
+     * commit()/rollback(), so a long-running worker never carries it into
+     * the next request. Never opens a connection: an unconnected instance
+     * has nothing to roll back.
+     */
+    #[Override]
+    public function reset(): void
+    {
+        if ($this->pdo !== null && $this->pdo->inTransaction()) {
+            $this->pdo->rollBack();
         }
     }
 }
