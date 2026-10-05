@@ -94,10 +94,13 @@ it('documents how to run and extend the integration suite', function (): void {
 });
 
 it('passes the script name and command ahead of the arguments to the command runner', function (): void {
-    $input = integrationCommandInput('queue:work', ['--once', '--queue=default']);
+    $input = integrationCommandInput('queue:retry', ['5', '--queue=default', '--once']);
 
-    expect($input->getCommand())->toBe('queue:work')
-        ->and($input->getArguments())->toBe(['--once', '--queue=default']);
+    // Since #184 getArguments() holds positionals only; options are parsed apart.
+    expect($input->getCommand())->toBe('queue:retry')
+        ->and($input->getArguments())->toBe(['5'])
+        ->and($input->getOption('queue'))->toBe('default')
+        ->and($input->hasOption('once'))->toBeTrue();
 });
 
 it('links only the integration module set into the fixture vendor directory', function (): void {

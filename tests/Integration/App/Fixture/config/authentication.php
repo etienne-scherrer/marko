@@ -24,8 +24,4 @@ return [
             'cost' => 4,
         ],
     ],
-    'remember' => [
-        'expiration' => 43200,
-        'cookie' => 'remember_token',
-    ],
 ];

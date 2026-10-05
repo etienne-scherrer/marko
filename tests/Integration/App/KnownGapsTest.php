@@ -39,13 +39,6 @@ it('honours a config value supplied only as a real environment variable')
     );
 
 // #161 Database queue retries forever; no worker binding
-it('starts queue:work without the fixture binding WorkerInterface itself')
-    ->todo(
-        note: 'Delete the WorkerInterface binding from Fixture/app/integration/module.php; queue:work --once must '
-            . 'still resolve and run.',
-        issue: 161,
-    );
-
 it('moves a job that always throws to failed_jobs after max_attempts')
     ->todo(
         note: 'Push AlwaysFailingJob, run queue:work --once max_attempts (3) times, releasing its delay between runs. '
@@ -121,28 +114,10 @@ it('keeps separate rate-limit counters for different routes')
         issue: 165,
     );
 
-// #166 Redis and RabbitMQ drivers ignore their config
-it('connects cache-redis to the host, port and database from config')
-    ->todo(
-        note: 'Fixture/config/cache-redis.php reads REDIS_HOST/REDIS_PORT. Point it at a non-default database and '
-            . 'assert the value lands there. Today RedisConnection always uses 127.0.0.1:6379 database 0.',
-        issue: 166,
-    );
-
-// #167 #[Can] never runs
-it('denies an authenticated user without the ability with 403')
-    ->todo(
-        note: 'Log in fixture user 1 through the session guard and request GET /admin. The gate denies "view-admin" '
-            . 'to everyone, so the response must be 403 (and 401 when logged out). Today the middleware never reads '
-            . '#[Can] and returns 200. Also remove Fixture/config/authorization.php once a null default_guard no '
-            . 'longer breaks GateInterface resolution.',
-        issue: 167,
-    );
-
 // #168 Remember-me and auth events
 it('issues a remember-me cookie that re-authenticates a later request')
     ->todo(
-        note: 'Logging in with remember enabled must set the remember_token cookie; a request carrying only that '
+        note: 'Logging in with remember enabled must set the remember_session cookie; a request carrying only that '
             . 'cookie (no session) must be authenticated as the same user.',
         issue: 168,
     );

@@ -33,6 +33,7 @@ const INTEGRATION_MODULES = [
     'cache',
     'cache-redis',
     'cli',
+    'clock',
     'config',
     'core',
     'database',

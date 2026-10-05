@@ -3,12 +3,16 @@
 declare(strict_types=1);
 
 use Marko\Cache\Contracts\CacheInterface;
+use Marko\Cache\Redis\RedisConnection;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Integration\Fixture\Entity\Author;
 use Marko\Integration\Fixture\Job\RecordingJob;
 use Marko\Integration\Fixture\Repository\AuthorRepository;
 use Marko\Integration\Fixture\Repository\BookRepository;
 use Marko\Queue\QueueInterface;
+use Marko\Queue\Worker;
+use Marko\Queue\WorkerInterface;
+use Predis\Client;
 
 /*
  * Cross-package behaviour that works on develop today, exercised through
@@ -23,8 +27,10 @@ afterEach(fn () => tearDownIntegrationTest($this));
 
 it('applies the fixture migrations with db:migrate', function (): void {
     // setUpIntegrationTest already migrated once; a fresh database proves the
-    // command against an empty schema.
-    resetIntegrationDatabase();
+    // command against an empty schema. Resetting drops the database with
+    // FORCE, which kills the app's shared connection (#159), so boot a fresh
+    // app on the empty database instead of reusing the old one.
+    $this->app = bootIntegrationApp($this->project, migrate: false);
 
     $result = runIntegrationCommand($this->app, 'db:migrate', ['--no-generate']);
     $tables = array_column(
@@ -106,3 +112,50 @@ it('processes a successful job with queue:work --once', function (): void {
         ->and(file_get_contents($marker))->toBe('processed by the worker')
         ->and($queue->size())->toBe(0);
 });
+
+it('resolves WorkerInterface from the shipped queue wiring', function (): void {
+    // The fixture module no longer binds WorkerInterface itself.
+    expect($this->app->container->get(WorkerInterface::class))->toBeInstanceOf(Worker::class);
+})->issue(161);
+
+it('connects cache-redis to the host, port and database from config', function (): void {
+    $env = getenv();
+    $connection = $this->app->container->get(RedisConnection::class);
+    $cache = $this->app->container->get(CacheInterface::class);
+    $key = 'integration.' . bin2hex(random_bytes(8));
+
+    // Fixture/config/cache-redis.php selects database 2; probe it directly.
+    $probe = new Client(array_filter([
+        'host' => $env['REDIS_HOST'],
+        'port' => (int) ($env['REDIS_PORT'] ?? 6379),
+        'database' => 2,
+        'password' => ($env['REDIS_PASSWORD'] ?? '') !== '' ? $env['REDIS_PASSWORD'] : null,
+    ], fn (mixed $value): bool => $value !== null));
+
+    try {
+        $cache->set($key, 'stored', 60);
+
+        expect($connection->host)->toBe($env['REDIS_HOST'])
+            ->and($connection->port)->toBe((int) ($env['REDIS_PORT'] ?? 6379))
+            ->and($connection->database)->toBe(2)
+            ->and($probe->exists($connection->prefix . $key))->toBe(1);
+    } finally {
+        $cache->delete($key);
+        $probe->disconnect();
+    }
+})->issue(166);
+
+it('enforces #[Can] globally: 401 for a guest, 403 for a user without the ability', function (): void {
+    $guest = $this->app->router->handle(integrationRequest('GET', '/admin'));
+
+    $login = $this->app->router->handle(integrationRequest('GET', '/login'));
+    $sessionId = (string) integrationCookieValue($login, 'marko_session');
+    $denied = $this->app->router->handle(
+        integrationRequest('GET', '/admin', cookies: ['marko_session' => $sessionId]),
+    );
+
+    expect($guest->statusCode())->toBe(401)
+        ->and($login->body())->toBe('logged in')
+        ->and($denied->statusCode())->toBe(403)
+        ->and($denied->body())->not->toContain('admin area');
+})->issue(167);

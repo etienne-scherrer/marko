@@ -5,18 +5,12 @@ declare(strict_types=1);
 use Marko\Authentication\Contracts\UserProviderInterface;
 use Marko\Authorization\Contracts\GateInterface;
 use Marko\Core\Path\ProjectPaths;
-use Marko\Queue\Worker;
-use Marko\Queue\WorkerInterface;
 use Marko\Scheduler\Schedule;
 use Marko\Testing\Fake\FakeAuthenticatable;
 use Marko\Testing\Fake\FakeUserProvider;
 
 return [
     'bindings' => [
-        // Workaround until #161: no shipped module binds WorkerInterface, so
-        // `queue:work` cannot be resolved without this line. #161 removes it.
-        WorkerInterface::class => Worker::class,
-
         // One known user (id 1) for the session guard; the fixture has no
         // users table because authentication itself is not under test here.
         UserProviderInterface::class => static fn (): UserProviderInterface => new FakeUserProvider(

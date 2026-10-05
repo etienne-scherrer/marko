@@ -99,7 +99,7 @@ docker compose -f tests/Integration/compose.yml up -d
 DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 composer test:integration
 ```
 
-If port 5432 is already taken, start the services with `DB_PORT=55432 docker compose -f tests/Integration/compose.yml up -d` and also export `DB_PORT=55432` when running the suite. Redis must stay on `127.0.0.1:6379` until #166, because `marko/cache-redis` ignores its config. Other variables, with their defaults: `DB_USERNAME` (`marko`), `DB_PASSWORD` (`marko`), `DB_DATABASE` (`marko_integration`) and `REDIS_PORT` (`6379`).
+If port 5432 or 6379 is already taken, start the services with `DB_PORT=55432 REDIS_PORT=56379 docker compose -f tests/Integration/compose.yml up -d` and export the same `DB_PORT` / `REDIS_PORT` when running the suite. Other variables, with their defaults: `DB_USERNAME` (`marko`), `DB_PASSWORD` (`marko`), `DB_DATABASE` (`marko_integration`) and `REDIS_PORT` (`6379`).
 
 ### Skipping and required mode
 

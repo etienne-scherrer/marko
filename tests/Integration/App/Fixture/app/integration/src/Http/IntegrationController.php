@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Marko\Integration\Fixture\Http;
 
+use Marko\Authentication\AuthManager;
 use Marko\Authorization\Attributes\Can;
-use Marko\Authorization\Middleware\AuthorizationMiddleware;
 use Marko\RateLimiter\Middleware\RateLimitMiddleware;
 use Marko\Routing\Attributes\Get;
 use Marko\Routing\Attributes\Middleware;
@@ -16,6 +16,7 @@ readonly class IntegrationController
 {
     public function __construct(
         private SessionInterface $session,
+        private AuthManager $auth,
     ) {}
 
     #[Get('/health')]
@@ -45,12 +46,24 @@ readonly class IntegrationController
     }
 
     /**
+     * Logs in fixture user 1 through the default (session) guard.
+     */
+    #[Get('/login')]
+    public function login(): Response
+    {
+        $this->auth->guard()->loginById(1);
+
+        return new Response('logged in');
+    }
+
+    /**
      * The gate denies `view-admin` to everyone (see module.php), so any
-     * authenticated request must get a 403 (#167).
+     * authenticated request must get a 403 and a guest a 401. #[Can] is
+     * enforced by the global AuthorizationMiddleware (#167); the route
+     * declares no middleware of its own.
      */
     #[Get('/admin')]
     #[Can('view-admin')]
-    #[Middleware(AuthorizationMiddleware::class)]
     public function admin(): Response
     {
         return new Response('admin area');
