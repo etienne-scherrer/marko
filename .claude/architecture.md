@@ -221,6 +221,14 @@ When your code depends on `marko/log` (interface) instead of `marko/log-file` (d
 | `marko/errors-simple` | Driver | Basic error logging |
 | `marko/errors-advanced` | Driver | Pretty stack traces, suggestions |
 
+### Broadcasting
+
+| Package | Type | Description |
+|---------|------|-------------|
+| `marko/broadcasting` | Interface | `BroadcasterInterface`, `Channel`/`PrivateChannel`, `#[BroadcastChannel]` authorizers and `ChannelRegistry` |
+| `marko/broadcasting-mercure` | Driver | Publishes to a Mercure hub (FrankenPHP built-in hub supported); subscriber JWTs and cookie |
+| `marko/broadcasting-pusher` | Driver | Pusher HTTP API (Pusher, Soketi, Laravel Reverb) and the `/broadcasting/auth` endpoint |
+
 ### Other Packages
 
 | Package | Type | Description |

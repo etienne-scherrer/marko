@@ -292,6 +292,9 @@ Marko ships as composable packages — require only what you need. Every package
 
 | Package | Description |
 |---------|-------------|
+| [broadcasting](packages/broadcasting/README.md) | Realtime broadcasting contracts and channel authorization |
+| [broadcasting-mercure](packages/broadcasting-mercure/README.md) | Mercure hub broadcasting driver |
+| [broadcasting-pusher](packages/broadcasting-pusher/README.md) | Pusher-protocol broadcasting driver (Pusher, Soketi, Reverb) |
 | [pubsub](packages/pubsub/README.md) | Pub/Sub contracts |
 | [pubsub-pgsql](packages/pubsub-pgsql/README.md) | PostgreSQL LISTEN/NOTIFY driver |
 | [pubsub-redis](packages/pubsub-redis/README.md) | Redis Pub/Sub driver |
