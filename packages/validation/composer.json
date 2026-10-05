@@ -4,7 +4,11 @@
     "type": "marko-module",
     "license": "MIT",
     "require": {
-        "php": "^8.5"
+        "php": "^8.5",
+        "marko/core": "self.version"
+    },
+    "require-dev": {
+        "marko/routing": "self.version"
     },
     "autoload": {
         "psr-4": {
