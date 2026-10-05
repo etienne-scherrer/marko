@@ -1,6 +1,6 @@
 # Task 010: Driver integration tests (pgsql + mysql)
 
-**Status**: pending
+**Status**: completed
 **Depends on**: [002, 003, 007, 008, 009]
 **Retry count**: 0
 
@@ -11,14 +11,14 @@ Real-server tests in packages/database-{pgsql,mysql}/tests/Integration that cove
 - Related files: packages/database-*/tests/Integration/SharedConnectionTransactionTest.php (pattern for tests gated on environment variables)
 
 ## Requirements (Test Descriptions)
-- [ ] `it commits nested transaction() calls together`
-- [ ] `it rolls back only the inner work when an inner failure is caught`
-- [ ] `it rolls back everything when the outer transaction fails`
-- [ ] `it runs after-commit callbacks after the outermost commit and not after rollback`
-- [ ] `it lets a second connection skip a row locked with lockForUpdate`
-- [ ] `it makes a second connection fail fast with noWait on a locked row`
-- [ ] `it upserts new rows, existing rows and mixed batches`
-- [ ] `it rejects (pgsql) a batch that hits the same conflict key twice`
+- [x] `it commits nested transaction() calls together`
+- [x] `it rolls back only the inner work when an inner failure is caught`
+- [x] `it rolls back everything when the outer transaction fails`
+- [x] `it runs after-commit callbacks after the outermost commit and not after rollback`
+- [x] `it lets a second connection skip a row locked with lockForUpdate`
+- [x] `it makes a second connection fail fast with noWait on a locked row`
+- [x] `it upserts new rows, existing rows and mixed batches`
+- [x] `it rejects (pgsql) a batch that hits the same conflict key twice`
 
 Notes:
 - Pest loads every test file into one process. Reuse the `pgsqlIntegrationConfig()` / `mysql...` helpers and the `*_SKIP_REASON` consts from `SharedConnectionTransactionTest.php`, or give new global functions and consts unique names, or the run fatals with "Cannot redeclare".

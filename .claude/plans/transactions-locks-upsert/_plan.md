@@ -4,7 +4,7 @@
 2026-10-05
 
 ## Status
-ready
+completed
 
 ## Objective
 Give the database layer the four transactional primitives apps need: nested transactions through savepoints, after-commit/after-rollback callbacks, row locks on the query builder, and upsert on the query builder and repository. Implement them in both drivers and in `ReadWriteConnection`.
@@ -40,31 +40,31 @@ Closes #176
 - Locks on aggregates or unions (these throw instead)
 
 ## Success Criteria
-- [ ] Nested `transaction()` calls commit together. A caught inner failure rolls back only the inner work. An outer failure rolls back everything (pgsql + mysql integration).
-- [ ] `transactionLevel()` is correct through nesting and rollback
-- [ ] After-commit and after-rollback semantics are tested at unit and integration level
-- [ ] `ReadWriteConnection` delegates every new method
-- [ ] Lock SQL for both drivers, plus an integration test showing a second connection skips or fails on the locked row
-- [ ] Upsert SQL for both drivers. Integration covers insert-new, update-existing and mixed batches.
-- [ ] `insertBatch()` uses `transaction()` and its tests stay green
-- [ ] Docs updated
-- [ ] All tests passing; `composer ci` green
+- [x] Nested `transaction()` calls commit together. A caught inner failure rolls back only the inner work. An outer failure rolls back everything (pgsql + mysql integration).
+- [x] `transactionLevel()` is correct through nesting and rollback
+- [x] After-commit and after-rollback semantics are tested at unit and integration level
+- [x] `ReadWriteConnection` delegates every new method
+- [x] Lock SQL for both drivers, plus an integration test showing a second connection skips or fails on the locked row
+- [x] Upsert SQL for both drivers. Integration covers insert-new, update-existing and mixed batches.
+- [x] `insertBatch()` uses `transaction()` and its tests stay green
+- [x] Docs updated
+- [x] All tests passing; `composer ci` green
 
 ## Task Overview
 | Task | Description | Depends On | Status |
 |------|-------------|------------|--------|
-| 001 | TransactionState and TransactionInterface additions | - | pending |
-| 002 | PgSqlConnection savepoints and callbacks | 001 | pending |
-| 003 | MySqlConnection savepoints and callbacks | 001 | pending |
-| 004 | ReadWriteConnection delegation and nested sticky writes | 001 | pending |
-| 005 | Update TransactionInterface test doubles; insertBatch via transaction() | 001 | pending |
-| 006 | Lock and upsert API on QueryBuilderInterface, RepositoryQueryBuilder, exceptions, all implementers kept compiling | - | pending |
-| 007 | PgSqlQueryBuilder locks and upsert | 006 | pending |
-| 008 | MySqlQueryBuilder locks and upsert | 006 | pending |
-| 009 | Repository::upsert | 005, 006 | pending |
-| 010 | Driver integration tests (pgsql + mysql) | 002, 003, 007, 008, 009 | pending |
-| 011 | App integration suite: flip #176 todos, plus an end-to-end lock check | 002, 006, 007 | pending |
-| 012 | Documentation | 001-011 | pending |
+| 001 | TransactionState and TransactionInterface additions | - | completed |
+| 002 | PgSqlConnection savepoints and callbacks | 001 | completed |
+| 003 | MySqlConnection savepoints and callbacks | 001 | completed |
+| 004 | ReadWriteConnection delegation and nested sticky writes | 001 | completed |
+| 005 | Update TransactionInterface test doubles; insertBatch via transaction() | 001 | completed |
+| 006 | Lock and upsert API on QueryBuilderInterface, RepositoryQueryBuilder, exceptions, all implementers kept compiling | - | completed |
+| 007 | PgSqlQueryBuilder locks and upsert | 006 | completed |
+| 008 | MySqlQueryBuilder locks and upsert | 006 | completed |
+| 009 | Repository::upsert | 005, 006 | completed |
+| 010 | Driver integration tests (pgsql + mysql) | 002, 003, 007, 008, 009 | completed |
+| 011 | App integration suite: flip #176 todos, plus an end-to-end lock check | 002, 006, 007 | completed |
+| 012 | Documentation | 001-011 | completed |
 
 ## Architecture Notes
 - `TransactionState` is a plain mutable class (not readonly) and pure. It holds a stack of levels, each with after-commit and after-rollback callback lists. When an inner level commits, its lists merge into the parent. After the outermost commit, the after-commit callbacks run once the state is back at level 0. A rollback discards that level's after-commit list and runs its after-rollback list. `afterCommit()` at level 0 runs immediately. `afterRollback()` at level 0 does nothing, since nothing can roll back.

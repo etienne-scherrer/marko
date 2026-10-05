@@ -1,6 +1,6 @@
 # Task 006: Lock and upsert API on QueryBuilderInterface, RepositoryQueryBuilder and exceptions
 
-**Status**: pending
+**Status**: completed
 **Depends on**: none
 **Retry count**: 0
 
@@ -17,10 +17,10 @@ Declare lockForUpdate(), sharedLock(), skipLocked(), noWait() and upsert() on Qu
   - The ~20 anonymous `QueryBuilderInterface` / `EntityQueryBuilderInterface` doubles under `packages/database/tests/{Query,Entity,Repository}`: add the new methods. Grep `implements QueryBuilderInterface` and `implements EntityQueryBuilderInterface`.
 
 ## Requirements (Test Descriptions)
-- [ ] `it declares lockForUpdate, sharedLock, skipLocked, noWait and upsert on QueryBuilderInterface`
-- [ ] `it delegates lock methods from RepositoryQueryBuilder and returns itself`
-- [ ] `it delegates upsert from RepositoryQueryBuilder`
-- [ ] `it keeps both driver builders and every test double satisfying QueryBuilderInterface` (full `composer test` + `composer phpstan` green)
+- [x] `it declares lockForUpdate, sharedLock, skipLocked, noWait and upsert on QueryBuilderInterface`
+- [x] `it delegates lock methods from RepositoryQueryBuilder and returns itself`
+- [x] `it delegates upsert from RepositoryQueryBuilder`
+- [x] `it keeps both driver builders and every test double satisfying QueryBuilderInterface` (full `composer test` + `composer phpstan` green)
 
 ## Acceptance Criteria
 - All requirements have passing tests

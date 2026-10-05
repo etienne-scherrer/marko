@@ -1,6 +1,6 @@
 # Task 012: Documentation
 
-**Status**: pending
+**Status**: completed
 **Depends on**: [001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011]
 **Retry count**: 0
 
@@ -11,8 +11,8 @@ Document nested transactions, after-commit callbacks, locking and upsert in data
 - Related files: packages/docs-markdown/docs/packages/*.md, docs/DOCS-STANDARDS.md
 
 ## Requirements (Test Descriptions)
-- [ ] `it documents nested transactions, afterCommit/afterRollback, locking and upsert`
-- [ ] `it documents driver differences`:
+- [x] `it documents nested transactions, afterCommit/afterRollback, locking and upsert`
+- [x] `it documents driver differences`:
   - MySQL ignores `uniqueBy` (any unique key triggers the update)
   - PostgreSQL needs a matching unique constraint and rejects duplicate conflict keys within one batch
   - affected-row counts differ by driver
