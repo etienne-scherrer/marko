@@ -62,5 +62,5 @@ docs/           # Documentation site content
 - **Notification**: notification (interface), notification-database
 - **PubSub**: pubsub (interface), pubsub-pgsql, pubsub-redis
 - **Media**: media, media-gd, media-imagick
-- **Other**: blog, validation, hashing, health, http, cors, rate-limiting, scheduler, search, security, testing, api, webhook, pagination, sse, amphp, dev-server
+- **Other**: blog, validation, hashing, health, http, cors, ratelimiter, scheduler, search, security, testing, api, webhook, pagination, sse, amphp, dev-server
 - **Metapackage**: framework (bundles common interface packages)
