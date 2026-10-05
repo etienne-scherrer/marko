@@ -36,6 +36,7 @@ const INTEGRATION_MODULES = [
     'clock',
     'config',
     'core',
+    'cors',
     'database',
     'database-pgsql',
     'encryption',

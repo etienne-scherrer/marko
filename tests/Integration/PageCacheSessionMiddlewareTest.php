@@ -90,6 +90,12 @@ function makePageCacheabilityChecker(): CacheabilityChecker
 {
     $matcher = new class () implements RouteMatcherInterface
     {
+        public function allowedMethods(
+            string $path,
+        ): array {
+            return [];
+        }
+
         public function match(
             string $method,
             string $path,
