@@ -176,11 +176,3 @@ it('rolls back a savepoint without rolling back the outer transaction')
 
 it('runs an after-commit callback only when the transaction commits')
     ->todo(note: 'A callback registered inside a transaction runs after COMMIT and never after ROLLBACK.', issue: 176);
-
-// #177 Constraint-violation exceptions
-it('throws a typed exception for a unique constraint violation')
-    ->todo(
-        note: 'Inserting a duplicate value into a unique column must throw the typed unique-violation exception, not '
-            . 'a raw PDOException.',
-        issue: 177,
-    );
