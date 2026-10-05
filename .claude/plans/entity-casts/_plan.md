@@ -51,9 +51,9 @@ Closes #178
 | 001 | Single conversion pipeline refactor | - | completed |
 | 002 | Cast contracts, resolver and built-in casts | 001 | completed |
 | 003 | Timezone-correct datetimes | 002 | completed |
-| 004 | #[Cast] attribute and cast-aware dirty checking | 002 | pending |
+| 004 | #[Cast] attribute and cast-aware dirty checking | 002 | completed |
 | 005 | #[Timestamps] | 004 | pending |
-| 006 | #[Encrypted] columns and schema types | 004 | pending |
+| 006 | #[Encrypted] columns and schema types | 004 | completed |
 | 007 | Documentation | 003, 004, 005, 006 | pending |
 
 ## Interface Contracts (shared by all tasks)
