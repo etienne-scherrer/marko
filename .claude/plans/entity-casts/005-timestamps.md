@@ -1,6 +1,6 @@
 # Task 005: #[Timestamps]
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 004
 **Retry count**: 0
 
@@ -15,19 +15,19 @@ Entity-level `#[Timestamps(createdAt: 'createdAt', updatedAt: 'updatedAt')]`; Re
 - Update: bump `updatedAt` if the parent OR any participating companion is dirty; if the user already changed `updatedAt` (it is dirty), keep their value. Add it to `$data` via `toDatabaseValue()` before the empty-check short-circuit is evaluated against the real dirty set.
 
 ## Requirements (Test Descriptions)
-- [ ] `it sets createdAt and updatedAt on insert`
-- [ ] `it respects explicitly set timestamp values on insert`
-- [ ] `it sets only updatedAt on update`
-- [ ] `it does not touch updatedAt when nothing is dirty`
-- [ ] `it throws when a timestamp property is missing or not a DateTimeImmutable column`
-- [ ] `it sets timestamps on uninitialized non-nullable DateTimeImmutable properties`
-- [ ] `it sets timestamps for every entity in insertBatch`
-- [ ] `it bumps updatedAt when only a companion is dirty`
-- [ ] `it keeps a user-modified updatedAt on update`
-- [ ] `it throws when Timestamps is declared on an extender entity`
+- [x] `it sets createdAt and updatedAt on insert`
+- [x] `it respects explicitly set timestamp values on insert`
+- [x] `it sets only updatedAt on update`
+- [x] `it does not touch updatedAt when nothing is dirty`
+- [x] `it throws when a timestamp property is missing or not a DateTimeImmutable column`
+- [x] `it sets timestamps on uninitialized non-nullable DateTimeImmutable properties`
+- [x] `it sets timestamps for every entity in insertBatch`
+- [x] `it bumps updatedAt when only a companion is dirty`
+- [x] `it keeps a user-modified updatedAt on update`
+- [x] `it throws when Timestamps is declared on an extender entity`
 
 ## Acceptance Criteria
 - All requirements have passing tests
 
 ## Implementation Notes
-(Left blank - filled in by programmer during implementation)
+Added Attributes\Timestamps, EntityMetadata createdAtProperty/updatedAtProperty (also carried by withExtenders), EntityMetadataFactory::resolveTimestamps() validation, Repository::now() UTC seam, applyInsertTimestamps() for insert() and insertBatch(), and updatedAt bump in update(). Tests in packages/database/tests/Entity/Cast/TimestampsTest.php.

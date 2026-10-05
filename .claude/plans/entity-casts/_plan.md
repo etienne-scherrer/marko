@@ -4,7 +4,7 @@
 2026-10-05
 
 ## Status
-in_progress
+completed
 
 ## Objective
 Give `marko/database` entities a single, extensible value-conversion pipeline: custom `#[Cast]` classes, timezone-correct datetimes, automatic `#[Timestamps]`, and `#[Encrypted]` columns backed by `marko/encryption`.
@@ -52,9 +52,9 @@ Closes #178
 | 002 | Cast contracts, resolver and built-in casts | 001 | completed |
 | 003 | Timezone-correct datetimes | 002 | completed |
 | 004 | #[Cast] attribute and cast-aware dirty checking | 002 | completed |
-| 005 | #[Timestamps] | 004 | pending |
+| 005 | #[Timestamps] | 004 | completed |
 | 006 | #[Encrypted] columns and schema types | 004 | completed |
-| 007 | Documentation | 003, 004, 005, 006 | pending |
+| 007 | Documentation | 003, 004, 005, 006 | completed |
 
 ## Interface Contracts (shared by all tasks)
 Existing scaffolding in the worktree IS the contract — do not redefine: `Entity/Cast/CastInterface.php` (`toPhp(mixed $value, PropertyMetadata $meta): mixed`, `toDatabase(mixed $value, PropertyMetadata $meta): mixed`), `Entity/Cast/EquatableCastInterface.php` (`equals(mixed $a, mixed $b, PropertyMetadata $meta): bool`), `JsonCast`, `EnumCast`, `ScalarCast`, `Config/DatabaseTimezoneConfig.php` (`fromName()` for tests). Task 002 adds `DateTimeCast` and `CastResolver`.
