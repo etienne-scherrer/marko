@@ -54,6 +54,10 @@
         },
         {
             "type": "path",
+            "url": "packages/broadcasting-amphp"
+        },
+        {
+            "type": "path",
             "url": "packages/broadcasting-mercure"
         },
         {
@@ -412,6 +416,7 @@
         "marko/authentication-token": "self.version",
         "marko/authorization": "self.version",
         "marko/broadcasting": "self.version",
+        "marko/broadcasting-amphp": "self.version",
         "marko/broadcasting-mercure": "self.version",
         "marko/broadcasting-pusher": "self.version",
         "marko/cache": "self.version",
@@ -497,6 +502,7 @@
         "marko/webhook": "self.version"
     },
     "require-dev": {
+        "amphp/http-server": "^3",
         "amphp/postgres": "^2",
         "amphp/redis": "^2.0",
         "aws/aws-sdk-php": "^3.0",
@@ -554,6 +560,7 @@
             "Marko\\AuthenticationToken\\Tests\\": "packages/authentication-token/tests/",
             "Marko\\Authorization\\Tests\\": "packages/authorization/tests/",
             "Marko\\Broadcasting\\Tests\\": "packages/broadcasting/tests/",
+            "Marko\\Broadcasting\\Amphp\\Tests\\": "packages/broadcasting-amphp/tests/",
             "Marko\\Broadcasting\\Mercure\\Tests\\": "packages/broadcasting-mercure/tests/",
             "Marko\\Broadcasting\\Pusher\\Tests\\": "packages/broadcasting-pusher/tests/",
             "Marko\\Cache\\Tests\\": "packages/cache/tests/",

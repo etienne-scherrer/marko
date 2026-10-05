@@ -45,6 +45,7 @@ body:
         - authentication-token
         - authorization
         - broadcasting
+        - broadcasting-amphp
         - broadcasting-mercure
         - broadcasting-pusher
         - cache

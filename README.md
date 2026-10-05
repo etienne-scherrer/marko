@@ -293,6 +293,7 @@ Marko ships as composable packages — require only what you need. Every package
 | Package | Description |
 |---------|-------------|
 | [broadcasting](packages/broadcasting/README.md) | Realtime broadcasting contracts and channel authorization |
+| [broadcasting-amphp](packages/broadcasting-amphp/README.md) | Self-hosted async SSE broadcasting server on amphp |
 | [broadcasting-mercure](packages/broadcasting-mercure/README.md) | Mercure hub broadcasting driver |
 | [broadcasting-pusher](packages/broadcasting-pusher/README.md) | Pusher-protocol broadcasting driver (Pusher, Soketi, Reverb) |
 | [pubsub](packages/pubsub/README.md) | Pub/Sub contracts |
