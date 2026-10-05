@@ -60,16 +60,8 @@ readonly class ClearCommand implements CommandInterface
     private function parseDaysOption(
         Input $input,
     ): int {
-        $args = $input->getArguments();
+        $days = $input->getOption('days');
 
-        foreach ($args as $arg) {
-            if (str_starts_with($arg, '--days=')) {
-                $value = substr($arg, 7);
-
-                return max(1, (int) $value);
-            }
-        }
-
-        return $this->config->maxFiles();
+        return $days === null ? $this->config->maxFiles() : max(1, (int) $days);
     }
 }
