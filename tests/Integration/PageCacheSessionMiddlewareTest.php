@@ -12,6 +12,7 @@ use Marko\Session\Config\SessionConfig;
 use Marko\Session\Contracts\SessionInterface;
 use Marko\Session\Flash\FlashBag;
 use Marko\Session\Middleware\SessionMiddleware;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 function makeRepeatVisitSession(): SessionInterface
@@ -128,7 +129,7 @@ it(
     function (): void {
         $session = makeRepeatVisitSession();
         $sessionConfig = makeSessionConfig();
-        $middleware = new SessionMiddleware($session, $sessionConfig);
+        $middleware = new SessionMiddleware($session, $sessionConfig, new FakeClock());
         $request = new Request(
             server: ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/'],
             cookies: [$sessionConfig->cookieName() => 'existing-session-id'],
