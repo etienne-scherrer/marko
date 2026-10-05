@@ -50,6 +50,18 @@
         },
         {
             "type": "path",
+            "url": "packages/broadcasting"
+        },
+        {
+            "type": "path",
+            "url": "packages/broadcasting-mercure"
+        },
+        {
+            "type": "path",
+            "url": "packages/broadcasting-pusher"
+        },
+        {
+            "type": "path",
             "url": "packages/cache"
         },
         {
@@ -399,6 +411,9 @@
         "marko/authentication": "self.version",
         "marko/authentication-token": "self.version",
         "marko/authorization": "self.version",
+        "marko/broadcasting": "self.version",
+        "marko/broadcasting-mercure": "self.version",
+        "marko/broadcasting-pusher": "self.version",
         "marko/cache": "self.version",
         "marko/cache-array": "self.version",
         "marko/cache-file": "self.version",
@@ -537,6 +552,9 @@
             "Marko\\Authentication\\Tests\\": "packages/authentication/tests/",
             "Marko\\AuthenticationToken\\Tests\\": "packages/authentication-token/tests/",
             "Marko\\Authorization\\Tests\\": "packages/authorization/tests/",
+            "Marko\\Broadcasting\\Tests\\": "packages/broadcasting/tests/",
+            "Marko\\Broadcasting\\Mercure\\Tests\\": "packages/broadcasting-mercure/tests/",
+            "Marko\\Broadcasting\\Pusher\\Tests\\": "packages/broadcasting-pusher/tests/",
             "Marko\\Cache\\Tests\\": "packages/cache/tests/",
             "Marko\\Cache\\File\\Tests\\": "packages/cache-file/tests/",
             "Marko\\Cache\\Memory\\Tests\\": "packages/cache-array/tests/",

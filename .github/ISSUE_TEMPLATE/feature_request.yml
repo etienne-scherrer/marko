@@ -44,6 +44,9 @@ body:
         - authentication
         - authentication-token
         - authorization
+        - broadcasting
+        - broadcasting-mercure
+        - broadcasting-pusher
         - cache
         - cache-array
         - cache-file

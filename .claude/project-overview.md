@@ -61,6 +61,7 @@ docs/           # Documentation site content
 - **Translation**: translation (interface), translation-file
 - **Notification**: notification (interface), notification-database
 - **PubSub**: pubsub (interface), pubsub-pgsql, pubsub-redis
+- **Broadcasting**: broadcasting (interface), broadcasting-mercure, broadcasting-pusher
 - **Media**: media, media-gd, media-imagick
 - **Other**: blog, validation, clock, hashing, health, http, cors, ratelimiter, scheduler, search, security, testing, api, webhook, pagination, sse, amphp, dev-server
 - **Metapackage**: framework (bundles common interface packages)
