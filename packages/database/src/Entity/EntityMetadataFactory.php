@@ -5,15 +5,22 @@ declare(strict_types=1);
 namespace Marko\Database\Entity;
 
 use BackedEnum;
+use DateTimeImmutable;
+use Marko\Core\Container\ContainerInterface;
 use Marko\Database\Attributes\BelongsTo;
 use Marko\Database\Attributes\BelongsToMany;
+use Marko\Database\Attributes\Cast;
 use Marko\Database\Attributes\Column;
+use Marko\Database\Attributes\Encrypted;
 use Marko\Database\Attributes\HasMany;
 use Marko\Database\Attributes\HasOne;
 use Marko\Database\Attributes\Index;
 use Marko\Database\Attributes\Table;
+use Marko\Database\Attributes\Timestamps;
+use Marko\Database\Entity\Cast\CastInterface;
 use Marko\Database\Exceptions\EntityException;
 use Marko\Database\Exceptions\MissingPrimaryKeyException;
+use Marko\Encryption\Contracts\EncryptorInterface;
 use ReflectionClass;
 use ReflectionException;
 use ReflectionNamedType;
@@ -40,6 +47,10 @@ class EntityMetadataFactory
      * @var array<class-string, EntityMetadata>
      */
     private array $cache = [];
+
+    public function __construct(
+        private readonly ?ContainerInterface $container = null,
+    ) {}
 
     /**
      * Parse an entity class and return its metadata.
@@ -121,7 +132,25 @@ class EntityMetadataFactory
                 $default = $default->value;
             }
 
-            if ($columnAttr->type === 'json' && $phpType !== 'array') {
+            $castClass = null;
+            $castAttributes = $property->getAttributes(Cast::class);
+
+            if ($castAttributes !== []) {
+                $castClass = $castAttributes[0]->newInstance()->castClass;
+
+                if (!is_a($castClass, CastInterface::class, true)) {
+                    throw EntityException::castClassInvalid($castClass, "$entityClass::\$$propertyName");
+                }
+            }
+
+            $encrypted = $property->getAttributes(Encrypted::class) !== [];
+
+            if ($encrypted) {
+                $this->validateEncryptedProperty($entityClass, $propertyName, $columnAttr, $castClass !== null);
+                $dbType = 'text';
+            }
+
+            if ($castClass === null && $columnAttr->type === 'json' && $phpType !== 'array') {
                 throw EntityException::jsonColumnTypeMismatch($entityClass, $propertyName, $phpType);
             }
 
@@ -172,6 +201,8 @@ class EntityMetadataFactory
                 enumClass: $enumClass,
                 default: $columnAttr->default ?? $default,
                 columnType: $columnAttr->type,
+                castClass: $castClass,
+                encrypted: $encrypted,
             );
         }
 
@@ -186,12 +217,27 @@ class EntityMetadataFactory
         $indexAttributes = $reflection->getAttributes(Index::class);
         foreach ($indexAttributes as $indexAttr) {
             $index = $indexAttr->newInstance();
+            foreach ($properties as $propertyName => $propertyMetadata) {
+                if ($propertyMetadata->encrypted
+                    && (in_array($propertyMetadata->columnName, $index->columns, true)
+                        || in_array($propertyName, $index->columns, true))
+                ) {
+                    throw EntityException::encryptedUniqueOrIndexed($entityClass, $propertyName);
+                }
+            }
             $indexes[] = new IndexMetadata(
                 name: $index->name,
                 columns: $index->columns,
                 unique: $index->unique,
             );
         }
+
+        [$createdAtProperty, $updatedAtProperty] = $this->resolveTimestamps(
+            $reflection,
+            $entityClass,
+            $isExtender,
+            $properties,
+        );
 
         $metadata = new EntityMetadata(
             entityClass: $entityClass,
@@ -202,11 +248,101 @@ class EntityMetadataFactory
             indexes: $indexes,
             relationships: $relationships,
             extends: $tableAttr->extends,
+            createdAtProperty: $createdAtProperty,
+            updatedAtProperty: $updatedAtProperty,
         );
 
         $this->cache[$entityClass] = $metadata;
 
         return $metadata;
+    }
+
+    /**
+     * Resolve and validate #[Timestamps] into [createdAt, updatedAt] property names.
+     *
+     * @param ReflectionClass<object> $reflection
+     * @param array<string, PropertyMetadata> $properties
+     * @return array{0: ?string, 1: ?string}
+     *
+     * @throws EntityException
+     */
+    private function resolveTimestamps(
+        ReflectionClass $reflection,
+        string $entityClass,
+        bool $isExtender,
+        array $properties,
+    ): array {
+        $attributes = $reflection->getAttributes(Timestamps::class);
+
+        if ($attributes === []) {
+            return [null, null];
+        }
+
+        if ($isExtender) {
+            throw EntityException::timestampsOnExtender($entityClass);
+        }
+
+        $timestamps = $attributes[0]->newInstance();
+
+        if ($timestamps->createdAt === null && $timestamps->updatedAt === null) {
+            throw EntityException::timestampsWithoutProperties($entityClass);
+        }
+
+        foreach (['createdAt' => $timestamps->createdAt, 'updatedAt' => $timestamps->updatedAt] as $role => $name) {
+            if ($name !== null && ($properties[$name] ?? null)?->type !== DateTimeImmutable::class) {
+                throw EntityException::invalidTimestampProperty($entityClass, $name, $role);
+            }
+        }
+
+        return [$timestamps->createdAt, $timestamps->updatedAt];
+    }
+
+    /**
+     * Validate an #[Encrypted] property at parse time. Never instantiates the encryptor.
+     *
+     * @param class-string $entityClass
+     *
+     * @throws EntityException
+     */
+    private function validateEncryptedProperty(
+        string $entityClass,
+        string $propertyName,
+        Column $columnAttr,
+        bool $hasCast,
+    ): void {
+        if ($hasCast) {
+            throw EntityException::castAndEncryptedConflict($entityClass, $propertyName);
+        }
+
+        if ($columnAttr->primaryKey) {
+            throw EntityException::encryptedPrimaryKey($entityClass, $propertyName);
+        }
+
+        if ($columnAttr->unique) {
+            throw EntityException::encryptedUniqueOrIndexed($entityClass, $propertyName);
+        }
+
+        if ($columnAttr->type !== null && $columnAttr->type !== 'text') {
+            throw EntityException::encryptedColumnTypeMismatch($entityClass, $propertyName, $columnAttr->type);
+        }
+
+        if (!interface_exists(EncryptorInterface::class)) {
+            throw EntityException::encryptionNotInstalled($entityClass, $propertyName);
+        }
+
+        if (!$this->hasEncryptor()) {
+            throw EntityException::encryptorNotBound($entityClass, $propertyName);
+        }
+    }
+
+    /**
+     * Whether an encryptor is bound (bind()) or registered (instance()) in the container.
+     */
+    private function hasEncryptor(): bool
+    {
+        return $this->container !== null
+            && ($this->container->has(EncryptorInterface::class)
+                || $this->container->resolvedInstances(EncryptorInterface::class) !== []);
     }
 
     /**

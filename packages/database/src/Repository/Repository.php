@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Marko\Database\Repository;
 
-use BackedEnum;
 use DateTimeImmutable;
+use DateTimeZone;
 use Marko\Core\Event\EventDispatcherInterface;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\TransactionInterface;
@@ -22,6 +22,7 @@ use Marko\Database\Events\EntityDeleting;
 use Marko\Database\Events\EntityUpdated;
 use Marko\Database\Events\EntityUpdating;
 use Marko\Database\Exceptions\BatchInsertException;
+use Marko\Database\Exceptions\EntityException;
 use Marko\Database\Exceptions\EntityNotFoundException;
 use Marko\Database\Exceptions\RepositoryException;
 use Marko\Database\Query\QueryBuilderFactoryInterface;
@@ -189,6 +190,8 @@ abstract class Repository implements RepositoryInterface
      *
      * @param array<string, mixed> $criteria Column-value pairs to match
      * @return EntityCollection<TEntity>
+     *
+     * @throws EntityException
      */
     public function findBy(
         array $criteria,
@@ -200,7 +203,7 @@ abstract class Repository implements RepositoryInterface
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
             $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
@@ -233,6 +236,8 @@ abstract class Repository implements RepositoryInterface
      * but without fetching all matching rows first.
      *
      * @return TEntity|null
+     *
+     * @throws EntityException
      */
     public function findOneBy(
         array $criteria,
@@ -244,7 +249,7 @@ abstract class Repository implements RepositoryInterface
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
             $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
@@ -322,6 +327,10 @@ abstract class Repository implements RepositoryInterface
         // Fire Creating events for each entity before insert
         foreach ($entities as $entity) {
             $this->eventDispatcher?->dispatch(new EntityCreating($entity, static::ENTITY_CLASS));
+        }
+
+        foreach ($entities as $entity) {
+            $this->applyInsertTimestamps($entity);
         }
 
         // Build column set from first entity
@@ -599,6 +608,8 @@ abstract class Repository implements RepositoryInterface
      * no hydration, no eager-loading.
      *
      * @param array<string, mixed> $criteria Column-value pairs to match
+     *
+     * @throws EntityException
      */
     public function existsBy(
         array $criteria,
@@ -610,7 +621,7 @@ abstract class Repository implements RepositoryInterface
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
             $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
@@ -622,6 +633,26 @@ abstract class Repository implements RepositoryInterface
         $rows = $this->connection->query($sql, $bindings);
 
         return count($rows) > 0;
+    }
+
+    /**
+     * Convert a criteria value through the cast pipeline when the key is a mapped property.
+     *
+     * @throws EntityException
+     */
+    private function criteriaValue(
+        string|int $property,
+        mixed $value,
+    ): mixed {
+        $propertyMetadata = $this->metadata->properties[$property] ?? null;
+
+        if ($propertyMetadata?->encrypted === true) {
+            throw EntityException::encryptedCriteria($this->metadata->entityClass, (string) $property);
+        }
+
+        return $propertyMetadata !== null
+            ? $this->hydrator->toDatabaseValue($value, $propertyMetadata)
+            : $value;
     }
 
     /**
@@ -656,11 +687,45 @@ abstract class Repository implements RepositoryInterface
     }
 
     /**
+     * The current instant used for #[Timestamps], in UTC.
+     *
+     * This is the seam for a future clock abstraction (#182).
+     */
+    protected function now(): DateTimeImmutable
+    {
+        return new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    }
+
+    /**
+     * Fill unset #[Timestamps] properties with a single shared instant.
+     */
+    private function applyInsertTimestamps(
+        Entity $entity,
+    ): void {
+        $now = null;
+        $reflection = new ReflectionClass($entity);
+
+        foreach ([$this->metadata->createdAtProperty, $this->metadata->updatedAtProperty] as $name) {
+            if ($name === null) {
+                continue;
+            }
+
+            $property = $reflection->getProperty($name);
+
+            if (!$property->isInitialized($entity) || $property->getValue($entity) === null) {
+                $property->setValue($entity, $now ??= $this->now());
+            }
+        }
+    }
+
+    /**
      * Insert a new entity.
      */
     protected function insert(
         Entity $entity,
     ): void {
+        $this->applyInsertTimestamps($entity);
+
         $data = $this->hydrator->extractAll($entity, $this->metadata);
 
         // Remove primary key if it's auto-increment and null
@@ -725,7 +790,7 @@ abstract class Repository implements RepositoryInterface
             $value = $property->getValue($entity);
             $columnName = $propertyToColumn[$propertyName];
 
-            $data[$columnName] = $this->convertToDbValue($value);
+            $data[$columnName] = $this->hydrator->toDatabaseValue($value, $this->metadata->properties[$propertyName]);
         }
 
         // Collect dirty companion data. Companions with no originalValues
@@ -756,7 +821,10 @@ abstract class Repository implements RepositoryInterface
                 $value = $property->getValue($companion);
                 $columnName = $companionPropertyToColumn[$propertyName];
 
-                $data[$columnName] = $this->convertToDbValue($value);
+                $data[$columnName] = $this->hydrator->toDatabaseValue(
+                    $value,
+                    $companionMetadata->properties[$propertyName],
+                );
             }
 
             $participatingCompanions[] = [$companion, $companionMetadata];
@@ -765,6 +833,15 @@ abstract class Repository implements RepositoryInterface
         // If no fields are dirty (parent + companions), skip the update
         if ($data === []) {
             return;
+        }
+
+        $updatedAt = $this->metadata->updatedAtProperty;
+
+        if ($updatedAt !== null && !in_array($updatedAt, $dirtyProperties, true)) {
+            $now = $this->now();
+            $reflection->getProperty($updatedAt)->setValue($entity, $now);
+            $updatedAtMetadata = $this->metadata->properties[$updatedAt];
+            $data[$updatedAtMetadata->columnName] = $this->hydrator->toDatabaseValue($now, $updatedAtMetadata);
         }
 
         // Get the primary key value for the WHERE clause
@@ -795,27 +872,6 @@ abstract class Repository implements RepositoryInterface
         foreach ($participatingCompanions as [$companion, $companionMetadata]) {
             $this->hydrator->registerOriginalValues($companion, $companionMetadata);
         }
-    }
-
-    /**
-     * Convert a PHP value to a database-compatible value.
-     */
-    private function convertToDbValue(
-        mixed $value,
-    ): mixed {
-        if ($value === null) {
-            return null;
-        }
-
-        if ($value instanceof BackedEnum) {
-            return $value->value;
-        }
-
-        if ($value instanceof DateTimeImmutable) {
-            return $value->format('Y-m-d H:i:s');
-        }
-
-        return $value;
     }
 
     /**
