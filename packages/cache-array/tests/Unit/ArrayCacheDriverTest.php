@@ -247,3 +247,11 @@ it('returns the incremented value on a subsequent increment (array driver)', fun
 
     expect($this->driver->increment('counter', 60))->toBe(2);
 });
+
+it('returns an int from get() after increment() (array driver)', function (): void {
+    $this->driver->increment('counter', 60);
+    $this->driver->increment('counter', 60);
+
+    expect($this->driver->get('counter'))->toBe(2)
+        ->and($this->driver->getItem('counter')->get())->toBe(2);
+});
