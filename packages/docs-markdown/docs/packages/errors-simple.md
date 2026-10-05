@@ -61,6 +61,8 @@ Also accepts: `dev`, `local`. Falls back to `APP_ENV` if `MARKO_ENV` is not set.
 
 **Safe default:** No env var = production mode.
 
+Detection is delegated to core's [`AppEnvironment`](/docs/packages/core/#application-environment), so error display agrees with the rest of the framework on which names mean development. Values are read from `$_ENV` with a `getenv()` fallback.
+
 ### Status Codes and JSON
 
 Uncaught exceptions are sent with status `500`. Exceptions that carry an HTTP meaning --- anything implementing `Marko\Core\Exceptions\HttpExceptionInterface`, such as `HttpException::notFound()` or `ValidationException` --- are normally rendered inside the routing pipeline (see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions)) and never reach the handler. If one is thrown outside the pipeline (for example in a boot callback during a request), the handler uses its status and headers instead of `500`.
@@ -189,14 +191,22 @@ class SimpleErrorHandler implements ErrorHandlerInterface
 ### Environment
 
 ```php
+use Marko\Core\Environment\AppEnvironment;
+
 class Environment
 {
-    public function __construct(?string $sapi = null, ?array $envVars = null, ?array $server = null);
+    public function __construct(
+        ?string $sapi = null,
+        ?array $envVars = null,
+        ?array $server = null,
+        ?AppEnvironment $appEnvironment = null, // defaults to an AppEnvironment built from $envVars
+    );
 
     public function isCli(): bool;
     public function isWeb(): bool;
-    public function isDevelopment(): bool;
-    public function isProduction(): bool;
+    public function isDevelopment(): bool; // delegates to AppEnvironment::isDevelopment()
+    public function isProduction(): bool; // !isDevelopment(): unset, staging, etc. hide details
+    public function appEnvironment(): AppEnvironment;
     public function acceptsJson(): bool; // reads $server, defaulting to $_SERVER
 }
 ```

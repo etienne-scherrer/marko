@@ -4,16 +4,20 @@ declare(strict_types=1);
 
 namespace Marko\ErrorsSimple;
 
+use Marko\Core\Environment\AppEnvironment;
+
 class Environment
 {
     /**
      * @param array<string, string>|null $envVars
      * @param array<string, mixed>|null $server Request server variables; defaults to $_SERVER
+     * @param AppEnvironment|null $appEnvironment The application environment; defaults to one built from $envVars
      */
     public function __construct(
         private ?string $sapi = null,
         private ?array $envVars = null,
         private ?array $server = null,
+        private ?AppEnvironment $appEnvironment = null,
     ) {}
 
     public function isCli(): bool
@@ -26,17 +30,31 @@ class Environment
         return !$this->isCli();
     }
 
+    /**
+     * Delegates to the core AppEnvironment so every package agrees on which
+     * names mean development (development, dev, local).
+     */
     public function isDevelopment(): bool
     {
-        return !$this->isProduction();
+        return $this->appEnvironment()->isDevelopment();
     }
 
+    /**
+     * The core AppEnvironment this instance delegates to: the injected one,
+     * or one that reads $envVars (or the real environment when null).
+     */
+    public function appEnvironment(): AppEnvironment
+    {
+        return $this->appEnvironment ?? new AppEnvironment($this->envVars);
+    }
+
+    /**
+     * Anything that is not a development environment — including an unset
+     * environment or a name such as "staging" — hides error details.
+     */
     public function isProduction(): bool
     {
-        $env = $this->getEnvVar('MARKO_ENV') ?? $this->getEnvVar('APP_ENV');
-        $envLower = $env !== null ? strtolower($env) : null;
-
-        return in_array($envLower, ['production', 'prod'], true);
+        return !$this->isDevelopment();
     }
 
     /**
@@ -70,17 +88,5 @@ class Environment
     private function getSapi(): string
     {
         return $this->sapi ?? PHP_SAPI;
-    }
-
-    private function getEnvVar(
-        string $name,
-    ): ?string {
-        if ($this->envVars !== null && array_key_exists($name, $this->envVars)) {
-            return $this->envVars[$name];
-        }
-
-        $value = getenv($name);
-
-        return $value === false ? null : $value;
     }
 }
