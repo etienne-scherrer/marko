@@ -69,14 +69,6 @@ it('waits the configured backoff before retrying a failed job')
         issue: 162,
     );
 
-// #163 Async observers
-it('pushes a job for an async observer instead of running it inline')
-    ->todo(
-        note: 'Dispatch BookPublished; RecordBookPublished is #[Observer(async: true)], so the marker file must not '
-            . 'exist after dispatch and the jobs table must hold one row. queue:work --once then writes the marker.',
-        issue: 163,
-    );
-
 // #164 Scheduler finds no tasks; overlap protection
 it('runs the task registered in the fixture boot callback with schedule:run')
     ->todo(

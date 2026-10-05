@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use Marko\Cache\Contracts\CacheInterface;
 use Marko\Cache\Redis\RedisConnection;
+use Marko\Core\Event\EventDispatcherInterface;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Integration\Fixture\Entity\Author;
+use Marko\Integration\Fixture\Event\BookPublished;
 use Marko\Integration\Fixture\Job\RecordingJob;
 use Marko\Integration\Fixture\Repository\AuthorRepository;
 use Marko\Integration\Fixture\Repository\BookRepository;
@@ -113,6 +115,22 @@ it('processes a successful job with queue:work --once', function (): void {
         ->and(file_get_contents($marker))->toBe('processed by the worker')
         ->and($queue->size())->toBe(0);
 });
+
+it('pushes a job for an async observer instead of running it inline', function (): void {
+    $marker = $this->project . '/storage/book-published.txt';
+    $queue = $this->app->container->get(QueueInterface::class);
+
+    $this->app->container->get(EventDispatcherInterface::class)->dispatch(new BookPublished($marker));
+
+    expect(file_exists($marker))->toBeFalse()
+        ->and($queue->size())->toBe(1);
+
+    $result = runIntegrationCommand($this->app, 'queue:work', ['--once']);
+
+    expect($result['exitCode'])->toBe(0, $result['output'])
+        ->and(file_get_contents($marker))->toBe('observer ran')
+        ->and($queue->size())->toBe(0);
+})->issue(163);
 
 it('resolves WorkerInterface from the shipped queue wiring', function (): void {
     // The fixture module no longer binds WorkerInterface itself.
