@@ -649,6 +649,7 @@
             "packages/roadrunner/tests/Helpers.php",
             "packages/security/tests/Helpers.php",
             "packages/session/tests/SessionFunctionShim.php",
+            "packages/testing/tests/Helpers.php",
             "tests/Integration/App/Helpers.php"
         ]
     }
