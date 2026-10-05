@@ -43,6 +43,7 @@ Append `!` for breaking changes: `feat(auth)!: remove legacy driver`.
 - **Title must follow commit format** — e.g. `feat(cache): add Redis driver`
 - Reference issues with `Closes #N` in the PR body
 - All tests must pass: `./vendor/bin/pest --parallel`
+- Changes to driver packages or `module.php` wiring should also pass `composer test:integration`, which runs against real Postgres and Redis. CI runs it in the **Integration** job. See "Integration Tests" in `.claude/testing.md` for how to start the services locally.
 - Lint must pass: `./vendor/bin/phpcs`
 
 ### Auto-Labeling

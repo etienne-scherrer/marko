@@ -75,6 +75,48 @@ Because they mutate the working directory, they're excluded from `composer test`
 
 Running the destructive group updates your working directory's `composer.lock` (whatever `composer update` currently resolves). Commit any intended lock changes, or `git checkout composer.lock vendor/` to restore if you didn't mean to bump.
 
+## Integration Tests (`integration-services` Group)
+
+Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `module.php` or bugs that only show up with a real driver. The `integration-services` group covers those. It boots a real fixture application through `Application::boot()`, with the real module discovery and `module.php` wiring, against real Postgres and Redis.
+
+### Layout
+
+| Path | Purpose |
+|------|---------|
+| `tests/Integration/App/Fixture/` | The fixture project: the `app/integration` module (entities, repositories, seeder, jobs, async observer, scheduled task, routes), `config/*.php` and `database/migrations/` |
+| `tests/Integration/App/Helpers.php` | Harness functions, autoloaded through `autoload-dev.files` |
+| `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
+| `tests/Integration/App/BootTest.php`, `ServicesTest.php` | Cases that pass today |
+| `tests/Integration/App/KnownGapsTest.php` | Known-broken behaviour as `->todo()` tests, one per owning ticket |
+| `tests/Integration/compose.yml` | Postgres 17 and Redis 7 for local runs |
+
+Each test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`).
+
+### Running locally
+
+```bash
+docker compose -f tests/Integration/compose.yml up -d
+DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 composer test:integration
+```
+
+If port 5432 is already taken, start the services with `DB_PORT=55432 docker compose -f tests/Integration/compose.yml up -d` and also export `DB_PORT=55432` when running the suite. Redis must stay on `127.0.0.1:6379` until #166, because `marko/cache-redis` ignores its config. Other variables, with their defaults: `DB_USERNAME` (`marko`), `DB_PASSWORD` (`marko`), `DB_DATABASE` (`marko_integration`) and `REDIS_PORT` (`6379`).
+
+### Skipping and required mode
+
+- Every case calls `setUpIntegrationTest($this)` in `beforeEach`, which calls `integrationServicesSkipReason()`. If `DB_HOST` or `REDIS_HOST` is unset or unreachable, the case is **skipped** with the reason and the compose command. This is why `composer test` stays green on a machine with no services.
+- The CI **Integration** job sets `MARKO_INTEGRATION_REQUIRED=1`. In that mode the same condition **fails** the case, so the job can never pass by skipping everything.
+
+### Adding a case
+
+1. If the case needs new behaviour from the fixture, add it to `Fixture/app/integration` (a route, job, observer or entity) or to `Fixture/config`. If the case needs a package outside `INTEGRATION_MODULES`, add the package there. Don't add a second driver for an interface that is already bound: two drivers fail boot with a binding conflict.
+2. Start the file with `pest()->group('integration-services');`, then add `beforeEach(fn () => setUpIntegrationTest($this));` and `afterEach(fn () => tearDownIntegrationTest($this));`. This gives the test `$this->app` (migrated) and `$this->project` (the temp project path). Pass `migrate: false` to `setUpIntegrationTest()` for a test that must start from an empty schema.
+3. Send requests with `$this->app->router->handle(integrationRequest('GET', '/path'))`. Run console commands with `runIntegrationCommand($this->app, 'queue:work', ['--once'])`. Both go through the real router and the real `CommandRunner`.
+4. Don't hand-construct services. Resolve them from `$this->app->container`.
+
+### Flipping a todo
+
+When your ticket fixes a row in `KnownGapsTest.php`, replace its `->todo(...)` with a real test that asserts the behaviour in the note. Tag the test `->issue(N)`, because `HarnessTest` checks that every ticket in the #187 hand-off table is still referenced. Also remove any fixture workaround that names your ticket (search `Fixture/` for `#N`).
+
 ## TDD Workflow Commands
 
 Optimized commands for fast feedback during TDD cycles:

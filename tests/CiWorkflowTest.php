@@ -38,6 +38,45 @@ it('runs tests, lint, and static analysis as separate jobs', function () use ($c
         ->toContain('composer phpstan');
 });
 
+it('runs the integration-services group in its own job against postgres and redis services', function () use ($ci): void {
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($ci)->toContain('name: Integration')
+        ->and($job)
+        ->toContain('services:')
+        ->toContain('image: postgres:17')
+        ->toContain('image: redis:7')
+        ->toContain('- 5432:5432')
+        ->toContain('- 6379:6379')
+        ->toContain('pdo_pgsql')
+        ->toContain('DB_HOST: 127.0.0.1')
+        ->toContain('REDIS_HOST: 127.0.0.1')
+        ->toContain('run: composer test:integration');
+});
+
+it('health-checks the integration services before running the suite', function () use ($ci): void {
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($job)
+        ->toContain('--health-cmd "pg_isready')
+        ->toContain('--health-cmd "redis-cli ping"');
+});
+
+it('fails the integration job instead of skipping when services are unreachable', function () use ($ci): void {
+    // Without this the job would go green with every case skipped.
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($job)->toContain("MARKO_INTEGRATION_REQUIRED: '1'");
+});
+
+it('exposes a composer test:integration script scoped to the integration-services group', function (): void {
+    $composer = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true);
+
+    expect($composer['scripts'])->toHaveKey('test:integration')
+        ->and($composer['scripts']['test:integration'])->toContain('--group=integration-services')
+        ->and($composer['scripts']['test'])->not->toContain('integration-services');
+});
+
 it('pins PHP 8.5 in every job', function () use ($ci): void {
     expect(substr_count($ci, "php-version: '8.5'"))->toBe(substr_count($ci, 'runs-on: ubuntu-latest'));
 });

@@ -92,3 +92,61 @@ jobs:
 
       - name: PHPStan
         run: composer phpstan
+
+  # Boots the fixture app in tests/Integration/App against real Postgres and
+  # Redis (the integration-services group). MARKO_INTEGRATION_REQUIRED turns
+  # "services unreachable" into a failure, so this job can never pass by
+  # skipping every case. Redis must listen on 127.0.0.1:6379 because
+  # marko/cache-redis ignores its config until #166.
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: marko
+          POSTGRES_PASSWORD: marko
+          POSTGRES_DB: marko_integration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marko -d marko_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_USERNAME: marko
+      DB_PASSWORD: marko
+      DB_DATABASE: marko_integration
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      MARKO_INTEGRATION_REQUIRED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: sockets, pdo_pgsql
+          coverage: none
+          ini-values: memory_limit=2G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run integration suite
+        run: composer test:integration

@@ -1,0 +1,16 @@
+{
+    "name": "app/integration",
+    "description": "Fixture application module for the integration-services test group",
+    "type": "marko-module",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Marko\\Integration\\Fixture\\": "src/"
+        }
+    },
+    "extra": {
+        "marko": {
+            "module": true
+        }
+    }
+}

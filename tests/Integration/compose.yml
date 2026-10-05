@@ -1,0 +1,34 @@
+# Services for the `integration-services` test group (see .claude/testing.md).
+#
+#   docker compose -f tests/Integration/compose.yml up -d
+#   DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 composer test:integration
+#
+# If port 5432 is already taken locally, start with DB_PORT=55432 and export
+# the same DB_PORT when running the suite. Redis must stay on 6379 until #166:
+# marko/cache-redis ignores its config and always connects to 127.0.0.1:6379.
+name: marko-integration
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: marko
+      POSTGRES_PASSWORD: marko
+      POSTGRES_DB: marko_integration
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marko -d marko_integration"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
