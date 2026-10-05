@@ -33,26 +33,31 @@ composer test
 
 ## Next Steps
 
-Create your first controller inside `app/`:
+Create a module inside `app/` (for example `app/foo/`, with a `composer.json` that maps `App\Foo\` to `src/`), then add a controller. Routes are declared with attributes:
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-namespace App\Http\Controllers;
+namespace App\Foo\Controller;
 
-use Marko\Http\Request;
-use Marko\Http\Response;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Http\Response;
 
 class HomeController
 {
-    public function index(Request $request): Response
+    #[Get('/')]
+    public function index(): Response
     {
-        return new Response('Hello, Marko!');
+        return new Response(
+            body: 'Hello, Marko!',
+        );
     }
 }
 ```
+
+See [Your First Application](https://marko.build/docs/getting-started/first-application/) for the full walkthrough, including the module's `composer.json`.
 
 ## Documentation
 
