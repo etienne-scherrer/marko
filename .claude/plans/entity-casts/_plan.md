@@ -4,7 +4,7 @@
 2026-10-05
 
 ## Status
-ready
+in_progress
 
 ## Objective
 Give `marko/database` entities a single, extensible value-conversion pipeline: custom `#[Cast]` classes, timezone-correct datetimes, automatic `#[Timestamps]`, and `#[Encrypted]` columns backed by `marko/encryption`.

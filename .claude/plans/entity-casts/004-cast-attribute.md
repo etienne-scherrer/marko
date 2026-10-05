@@ -1,6 +1,6 @@
 # Task 004: #[Cast] Attribute and Cast-aware Dirty Checking
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 002
 **Retry count**: 0
 
@@ -13,20 +13,20 @@ Add `#[Cast(SomeCast::class)]`, read it into `PropertyMetadata::$castClass`, and
 - `EntityMetadataFactory::parse()` currently throws `jsonColumnTypeMismatch` when `type: 'json'` is used on a non-array property — skip that check when a `#[Cast]` is present so JSON-backed value objects are possible.
 
 ## Requirements (Test Descriptions)
-- [ ] `it reads the cast class into property metadata`
-- [ ] `it throws when the cast class does not implement CastInterface`
-- [ ] `it round-trips a custom cast through hydrate, insert, update and hydrate`
-- [ ] `it does not mark an unchanged value-object property dirty`
-- [ ] `it marks a value-object property dirty when its database representation changes`
-- [ ] `it uses the cast equals hook when the cast implements EquatableCastInterface`
-- [ ] `it detects an in-place mutation of a mutable value object as dirty`
-- [ ] `it keeps getOriginalValues returning PHP values for cast properties`
-- [ ] `it applies casts to extender companion properties`
-- [ ] `it allows a json column type on a cast property with a non-array PHP type`
-- [ ] `it converts findBy, findOneBy and existsBy criteria for cast properties through the pipeline`
+- [x] `it reads the cast class into property metadata`
+- [x] `it throws when the cast class does not implement CastInterface`
+- [x] `it round-trips a custom cast through hydrate, insert, update and hydrate`
+- [x] `it does not mark an unchanged value-object property dirty`
+- [x] `it marks a value-object property dirty when its database representation changes`
+- [x] `it uses the cast equals hook when the cast implements EquatableCastInterface`
+- [x] `it detects an in-place mutation of a mutable value object as dirty`
+- [x] `it keeps getOriginalValues returning PHP values for cast properties`
+- [x] `it applies casts to extender companion properties`
+- [x] `it allows a json column type on a cast property with a non-array PHP type`
+- [x] `it converts findBy, findOneBy and existsBy criteria for cast properties through the pipeline`
 
 ## Acceptance Criteria
 - All requirements have passing tests
 
 ## Implementation Notes
-(Left blank - filled in by programmer during implementation)
+Added #[Cast] attribute; EntityMetadataFactory validates CastInterface at parse time and skips the json type check for cast properties. EntityHydrator keeps a second WeakMap (originalDatabaseValues, pre-encryption) for cast or encrypted properties, populated in hydrate (parent + extenders) and registerOriginalValues; getDirtyProperties uses EquatableCastInterface::equals or compares database representations (detects in-place mutation). Repository criteria (findBy, findOneBy, existsBy) go through toDatabaseValue for mapped properties. Tests: packages/database/tests/Entity/Cast/CastAttributeTest.php.
