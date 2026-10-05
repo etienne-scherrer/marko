@@ -41,7 +41,7 @@ it('applies the fixture migrations with db:migrate', function (): void {
     );
 
     expect($result['exitCode'])->toBe(0, $result['output'])
-        ->and($result['output'])->toContain('Applied 5 schema migration(s).')
+        ->and($result['output'])->toContain('Applied 6 schema migration(s).')
         ->and($tables)->toBe(['authors', 'books', 'failed_jobs', 'jobs', 'migrations', 'sessions']);
 });
 
@@ -60,7 +60,8 @@ it('round-trips an entity through its repository on postgres', function (): void
 });
 
 it('runs the fixture seeder with db:seed', function (): void {
-    $result = runIntegrationCommand($this->app, 'db:seed');
+    // Seeders refuse to run in production, which is what an unset APP_ENV means.
+    $result = withIntegrationAppEnv('testing', fn (): array => runIntegrationCommand($this->app, 'db:seed'));
     $container = $this->app->container;
 
     expect($result['exitCode'])->toBe(0, $result['output'])

@@ -14,4 +14,8 @@ return [
     'database' => integrationDatabaseName($env),
     'username' => $env['DB_USERNAME'] ?? 'marko',
     'password' => $env['DB_PASSWORD'] ?? 'marko',
+    'migrations' => [
+        // Created by hand in 2026_01_01_000006; db:migrate must leave it alone.
+        'ignore_indexes' => ['authors_named_idx'],
+    ],
 ];
