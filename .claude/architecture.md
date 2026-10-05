@@ -226,6 +226,7 @@ When your code depends on `marko/log` (interface) instead of `marko/log-file` (d
 | Package | Type | Description |
 |---------|------|-------------|
 | `marko/authentication` | Feature | Authentication services |
+| `marko/clock` | Feature | PSR-20 `SystemClock` bound to `Psr\Clock\ClockInterface`; `FakeClock` lives in `marko/testing` |
 | `marko/hashing` | Feature | Password hashing |
 | `marko/validation` | Feature | Input validation |
 | `marko/framework` | Metapackage | Bundles common packages |

@@ -74,6 +74,10 @@
         },
         {
             "type": "path",
+            "url": "packages/clock"
+        },
+        {
+            "type": "path",
             "url": "packages/codeindexer"
         },
         {
@@ -401,6 +405,7 @@
         "marko/cache-redis": "self.version",
         "marko/claude-plugins": "self.version",
         "marko/cli": "self.version",
+        "marko/clock": "self.version",
         "marko/codeindexer": "self.version",
         "marko/config": "self.version",
         "marko/core": "self.version",
@@ -538,6 +543,7 @@
             "Marko\\Cache\\Redis\\Tests\\": "packages/cache-redis/tests/",
             "Marko\\ClaudePlugins\\Tests\\": "packages/claude-plugins/tests/",
             "Marko\\Cli\\Tests\\": "packages/cli/tests/",
+            "Marko\\Clock\\Tests\\": "packages/clock/tests/",
             "Marko\\CodeIndexer\\Tests\\": "packages/codeindexer/tests/",
             "Marko\\Config\\Tests\\": "packages/config/tests/",
             "Marko\\Core\\Tests\\": "packages/core/tests/",

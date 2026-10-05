@@ -50,6 +50,7 @@ body:
         - cache-redis
         - claude-plugins
         - cli
+        - clock
         - codeindexer
         - config
         - core
