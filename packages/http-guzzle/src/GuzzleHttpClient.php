@@ -40,20 +40,20 @@ class GuzzleHttpClient implements HttpClientInterface
         try {
             $response = $this->client()->request($method, $url, $guzzleOptions);
 
-            return new HttpResponse(
-                statusCode: $response->getStatusCode(),
-                body: (string) $response->getBody(),
-                headers: $this->flattenHeaders($response->getHeaders()),
+            return $this->toHttpResponse(
+                $response->getStatusCode(),
+                (string) $response->getBody(),
+                $response->getHeaders(),
             );
         } catch (GuzzleConnectException $e) {
             throw new ConnectionException($e->getMessage(), previous: $e);
         } catch (GuzzleRequestException $e) {
             $response = $e->getResponse();
             $httpResponse = $response !== null
-                ? new HttpResponse(
-                    statusCode: $response->getStatusCode(),
-                    body: (string) $response->getBody(),
-                    headers: $this->flattenHeaders($response->getHeaders()),
+                ? $this->toHttpResponse(
+                    $response->getStatusCode(),
+                    (string) $response->getBody(),
+                    $response->getHeaders(),
                 )
                 : null;
 
@@ -169,8 +169,34 @@ class GuzzleHttpClient implements HttpClientInterface
     }
 
     /**
+     * headers() gets one string per header (repeated values joined with ", ");
+     * headerValues() keeps every value, so Set-Cookie survives intact.
+     *
+     * @param array<string, array<string>> $rawHeaders
+     */
+    private function toHttpResponse(
+        int $statusCode,
+        string $body,
+        array $rawHeaders,
+    ): HttpResponse {
+        $headerValues = [];
+
+        foreach ($rawHeaders as $name => $values) {
+            $headerValues[$name] = array_values($values);
+        }
+
+        return new HttpResponse(
+            statusCode: $statusCode,
+            body: $body,
+            headers: $this->flattenHeaders($headerValues),
+            headerValues: $headerValues,
+        );
+    }
+
+    /**
      * Repeated header values are joined with ", ". This is lossy for headers
-     * such as Set-Cookie whose values may themselves contain commas.
+     * such as Set-Cookie whose values may themselves contain commas; use
+     * HttpResponse::headerValues() to read each value.
      *
      * @param array<string, array<string>> $headers
      *
