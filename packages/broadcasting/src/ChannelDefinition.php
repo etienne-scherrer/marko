@@ -7,6 +7,13 @@ namespace Marko\Broadcasting;
 readonly class ChannelDefinition
 {
     /**
+     * The characters a {param} placeholder may capture. Deliberately narrow: no dots (one
+     * segment per parameter), and nothing a driver could read as syntax, such as the braces,
+     * commas and asterisks of URI templates and topic selectors, whitespace or control characters.
+     */
+    public const string PLACEHOLDER_PATTERN = '[A-Za-z0-9_\-=@]+';
+
+    /**
      * @param class-string<ChannelAuthorizerInterface|PresenceChannelAuthorizerInterface> $authorizerClass
      */
     public function __construct(
@@ -23,11 +30,11 @@ readonly class ChannelDefinition
     {
         $regex = preg_replace_callback(
             '/\\\\\{([A-Za-z_][A-Za-z0-9_]*)\\\\}/',
-            fn (array $matches): string => '(?P<' . $matches[1] . '>[^.]+)',
+            fn (array $matches): string => '(?P<' . $matches[1] . '>' . self::PLACEHOLDER_PATTERN . ')',
             preg_quote($this->pattern, '#'),
         );
 
-        if (preg_match('#^' . $regex . '$#', $channelName, $matches) !== 1) {
+        if (preg_match('#\A' . $regex . '\z#', $channelName, $matches) !== 1) {
             return null;
         }
 

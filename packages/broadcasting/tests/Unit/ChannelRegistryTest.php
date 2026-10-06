@@ -99,6 +99,22 @@ describe('ChannelRegistry', function (): void {
             ->toThrow(ChannelAuthorizationException::class);
     });
 
+    it('does not let a parameter capture characters outside the safe charset', function (string $channelName): void {
+        expect(fn () => channelRegistry()->authorize($channelName, new FakeAuthenticatable()))
+            ->toThrow(ChannelAuthorizationException::class);
+    })->with([
+        'URI template' => ['shows.42{x}.seats.A1'],
+        'comma list' => ['shows.42,43.seats.A1'],
+        'wildcard' => ['shows.*.seats.A1'],
+        'space' => ['shows.42 .seats.A1'],
+        'trailing newline' => ["shows.42.seats.A1\n"],
+    ]);
+
+    it('passes parameters made of the safe placeholder charset to the authorizer', function (): void {
+        expect(channelRegistry()->authorize('shows.42.seats.A_1-b=c@d', new FakeAuthenticatable()))->toBeFalse()
+            ->and(channelRegistry()->authorize('shows.42.seats.A1', new FakeAuthenticatable()))->toBeTrue();
+    });
+
     it('throws ChannelAuthorizationException for an unknown private channel', function (): void {
         try {
             channelRegistry()->authorize('invoices.9', new FakeAuthenticatable());

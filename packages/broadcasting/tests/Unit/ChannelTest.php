@@ -30,6 +30,43 @@ describe('Channel', function (): void {
         expect(fn () => new Channel(''))->toThrow(BroadcastException::class, 'Channel name must not be empty');
     });
 
+    it('rejects channel names containing URI-template, wildcard or list characters', function (string $name): void {
+        expect(fn () => new Channel($name))
+            ->toThrow(BroadcastException::class, 'contains a character that is not allowed');
+    })->with([
+        'opening brace' => ['customers.1{x}'],
+        'closing brace' => ['customers.1}'],
+        'asterisk' => ['customers.*'],
+        'comma' => ['customers.1,foo'],
+    ]);
+
+    it('rejects channel names containing whitespace or control characters', function (string $name): void {
+        expect(fn () => new PrivateChannel($name))
+            ->toThrow(BroadcastException::class, 'contains a character that is not allowed');
+    })->with([
+        'trailing newline' => ["customers.1\n"],
+        'carriage return' => ["customers.1\r"],
+        'space' => ['customers 1'],
+        'tab' => ["customers.\t1"],
+        'null byte' => ["customers.1\0"],
+        'delete' => ["customers.1\x7F"],
+    ]);
+
+    it('escapes control characters in the invalid channel name message', function (): void {
+        expect(fn () => new Channel("customers.1\n"))
+            ->toThrow(BroadcastException::class, "Channel name 'customers.1\\n'");
+    });
+
+    it('accepts channel names made of letters, digits and common separators', function (string $name): void {
+        expect((new Channel($name))->name)->toBe($name);
+    })->with([
+        ['orders.42'],
+        ['private-orders.7'],
+        ['user_1.feed-2'],
+        ['tenant=acme@eu.orders;v2:live'],
+        ['https://example.com/orders/7'],
+    ]);
+
     it('normalizes a string or channel into a channel', function (): void {
         $private = new PrivateChannel('orders.7');
 

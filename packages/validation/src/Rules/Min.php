@@ -7,11 +7,19 @@ namespace Marko\Validation\Rules;
 use Marko\Core\Contracts\UploadedFileInterface;
 use Marko\Validation\Contracts\RuleInterface;
 
-readonly class Min implements RuleInterface
+readonly class Min extends AbstractSizeRule
 {
     public function __construct(
         private int|float $minimum,
-    ) {}
+        bool $numeric = false,
+    ) {
+        parent::__construct($numeric);
+    }
+
+    public function asNumeric(): RuleInterface
+    {
+        return new self($this->minimum, true);
+    }
 
     public function passes(
         string $field,
@@ -27,19 +35,9 @@ readonly class Min implements RuleInterface
             return false;
         }
 
-        if (is_array($value)) {
-            return count($value) >= $this->minimum;
-        }
+        $size = $this->size($value);
 
-        if (is_numeric($value)) {
-            return (float) $value >= $this->minimum;
-        }
-
-        if (is_string($value)) {
-            return mb_strlen($value) >= $this->minimum;
-        }
-
-        return false;
+        return $size !== null && $size >= $this->minimum;
     }
 
     public function message(
@@ -54,11 +52,7 @@ readonly class Min implements RuleInterface
             return "The $field field must have at least $this->minimum items.";
         }
 
-        if (is_numeric($value)) {
-            return "The $field field must be at least $this->minimum.";
-        }
-
-        if (is_string($value)) {
+        if ($this->measuresLength($value)) {
             return "The $field field must be at least $this->minimum characters.";
         }
 
