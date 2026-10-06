@@ -6,10 +6,16 @@ namespace Marko\Hashing\Hash;
 
 use Marko\Hashing\Contracts\HasherInterface;
 use Marko\Hashing\Exceptions\InvalidHasherConfigException;
+use Marko\Hashing\Exceptions\InvalidValueException;
 
 readonly class BcryptHasher implements HasherInterface
 {
     public const int DEFAULT_COST = 12;
+
+    /**
+     * Bcrypt ignores every byte past the 72nd, so longer values are rejected rather than truncated.
+     */
+    public const int MAX_VALUE_BYTES = 72;
 
     private int $cost;
 
@@ -23,16 +29,35 @@ readonly class BcryptHasher implements HasherInterface
         $this->validateCost();
     }
 
+    /**
+     * @throws InvalidValueException When the value is longer than 72 bytes or contains a NUL byte
+     */
     public function hash(
         string $value,
     ): string {
+        if (strlen($value) > self::MAX_VALUE_BYTES) {
+            throw InvalidValueException::tooLong($this->algorithm(), self::MAX_VALUE_BYTES, strlen($value));
+        }
+
+        if (str_contains($value, "\0")) {
+            throw InvalidValueException::containsNulByte($this->algorithm());
+        }
+
         return password_hash($value, PASSWORD_BCRYPT, ['cost' => $this->cost]);
     }
 
+    /**
+     * Returns false for a value bcrypt cannot hash in full (over 72 bytes or containing a NUL byte),
+     * since no hash() result can belong to it.
+     */
     public function verify(
         string $value,
         string $hash,
     ): bool {
+        if (strlen($value) > self::MAX_VALUE_BYTES || str_contains($value, "\0")) {
+            return false;
+        }
+
         return password_verify($value, $hash);
     }
 
