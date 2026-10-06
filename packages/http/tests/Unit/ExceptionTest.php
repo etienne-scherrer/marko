@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Marko\Http\Exceptions\ConnectionException;
 use Marko\Http\Exceptions\HttpException;
+use Marko\Http\Exceptions\InvalidRequestOptionException;
 use Marko\Http\HttpResponse;
 
 describe('HttpException', function (): void {
@@ -38,5 +39,19 @@ describe('ConnectionException', function (): void {
             ->and($exception)->toBeInstanceOf(HttpException::class)
             ->and($exception->getMessage())->toBe('Could not connect to host')
             ->and($exception->getResponse())->toBeNull();
+    });
+});
+
+describe('InvalidRequestOptionException', function (): void {
+    it('names the option and driver when a driver cannot honour an option', function (): void {
+        $exception = InvalidRequestOptionException::unsupportedByDriver(
+            'resolve_to',
+            'ExampleDriver',
+            'ExampleDriver resolves hosts itself.',
+        );
+
+        expect($exception->getMessage())->toBe("HTTP request option 'resolve_to' is not supported by ExampleDriver.")
+            ->and($exception->getContext())->toBe('ExampleDriver resolves hosts itself.')
+            ->and($exception->getSuggestion())->toContain('never silently ignored');
     });
 });

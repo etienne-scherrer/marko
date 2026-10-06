@@ -22,6 +22,7 @@ describe('RequestOptions', function (): void {
             RequestOptions::ALLOW_REDIRECTS,
             RequestOptions::PROXY,
             RequestOptions::HTTP_ERRORS,
+            RequestOptions::RESOLVE_TO,
         ])->and(RequestOptions::SUPPORTED)->toBe([
             'headers',
             'body',
@@ -36,6 +37,7 @@ describe('RequestOptions', function (): void {
             'allow_redirects',
             'proxy',
             'http_errors',
+            'resolve_to',
         ]);
     });
 
@@ -141,6 +143,43 @@ describe('RequestOptions', function (): void {
         expect(fn () => RequestOptions::validate(['verify' => 1]))
             ->toThrow(InvalidRequestOptionException::class, 'verify');
     });
+
+    it('accepts an IPv4 or IPv6 address for resolve_to', function (string $ip): void {
+        RequestOptions::validate(['resolve_to' => $ip, 'allow_redirects' => false]);
+
+        expect(true)->toBeTrue();
+    })->with([
+        'ipv4' => ['93.184.215.14'],
+        'ipv6' => ['2606:2800:21f:cb07:6820:80da:af6b:8b2c'],
+    ]);
+
+    it('throws when resolve_to is not an IP address', function (mixed $value): void {
+        expect(fn () => RequestOptions::validate(['resolve_to' => $value, 'allow_redirects' => false]))
+            ->toThrow(InvalidRequestOptionException::class, "Invalid value for HTTP request option 'resolve_to'");
+    })->with([
+        'hostname' => ['example.com'],
+        'bracketed ipv6' => ['[::1]'],
+        'empty' => [''],
+        'int' => [2130706433],
+        'array' => [['1.2.3.4']],
+    ]);
+
+    it('throws when resolve_to is combined with a proxy', function (): void {
+        expect(fn () => RequestOptions::validate([
+            'resolve_to' => '93.184.215.14',
+            'proxy' => 'http://proxy.local:8080',
+            'allow_redirects' => false,
+        ]))->toThrow(InvalidRequestOptionException::class, "'resolve_to' and 'proxy' cannot be used together");
+    });
+
+    it('throws when resolve_to is used without disabling redirects', function (array $options): void {
+        expect(fn () => RequestOptions::validate(['resolve_to' => '93.184.215.14', ...$options]))
+            ->toThrow(InvalidRequestOptionException::class, "requires 'allow_redirects' => false");
+    })->with([
+        'redirects left at the default' => [[]],
+        'redirects enabled' => [['allow_redirects' => true]],
+        'a redirect limit' => [['allow_redirects' => 2]],
+    ]);
 
     it('returns the bearer token from the auth option', function (): void {
         expect(RequestOptions::bearerToken(['auth' => ['bearer' => 'abc']]))->toBe('abc')
