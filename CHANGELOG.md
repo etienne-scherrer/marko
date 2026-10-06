@@ -8,6 +8,23 @@ Entries from `0.4.0` onward are generated automatically by `bin/release.sh` from
 
 <!-- new-entries-below — do not remove this marker; bin/release.sh inserts new versions directly below it -->
 
+## [0.11.0] - 2026-10-06
+
+### Breaking Changes
+* fix!: wire up or remove config keys nothing reads by @markshust in https://github.com/marko-php/marko/pull/520
+* fix!: render layouts innermost so route middleware headers and cookies survive by @markshust in https://github.com/marko-php/marko/pull/522
+* feat!: add a destructive marker to #[Command] and refuse marked commands in mcp by @markshust in https://github.com/marko-php/marko/pull/524
+* feat!: pin webhook connections to the ip the url policy validated by @markshust in https://github.com/marko-php/marko/pull/525
+### New Features
+* feat: ship a shared FakeEncryptor in marko/testing by @markshust in https://github.com/marko-php/marko/pull/523
+* feat: per-device remember-me tokens by @markshust in https://github.com/marko-php/marko/pull/527
+### Bug Fixes
+* fix: pass csrf token when re-rendering the admin login form after failed credentials by @markshust in https://github.com/marko-php/marko/pull/519
+* fix: run a dummy bcrypt check before rejecting unhashable values in BcryptHasher::verify by @markshust in https://github.com/marko-php/marko/pull/521
+### Documentation
+* docs: update mcp allow_destructive config comment for the destructive marker by @markshust in https://github.com/marko-php/marko/pull/526
+
+
 ## [0.10.0] - 2026-10-06
 
 ### Breaking Changes
