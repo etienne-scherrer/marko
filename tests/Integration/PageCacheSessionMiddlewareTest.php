@@ -29,6 +29,13 @@ function makeRepeatVisitSession(): SessionInterface
             $this->started = true;
         }
 
+        public function arm(): void {}
+
+        public function isAvailable(): bool
+        {
+            return $this->started;
+        }
+
         public function get(
             string $key,
             mixed $default = null,
