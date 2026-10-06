@@ -111,9 +111,18 @@ it('returns correct message for number', function () {
     expect($rule->message('age', 150))->toBe('The age field must not exceed 100.');
 });
 
-it('compares numerically for the max rule on a numeric string', function () {
-    $rule = new Max(100);
+it('compares numerically for the max rule on a numeric string in numeric mode', function () {
+    $rule = new Max(100, numeric: true);
 
     expect($rule->passes('age', '50', []))->toBeTrue()
         ->and($rule->passes('age', '150', []))->toBeFalse();
+});
+
+it('measures a numeric string by length when not in numeric mode', function (): void {
+    $rule = new Max(255);
+    $digits = str_repeat('9', 300);
+
+    expect($rule->passes('bio', $digits, []))->toBeFalse()
+        ->and($rule->passes('bio', '1000', []))->toBeTrue()
+        ->and($rule->message('bio', $digits))->toBe('The bio field must not exceed 255 characters.');
 });

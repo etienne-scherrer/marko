@@ -7,12 +7,20 @@ namespace Marko\Validation\Rules;
 use Marko\Core\Contracts\UploadedFileInterface;
 use Marko\Validation\Contracts\RuleInterface;
 
-readonly class Between implements RuleInterface
+readonly class Between extends AbstractSizeRule
 {
     public function __construct(
         private int|float $minimum,
         private int|float $maximum,
-    ) {}
+        bool $numeric = false,
+    ) {
+        parent::__construct($numeric);
+    }
+
+    public function asNumeric(): RuleInterface
+    {
+        return new self($this->minimum, $this->maximum, true);
+    }
 
     public function passes(
         string $field,
@@ -28,25 +36,9 @@ readonly class Between implements RuleInterface
             return false;
         }
 
-        if (is_array($value)) {
-            $count = count($value);
+        $size = $this->size($value);
 
-            return $count >= $this->minimum && $count <= $this->maximum;
-        }
-
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-
-            return $numeric >= $this->minimum && $numeric <= $this->maximum;
-        }
-
-        if (is_string($value)) {
-            $length = mb_strlen($value);
-
-            return $length >= $this->minimum && $length <= $this->maximum;
-        }
-
-        return false;
+        return $size !== null && $size >= $this->minimum && $size <= $this->maximum;
     }
 
     public function message(
@@ -61,11 +53,7 @@ readonly class Between implements RuleInterface
             return "The $field field must have between $this->minimum and $this->maximum items.";
         }
 
-        if (is_numeric($value)) {
-            return "The $field field must be between $this->minimum and $this->maximum.";
-        }
-
-        if (is_string($value)) {
+        if ($this->measuresLength($value)) {
             return "The $field field must be between $this->minimum and $this->maximum characters.";
         }
 

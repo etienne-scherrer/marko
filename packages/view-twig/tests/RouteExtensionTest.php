@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\Exceptions\UrlGenerationException;
 use Marko\Routing\RouteCollection;
 use Marko\Routing\RouteDefinition;
@@ -9,6 +10,7 @@ use Marko\Routing\RoutingConfig;
 use Marko\Routing\UrlGenerator;
 use Marko\Routing\UrlGeneratorInterface;
 use Marko\Testing\Fake\FakeConfigRepository;
+use Marko\View\CacheDirectoryGuard;
 use Marko\View\Twig\RouteExtension;
 use Marko\View\Twig\TwigEngineFactory;
 use Marko\View\Twig\TwigViewConfig;
@@ -89,7 +91,11 @@ describe('RouteExtension', function (): void {
             'view.charset' => 'UTF-8',
         ]));
 
-        $environment = (new TwigEngineFactory($config, twigRouteGenerator()))->create();
+        $environment = (new TwigEngineFactory(
+            $config,
+            twigRouteGenerator(),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
+        ))->create();
         $environment->setLoader(new ArrayLoader(['main' => "{{ route('shows.show', {id: 9}) }}"]));
 
         expect($environment->hasExtension(RouteExtension::class))->toBeTrue()
