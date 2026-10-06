@@ -64,7 +64,9 @@ it('reads all pages from MarkdownRepository', function (): void {
 
     expect($count)->toBe(2);
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('writes FTS5 virtual table docs_fts with porter unicode61 tokenizer', function (): void {
@@ -83,7 +85,9 @@ it('writes FTS5 virtual table docs_fts with porter unicode61 tokenizer', functio
         ->and($sql)->toContain('porter')
         ->and($sql)->toContain('unicode61');
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('writes companion docs_meta table with page metadata', function (): void {
@@ -106,7 +110,9 @@ it('writes companion docs_meta table with page metadata', function (): void {
         ->and($row['section'])->toBe('guide')
         ->and($row['title'])->toBe('Installation');
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('produces queryable BM25-ranked results', function (): void {
@@ -128,7 +134,9 @@ it('produces queryable BM25-ranked results', function (): void {
     expect($results)->not->toBeEmpty()
         ->and($results[0])->toBe('guide/install');
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('ranks exact title matches higher than body-only matches', function (): void {
@@ -150,7 +158,9 @@ it('ranks exact title matches higher than body-only matches', function (): void 
     expect($results)->not->toBeEmpty()
         ->and($results[0])->toBe('guide/install');
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('overwrites existing docs.sqlite on rebuild idempotently', function (): void {
@@ -172,7 +182,9 @@ it('overwrites existing docs.sqlite on rebuild idempotently', function (): void 
 
     expect($count)->toBe(2);
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it('throws DocsException when MarkdownRepository returns zero pages', function (): void {
@@ -182,7 +194,9 @@ it('throws DocsException when MarkdownRepository returns zero pages', function (
 
     expect(fn () => $builder->build($dbPath))->toThrow(DocsException::class);
 
-    @unlink($dbPath);
+    if (is_file($dbPath)) {
+        unlink($dbPath);
+    }
 });
 
 it(
