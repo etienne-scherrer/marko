@@ -11,14 +11,14 @@ use Marko\Mail\Message;
 use ReflectionClass;
 
 test('it implements MailerInterface', function (): void {
-    $logger = $this->createMock(LoggerInterface::class);
+    $logger = $this->createStub(LoggerInterface::class);
     $mailer = new LogMailer($logger);
 
     expect($mailer)->toBeInstanceOf(MailerInterface::class);
 });
 
 test('it accepts LoggerInterface via constructor', function (): void {
-    $logger = $this->createMock(LoggerInterface::class);
+    $logger = $this->createStub(LoggerInterface::class);
     $mailer = new LogMailer($logger);
 
     $reflection = new ReflectionClass($mailer);
@@ -31,7 +31,7 @@ test('it accepts LoggerInterface via constructor', function (): void {
 });
 
 test('it returns true from send method', function (): void {
-    $logger = $this->createMock(LoggerInterface::class);
+    $logger = $this->createStub(LoggerInterface::class);
     $mailer = new LogMailer($logger);
 
     $message = Message::create()
@@ -46,7 +46,7 @@ test('it returns true from send method', function (): void {
 });
 
 test('it returns true from sendRaw method', function (): void {
-    $logger = $this->createMock(LoggerInterface::class);
+    $logger = $this->createStub(LoggerInterface::class);
     $mailer = new LogMailer($logger);
 
     $rawMessage = "From: sender@example.com\r\n";

@@ -603,6 +603,14 @@ For interfaces, test against the interface contract, not specific implementation
 - **Boot a subprocess once per file** when several tests read the same result. Memoise the result in a `static` (see `packages/testing/tests/Feature/PestPluginRegistrationTest.php`).
 - **Put the subprocess output in every failure message**, e.g. `expect(str_contains($output, '...'))->toBeTrue($output)`. Pest's `toContain()` takes no message argument.
 
+### 6. Clean Runs: No Notices, Deprecations, Risky Tests or Warnings
+`phpunit.xml` sets `failOnDeprecation`, `failOnNotice`, `failOnPhpunitDeprecation`, `failOnPhpunitNotice`, `failOnRisky` and `failOnWarning`, so any of them fails `composer test` and the integration jobs, the same as a failing test. `tests/PhpunitConfigTest.php` keeps the flags on. Skipped tests still pass (`failOnSkipped` is off), because the integration tests skip without their services.
+
+- **Stubs via `createStub()`.** Use `createMock()` only for a double that gets `expects()` (or a `with()` rule). A mock with no expectation triggers a PHPUnit notice. Don't silence it with `#[AllowMockObjectsWithoutExpectations]`. When a shared double needs `expects()` in only some tests, stub it in the shared setup and create a mock in those tests.
+- **Every test asserts.** A test that performs no assertion is risky. Test helpers that check something go through `PHPUnit\Framework\Assert` (`Assert::assertSame()`, `Assert::assertArrayHasKey()`, ...), never a hand-thrown `AssertionFailedError`, so a passing check still counts.
+- **No raw PHP warnings from code under test.** Don't hide them with `@`. Catch the failure and fold the reason (`error_get_last()` or a scoped error handler) into the loud exception, then assert the reason in the test.
+- **Find issues** with `--display-notices --display-deprecations --display-warnings --display-phpunit-deprecations --display-phpunit-notices`.
+
 ## Pest 4 Features
 
 > **Note:** The following sections document Pest 4 capabilities. Some features require additional plugins that may not be installed in the project yet. Check `composer.json` for current dependencies.

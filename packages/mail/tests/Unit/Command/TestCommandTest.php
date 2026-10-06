@@ -11,8 +11,8 @@ use Marko\Mail\Exception\TransportException;
 use Marko\Mail\Message;
 
 it('mail:test command requires email argument', function (): void {
-    $mailer = $this->createMock(MailerInterface::class);
-    $config = $this->createMock(MailConfig::class);
+    $mailer = $this->createStub(MailerInterface::class);
+    $config = $this->createStub(MailConfig::class);
 
     $command = new TestCommand($mailer, $config);
     $input = new Input(['marko', 'mail:test']);
@@ -34,7 +34,7 @@ it('mail:test command sends test email', function (): void {
         ->method('send')
         ->willReturn(true);
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -60,7 +60,7 @@ it('mail:test command supports subject option', function (): void {
             return true;
         });
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -87,7 +87,7 @@ it('reads the email argument after --subject for mail:test', function (): void {
             return true;
         });
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -103,10 +103,10 @@ it('reads the email argument after --subject for mail:test', function (): void {
 });
 
 it('mail:test command shows success message', function (): void {
-    $mailer = $this->createMock(MailerInterface::class);
+    $mailer = $this->createStub(MailerInterface::class);
     $mailer->method('send')->willReturn(true);
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -125,11 +125,11 @@ it('mail:test command shows success message', function (): void {
 });
 
 it('mail:test command shows failure message on error', function (): void {
-    $mailer = $this->createMock(MailerInterface::class);
+    $mailer = $this->createStub(MailerInterface::class);
     $mailer->method('send')
         ->willThrowException(TransportException::connectionFailed('smtp.example.com', 587));
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 

@@ -90,7 +90,7 @@ describe('ViewMailer', function (): void {
 
     it('delegates sendRaw to underlying mailer', function (): void {
         $mailer = $this->createMock(MailerInterface::class);
-        $view = $this->createMock(ViewInterface::class);
+        $view = $this->createStub(ViewInterface::class);
 
         $mailer->expects($this->once())
             ->method('sendRaw')

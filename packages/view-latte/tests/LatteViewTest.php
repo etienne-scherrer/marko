@@ -12,8 +12,8 @@ use Marko\View\ViewInterface;
 
 describe('LatteView', function (): void {
     test('implements ViewInterface', function (): void {
-        $engine = $this->createMock(Engine::class);
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $engine = $this->createStub(Engine::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
 
         $view = new LatteView($engine, $resolver);
 
@@ -197,7 +197,7 @@ describe('LatteView', function (): void {
         $engine = new Engine();
         $engine->setTempDirectory($cacheDir);
 
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $resolver->method('resolve')
             ->willReturnCallback(fn (string $template) => match ($template) {
                 'blog::post/index' => $listPath,

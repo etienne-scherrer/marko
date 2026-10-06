@@ -9,7 +9,7 @@ use Marko\View\TemplateResolverInterface;
 
 describe('ModuleLoader', function (): void {
     test('implements Latte\Loader interface', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect($loader)->toBeInstanceOf(Loader::class);
@@ -50,7 +50,7 @@ describe('ModuleLoader', function (): void {
     });
 
     test('getReferredName returns namespaced template unchanged', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         $result = $loader->getReferredName('blog::post/list/item', 'blog::post/index');
@@ -59,7 +59,7 @@ describe('ModuleLoader', function (): void {
     });
 
     test('getReferredName throws for relative paths', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect(fn () => $loader->getReferredName('../components/item', 'blog::post/index'))
@@ -67,7 +67,7 @@ describe('ModuleLoader', function (): void {
     });
 
     test('getReferredName throws for bare template names', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect(fn () => $loader->getReferredName('item', 'blog::post/index'))

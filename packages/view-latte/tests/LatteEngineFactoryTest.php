@@ -11,11 +11,11 @@ use Marko\View\ViewConfig;
 
 describe('LatteEngineFactory', function (): void {
     test('LatteEngineFactory takes both ViewConfig and LatteViewConfig in its constructor', function (): void {
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn('/tmp/latte');
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -29,11 +29,11 @@ describe('LatteEngineFactory', function (): void {
     });
 
     test('creates Latte Engine', function (): void {
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn('/tmp/latte');
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -50,12 +50,12 @@ describe('LatteEngineFactory', function (): void {
         $cacheDir = sys_get_temp_dir() . '/latte-strict-' . bin2hex(random_bytes(8));
         mkdir($cacheDir, 0755, true);
 
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig->method('autoRefresh')->willReturn(true);
 
         // Test with strict types enabled
-        $latteViewConfigTrue = $this->createMock(LatteViewConfig::class);
+        $latteViewConfigTrue = $this->createStub(LatteViewConfig::class);
         $latteViewConfigTrue->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -66,7 +66,7 @@ describe('LatteEngineFactory', function (): void {
         $engine = $factory->create();
 
         // Test with strict types disabled
-        $latteViewConfigFalse = $this->createMock(LatteViewConfig::class);
+        $latteViewConfigFalse = $this->createStub(LatteViewConfig::class);
         $latteViewConfigFalse->method('strictTypes')->willReturn(false);
 
         $factory2 = new LatteEngineFactory(
@@ -88,11 +88,11 @@ describe('LatteEngineFactory', function (): void {
         $cacheDir = sys_get_temp_dir() . '/latte-test-' . bin2hex(random_bytes(8));
         mkdir($cacheDir, 0755, true);
 
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -121,11 +121,11 @@ describe('LatteEngineFactory', function (): void {
         $cacheDir = sys_get_temp_dir() . '/latte-test-' . bin2hex(random_bytes(8));
         mkdir($cacheDir, 0755, true);
 
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -155,11 +155,11 @@ describe('LatteEngineFactory', function (): void {
         mkdir($cacheDir, 0755, true);
 
         // Test with auto refresh enabled
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
         $factory = new LatteEngineFactory(
@@ -175,11 +175,11 @@ describe('LatteEngineFactory', function (): void {
         $cache = $cacheProperty->getValue($engine);
 
         // Test with auto refresh disabled
-        $viewConfig2 = $this->createMock(ViewConfig::class);
+        $viewConfig2 = $this->createStub(ViewConfig::class);
         $viewConfig2->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig2->method('autoRefresh')->willReturn(false);
 
-        $latteViewConfig2 = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig2 = $this->createStub(LatteViewConfig::class);
         $latteViewConfig2->method('strictTypes')->willReturn(true);
 
         $factory2 = new LatteEngineFactory(
