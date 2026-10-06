@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'locale' => $_ENV['APP_LOCALE'] ?? 'en',
-    'fallback_locale' => $_ENV['APP_FALLBACK_LOCALE'] ?? 'en',
+    'locale' => Env::string('APP_LOCALE', 'en'),
+    'fallback_locale' => Env::string('APP_FALLBACK_LOCALE', 'en'),
 ];
