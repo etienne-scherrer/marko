@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace Marko\Integration\Fixture\Http;
 
 use Marko\Authentication\AuthManager;
+use Marko\Authentication\Exceptions\AuthException;
 use Marko\Authorization\Attributes\Can;
+use Marko\Authorization\Contracts\GateInterface;
+use Marko\Authorization\Exceptions\AuthorizationException;
+use Marko\Authorization\Exceptions\PolicyException;
+use Marko\Config\Exceptions\ConfigNotFoundException;
 use Marko\RateLimiter\Middleware\RateLimitMiddleware;
 use Marko\Routing\Attributes\Get;
 use Marko\Routing\Attributes\Middleware;
@@ -17,6 +22,7 @@ readonly class IntegrationController
     public function __construct(
         private SessionInterface $session,
         private AuthManager $auth,
+        private GateInterface $gate,
     ) {}
 
     #[Get('/health')]
@@ -47,6 +53,8 @@ readonly class IntegrationController
 
     /**
      * Logs in fixture user 1 through the default (session) guard.
+     *
+     * @throws AuthException|ConfigNotFoundException
      */
     #[Get('/login')]
     public function login(): Response
@@ -67,5 +75,20 @@ readonly class IntegrationController
     public function admin(): Response
     {
         return new Response('admin area');
+    }
+
+    /**
+     * The imperative check: no #[Can], so the middleware lets the request
+     * through and Gate::authorize() itself denies `view-admin`. The thrown
+     * AuthorizationException must render as 403, not 500 (#222).
+     *
+     * @throws AuthorizationException|PolicyException
+     */
+    #[Get('/admin/report')]
+    public function adminReport(): Response
+    {
+        $this->gate->authorize('view-admin');
+
+        return new Response('admin report');
     }
 }
