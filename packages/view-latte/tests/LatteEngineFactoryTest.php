@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 use Latte\Engine;
 use Latte\Feature;
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\UrlGeneratorInterface;
+use Marko\View\CacheDirectoryGuard;
+use Marko\View\Exceptions\InsecureCacheDirectoryException;
 use Marko\View\Latte\LatteEngineFactory;
 use Marko\View\Latte\LatteViewConfig;
 use Marko\View\ViewConfig;
@@ -22,6 +25,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -40,6 +44,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -62,6 +67,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfigTrue,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -73,6 +79,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfigFalse,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine2 = $factory2->create();
 
@@ -99,6 +106,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -132,6 +140,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -166,6 +175,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
@@ -186,6 +196,7 @@ describe('LatteEngineFactory', function (): void {
             $viewConfig2,
             $latteViewConfig2,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine2 = $factory2->create();
 
@@ -196,5 +207,56 @@ describe('LatteEngineFactory', function (): void {
         // Cleanup
         array_map('unlink', glob($cacheDir . '/*'));
         @rmdir($cacheDir);
+    });
+});
+
+describe('LatteEngineFactory cache directory hardening', function (): void {
+    beforeEach(function (): void {
+        $this->base = sys_get_temp_dir() . '/marko-latte-base-' . bin2hex(random_bytes(8));
+        mkdir($this->base, 0o700);
+    });
+
+    afterEach(function (): void {
+        foreach (array_reverse(glob($this->base . '/{,*/,*/*/}*', GLOB_BRACE | GLOB_MARK)) as $path) {
+            str_ends_with($path, '/') ? rmdir($path) : unlink($path);
+        }
+
+        rmdir($this->base);
+    });
+
+    test('it resolves the default storage/views cache directory under the project base path', function (): void {
+        $viewConfig = $this->createStub(ViewConfig::class);
+        $viewConfig->method('cacheDirectory')->willReturn('storage/views');
+        $viewConfig->method('autoRefresh')->willReturn(true);
+
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $this->createStub(LatteViewConfig::class),
+            $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths($this->base)),
+        );
+
+        expect($factory->create()->getCacheFile('main'))->toStartWith($this->base . '/storage/views/')
+            ->and(fileperms($this->base . '/storage/views') & 0o777)->toBe(0o700);
+    });
+
+    test('it refuses a world-writable cache directory', function (): void {
+        $shared = $this->base . '/views';
+        mkdir($shared);
+        chmod($shared, 0o777);
+
+        $viewConfig = $this->createStub(ViewConfig::class);
+        $viewConfig->method('cacheDirectory')->willReturn($shared);
+        $viewConfig->method('autoRefresh')->willReturn(true);
+
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $this->createStub(LatteViewConfig::class),
+            $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths($this->base)),
+        );
+
+        expect(fn (): Engine => $factory->create())
+            ->toThrow(InsecureCacheDirectoryException::class, 'world-writable');
     });
 });
