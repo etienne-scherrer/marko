@@ -6,11 +6,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 Entries from `0.4.0` onward are generated automatically by `bin/release.sh` from merged PR titles and labels (see `.github/release.yml`). Earlier entries were backfilled from GitHub Releases. The full list of changes for any version is also available at https://github.com/marko-php/marko/releases.
 
-## [Unreleased]
-
-### Upgrade Notes
-* `db:rebuild`, `db:reset`, `db:rollback` and `db:seed` now run freely only in development (`development`, `dev`, `local`) and testing (`testing`, `test`). In any other non-production environment, such as `staging`, `qa` or `preview`, they refuse to run without `--force`, and ask for confirmation when a terminal is attached. CI or deploy scripts that rebuild, reset, roll back or seed a staging or preview database must add `--force --no-interaction`. Production stays refused with no override. `SeederRunner::runAll()` and `runByName()` take a matching `force` argument. (#235)
-
 <!-- new-entries-below — do not remove this marker; bin/release.sh inserts new versions directly below it -->
 
 ## [0.8.5] - 2026-07-26
