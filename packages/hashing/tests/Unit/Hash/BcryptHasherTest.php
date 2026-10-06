@@ -158,3 +158,75 @@ it('returns false when verifying a value containing a NUL byte', function () {
 
     expect($hasher->verify("secret\0", $hash))->toBeFalse();
 });
+
+/**
+ * A BcryptHasher that records every dummy verification it runs before running it for real.
+ */
+function createDummyRecordingBcryptHasher(
+    ArrayObject $dummyChecks,
+): BcryptHasher {
+    return new readonly class ($dummyChecks) extends BcryptHasher
+    {
+        public function __construct(
+            private ArrayObject $dummyChecks,
+        ) {
+            parent::__construct(cost: 4);
+        }
+
+        protected function verifyDummy(
+            string $value,
+        ): void {
+            $this->dummyChecks->append($value);
+
+            parent::verifyDummy($value);
+        }
+    };
+}
+
+it('runs a dummy verification before rejecting a value longer than 72 bytes', function () {
+    $dummyChecks = new ArrayObject();
+    $hasher = createDummyRecordingBcryptHasher($dummyChecks);
+    $value = str_repeat('a', 73);
+
+    expect($hasher->verify($value, $hasher->hash('secret')))->toBeFalse()
+        ->and($dummyChecks->getArrayCopy())->toBe([$value]);
+});
+
+it('runs a dummy verification before rejecting a value containing a NUL byte', function () {
+    $dummyChecks = new ArrayObject();
+    $hasher = createDummyRecordingBcryptHasher($dummyChecks);
+
+    expect($hasher->verify("secret\0", $hasher->hash('secret')))->toBeFalse()
+        ->and($dummyChecks->getArrayCopy())->toBe(["secret\0"]);
+});
+
+it('does not run a dummy verification for a value bcrypt can check', function () {
+    $dummyChecks = new ArrayObject();
+    $hasher = createDummyRecordingBcryptHasher($dummyChecks);
+    $hash = $hasher->hash('secret');
+
+    expect($hasher->verify('secret', $hash))->toBeTrue()
+        ->and($hasher->verify('wrong', $hash))->toBeFalse()
+        ->and($dummyChecks->count())->toBe(0);
+});
+
+it('verifies dummy values against a well-formed bcrypt hash of the configured cost', function () {
+    $hasher = new BcryptHasher(cost: 5);
+    $dummyHash = new ReflectionProperty(BcryptHasher::class, 'dummyHash')->getValue($hasher);
+
+    $info = password_get_info($dummyHash);
+
+    // A malformed hash would make password_verify() fail instantly instead of doing bcrypt work
+    expect($info['algo'])->toBe(PASSWORD_BCRYPT)
+        ->and($info['options']['cost'])->toBe(5)
+        ->and(strlen($dummyHash))->toBe(60)
+        ->and(strlen(crypt('attacker-guess', $dummyHash)))->toBe(60)
+        ->and($hasher->needsRehash($dummyHash))->toBeFalse();
+});
+
+it('uses the default cost for the dummy hash when none is configured', function () {
+    $hasher = new BcryptHasher();
+    $dummyHash = new ReflectionProperty(BcryptHasher::class, 'dummyHash')->getValue($hasher);
+
+    expect(password_get_info($dummyHash)['options']['cost'])->toBe(BcryptHasher::DEFAULT_COST);
+});
