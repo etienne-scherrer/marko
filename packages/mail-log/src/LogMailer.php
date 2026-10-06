@@ -4,18 +4,25 @@ declare(strict_types=1);
 
 namespace Marko\Mail\Log;
 
+use Marko\Config\Exceptions\ConfigException;
+use Marko\Config\Exceptions\ConfigNotFoundException;
 use Marko\Log\Contracts\LoggerInterface;
 use Marko\Mail\Address;
 use Marko\Mail\Attachment;
 use Marko\Mail\Contracts\MailerInterface;
+use Marko\Mail\Log\Config\MailLogConfig;
 use Marko\Mail\Message;
 
 readonly class LogMailer implements MailerInterface
 {
     public function __construct(
         private LoggerInterface $logger,
+        private MailLogConfig $config,
     ) {}
 
+    /**
+     * @throws ConfigException|ConfigNotFoundException
+     */
     public function send(
         Message $message,
     ): bool {
@@ -49,6 +56,10 @@ readonly class LogMailer implements MailerInterface
 
         $this->logger->info('Email sent', $context);
 
+        if (!$this->config->includeBody()) {
+            return true;
+        }
+
         if ($message->text !== null) {
             $this->logger->debug('Email body (text)', ['body' => $message->text]);
         }
@@ -60,6 +71,9 @@ readonly class LogMailer implements MailerInterface
         return true;
     }
 
+    /**
+     * @throws ConfigException|ConfigNotFoundException
+     */
     public function sendRaw(
         string $to,
         string $raw,
@@ -69,7 +83,9 @@ readonly class LogMailer implements MailerInterface
             'raw_length' => strlen($raw),
         ]);
 
-        $this->logger->debug('Raw email content', ['content' => $raw]);
+        if ($this->config->includeBody()) {
+            $this->logger->debug('Raw email content', ['content' => $raw]);
+        }
 
         return true;
     }
