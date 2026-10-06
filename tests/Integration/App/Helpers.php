@@ -289,9 +289,9 @@ function removeIntegrationProject(
  * unless $migrate is false. Callers skip first via
  * integrationServicesSkipReason().
  *
- * `--no-generate` keeps db:migrate to the committed migrations: in
- * development mode it otherwise diffs entities against the live schema and
- * would try to drop tables no entity owns (jobs, sessions); see #170.
+ * `--no-generate` keeps db:migrate to the committed migrations, so every case
+ * starts from the same schema whatever APP_ENV the developer's shell exports.
+ * MigrationSafetyTest covers generation itself.
  *
  * @throws Throwable
  */
@@ -402,6 +402,51 @@ function integrationCommandInput(
     array $arguments = [],
 ): Input {
     return new Input(['marko', $command, ...$arguments]);
+}
+
+/**
+ * Run $callback with APP_ENV set to $name and MARKO_ENV cleared, restoring
+ * both afterwards. AppEnvironment reads the variables on every call, so this
+ * works on an app that is already booted.
+ *
+ * @template T
+ * @param Closure(): T $callback
+ * @return T
+ */
+function withIntegrationAppEnv(
+    string $name,
+    Closure $callback,
+): mixed {
+    $saved = [];
+
+    foreach (['APP_ENV', 'MARKO_ENV'] as $variable) {
+        $saved[$variable] = [
+            'env' => array_key_exists($variable, $_ENV) ? $_ENV[$variable] : null,
+            'process' => getenv($variable),
+        ];
+        unset($_ENV[$variable]);
+        putenv($variable);
+    }
+
+    $_ENV['APP_ENV'] = $name;
+    putenv("APP_ENV=$name");
+
+    try {
+        return $callback();
+    } finally {
+        foreach ($saved as $variable => $values) {
+            unset($_ENV[$variable]);
+            putenv($variable);
+
+            if ($values['env'] !== null) {
+                $_ENV[$variable] = $values['env'];
+            }
+
+            if ($values['process'] !== false) {
+                putenv("$variable={$values['process']}");
+            }
+        }
+    }
 }
 
 /**

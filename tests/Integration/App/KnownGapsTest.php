@@ -139,18 +139,6 @@ it('answers a missing entity with 404')
 it('answers a CSRF failure with 419')
     ->todo(note: 'A state-changing request with a missing or wrong CSRF token must return 419.', issue: 169);
 
-// #170 db:migrate / db:rebuild production safety
-it('keeps a hand-made partial index when db:migrate runs')
-    ->todo(
-        note: 'Add a migration creating a partial index; db:migrate in development must not generate a migration '
-            . 'that drops it. The same applies to tables no entity owns (jobs, failed_jobs, sessions), which is why '
-            . 'the harness passes --no-generate today.',
-        issue: 170,
-    );
-
-it('never generates migrations when db:migrate runs in production')
-    ->todo(note: 'With APP_ENV=production, db:migrate must apply pending files and never write new ones.', issue: 170);
-
 // #171 Router precedence, 405, HEAD, OPTIONS
 it('answers an OPTIONS preflight through the CORS middleware')
     ->todo(
