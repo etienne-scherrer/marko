@@ -106,8 +106,27 @@ it('refuses db:rebuild and db:seed in production and when APP_ENV is unset', fun
 
     expect($migrate['exitCode'])->toBe(0, $migrate['output'])
         ->and($rebuild['exitCode'])->toBe(1)
-        ->and($rebuild['output'])->toContain('Rebuild cannot be run in production')
+        ->and($rebuild['output'])->toContain("db:rebuild cannot be run in the 'production' environment")
         ->and($seed['exitCode'])->toBe(1)
-        ->and($seed['output'])->toContain('Seeders cannot be run in production')
+        ->and($seed['output'])->toContain("db:seed cannot be run in the 'production' environment")
         ->and((int) $tables[0]['total'])->toBe(6);
 })->with(['production', ''])->issue(170);
+
+it('refuses db:rebuild and db:seed in staging without --force', function (): void {
+    $migrate = runIntegrationCommand($this->app, 'db:migrate', ['--no-generate']);
+
+    [$rebuild, $seed] = withIntegrationAppEnv('staging', fn (): array => [
+        runIntegrationCommand($this->app, 'db:rebuild'),
+        runIntegrationCommand($this->app, 'db:seed'),
+    ]);
+    $tables = $this->app->container->get(ConnectionInterface::class)->query(
+        "SELECT count(*) AS total FROM information_schema.tables WHERE table_schema = 'public'",
+    );
+
+    expect($migrate['exitCode'])->toBe(0, $migrate['output'])
+        ->and($rebuild['exitCode'])->toBe(1)
+        ->and($rebuild['output'])->toContain("db:rebuild is refused in the 'staging' environment without --force")
+        ->and($seed['exitCode'])->toBe(1)
+        ->and($seed['output'])->toContain("db:seed is refused in the 'staging' environment without --force")
+        ->and((int) $tables[0]['total'])->toBe(6);
+})->issue(235);
