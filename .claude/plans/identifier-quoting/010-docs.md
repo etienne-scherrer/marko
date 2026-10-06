@@ -1,6 +1,6 @@
 # Task 010: Docs
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 001, 002, 003, 004, 005, 006, 007, 008, 009, 011
 **Retry count**: 0
 
@@ -11,10 +11,10 @@ Document `quoteIdentifier()` in `database.md` (ConnectionInterface table, driver
 - Related files: `packages/docs-markdown/docs/packages/database.md`, `database-mysql.md`, `database-pgsql.md`; `docs/DOCS-STANDARDS.md`
 
 ## Requirements (Test Descriptions)
-- [ ] `it lists quoteIdentifier in the ConnectionInterface table`
-- [ ] `it lists quoteIdentifier in the driver-authoring section`
-- [ ] `it documents MySqlIdentifier and PgSqlIdentifier in the driver API tables`
-- [ ] `it notes the upgrade impact of identifier quoting`
+- [x] `it lists quoteIdentifier in the ConnectionInterface table`
+- [x] `it lists quoteIdentifier in the driver-authoring section`
+- [x] `it documents MySqlIdentifier and PgSqlIdentifier in the driver API tables`
+- [x] `it notes the upgrade impact of identifier quoting`
 
 ## Acceptance Criteria
 - Docs follow DOCS-STANDARDS; DocsClassReferenceTest passes

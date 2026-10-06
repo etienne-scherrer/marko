@@ -1,6 +1,6 @@
 # Task 003: MySQL generator, query builder and introspector use MySqlIdentifier
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 001
 **Retry count**: 0
 
@@ -11,11 +11,11 @@
 - Related files: `packages/database-mysql/src/Sql/MySqlGenerator.php`, `packages/database-mysql/src/Query/MySqlQueryBuilder.php`, `packages/database-mysql/src/Introspection/MySqlIntrospector.php`, `packages/database-mysql/tests/Sql/MySqlGeneratorTest.php`
 
 ## Requirements (Test Descriptions)
-- [ ] `it escapes a backtick in a table name in CREATE TABLE`
-- [ ] `it escapes a backtick in a column name in ADD COLUMN`
-- [ ] `it escapes a backtick in index, foreign key and referenced names`
-- [ ] `it quotes reserved-word columns in generated DDL`
-- [ ] `it has no inline backtick identifier quoting in the generator, query builder or introspector`
+- [x] `it escapes a backtick in a table name in CREATE TABLE`
+- [x] `it escapes a backtick in a column name in ADD COLUMN`
+- [x] `it escapes a backtick in index, foreign key and referenced names`
+- [x] `it quotes reserved-word columns in generated DDL`
+- [x] `it has no inline backtick identifier quoting in the generator, query builder or introspector`
 
 ## Acceptance Criteria
 - All requirements have passing tests; existing generator and builder tests unchanged

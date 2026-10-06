@@ -1,6 +1,6 @@
 # Task 009: Real-database integration tests for reserved-word identifiers (MySQL, MariaDB, PostgreSQL)
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 003, 004, 006, 007
 **Retry count**: 0
 
@@ -12,10 +12,10 @@ In each driver's `tests/Integration` (group `integration-services`; the MySQL di
 - Patterns to follow: `SchemaDiffSettlesTest.php`, `GeneratedPrimaryKeysTest.php`; settings from `tests/Fixtures/IntegrationDatabase` (skip without host, fail under `MARKO_INTEGRATION_REQUIRED`)
 
 ## Requirements (Test Descriptions)
-- [ ] `it round-trips an entity with reserved-word columns through save, find, findOneBy, findBy, update, exists and delete`
-- [ ] `it inserts a batch of entities with reserved-word columns`
-- [ ] `it writes reserved-word columns through DataMigration and DatabaseTestHelper`
-- [ ] `it creates and uses a table whose names contain the delimiter`
+- [x] `it round-trips an entity with reserved-word columns through save, find, findOneBy, findBy, update, exists and delete`
+- [x] `it inserts a batch of entities with reserved-word columns`
+- [x] `it writes reserved-word columns through DataMigration and DatabaseTestHelper`
+- [x] `it creates and uses a table whose names contain the delimiter`
 
 ## Acceptance Criteria
 - Pass locally against MySQL 8.4, MariaDB 11.8 and PostgreSQL 17 (CI already runs both driver directories; the MySQL one twice)

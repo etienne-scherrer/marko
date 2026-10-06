@@ -1,6 +1,6 @@
 # Task 005: ConnectionInterface::quoteIdentifier() in drivers and all stubs
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 001, 002, 003, 004
 **Retry count**: 0
 
@@ -11,10 +11,10 @@ Add `quoteIdentifier(string $identifier): string` to `ConnectionInterface` (brea
 - Related files: `packages/database/src/Connection/ConnectionInterface.php`, the three driver connections, ~60 test files with stubs (same set as `supportsReturning()` in #321)
 
 ## Requirements (Test Descriptions)
-- [ ] `it quotes identifiers with backticks without connecting` (MySqlConnection)
-- [ ] `it quotes identifiers with double quotes without connecting` (PgSqlConnection)
-- [ ] `it delegates quoteIdentifier to the write connection` (ReadWriteConnection)
-- [ ] `it declares quoteIdentifier on ConnectionInterface`
+- [x] `it quotes identifiers with backticks without connecting` (MySqlConnection)
+- [x] `it quotes identifiers with double quotes without connecting` (PgSqlConnection)
+- [x] `it delegates quoteIdentifier to the write connection` (ReadWriteConnection)
+- [x] `it declares quoteIdentifier on ConnectionInterface`
 
 ## Acceptance Criteria
 - All requirements have passing tests; every ConnectionInterface implementation compiles

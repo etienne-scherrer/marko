@@ -1,6 +1,6 @@
 # Task 002: PgSqlIdentifier quoting class
 
-**Status**: pending
+**Status**: completed
 **Depends on**: none
 **Retry count**: 0
 
@@ -12,11 +12,11 @@ Add `Marko\Database\PgSql\Sql\PgSqlIdentifier` with a static `quote(string $iden
 - Patterns to follow: `PgSqlQueryBuilder::quoteIdentifier()`
 
 ## Requirements (Test Descriptions)
-- [ ] `it wraps a plain name in double quotes`
-- [ ] `it quotes each part of a table.column name`
-- [ ] `it doubles an embedded double quote`
-- [ ] `it quotes a reserved word`
-- [ ] `it preserves mixed case`
+- [x] `it wraps a plain name in double quotes`
+- [x] `it quotes each part of a table.column name`
+- [x] `it doubles an embedded double quote`
+- [x] `it quotes a reserved word`
+- [x] `it preserves mixed case`
 
 ## Acceptance Criteria
 - All requirements have passing tests

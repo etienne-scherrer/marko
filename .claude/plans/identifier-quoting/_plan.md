@@ -4,7 +4,7 @@
 2026-10-06
 
 ## Status
-in_progress
+completed
 
 ## Objective
 Give every database driver one identifier-quoting rule (a per-driver class that wraps names in the driver's delimiter and doubles embedded delimiters), expose it through `ConnectionInterface::quoteIdentifier()`, and use it everywhere Marko emits a table or column name: SQL generators, query builders, introspectors, `Repository`, `DataMigration` and `DatabaseTestHelper`. This fixes `marko/admin-auth`'s `Permission` entity (`key`, `group` columns) on real MySQL, MariaDB and PostgreSQL.
@@ -38,28 +38,28 @@ Closes #323
 - Rejecting delimiter characters at schema-declaration time (#315 territory).
 
 ## Success Criteria
-- [ ] One quoting function per driver; generators, query builders (and introspectors) use it; no inline backtick / `\"` identifier quoting left in them
-- [ ] Delimiter in a name is escaped in generated DDL; DO block safe for names containing `$`
-- [ ] Repository, DataMigration, DatabaseTestHelper quote every table and column name, including RETURNING
-- [ ] PermissionRepository has no driver-specific syntax; permissions save and load on MySQL, MariaDB and PostgreSQL
-- [ ] Integration tests for reserved-word columns on MySQL, MariaDB, PostgreSQL
-- [ ] Docs updated
-- [ ] `composer ci` green
+- [x] One quoting function per driver; generators, query builders (and introspectors) use it; no inline backtick / `\"` identifier quoting left in them
+- [x] Delimiter in a name is escaped in generated DDL; DO block safe for names containing `$`
+- [x] Repository, DataMigration, DatabaseTestHelper quote every table and column name, including RETURNING
+- [x] PermissionRepository has no driver-specific syntax; permissions save and load on MySQL, MariaDB and PostgreSQL
+- [x] Integration tests for reserved-word columns on MySQL, MariaDB, PostgreSQL
+- [x] Docs updated
+- [x] `composer ci` green
 
 ## Task Overview
 | Task | Description | Depends On | Status |
 |------|-------------|------------|--------|
-| 001 | MySqlIdentifier quoting class | - | pending |
-| 002 | PgSqlIdentifier quoting class | - | pending |
-| 003 | MySQL generator, query builder, introspector use MySqlIdentifier | 001 | pending |
-| 004 | PostgreSQL generator, query builder, introspector use PgSqlIdentifier; safe DO tag | 002 | pending |
-| 005 | ConnectionInterface::quoteIdentifier() in drivers and all stubs | 001, 002, 003, 004 | pending |
-| 006 | Repository quotes every identifier (all packages' tests, incl. PHPUnit mocks) | 005 | pending |
-| 007 | DataMigration and DatabaseTestHelper quote identifiers (incl. testing's TestDatabaseTest) | 005 | pending |
-| 008 | PermissionRepository::findByGroup() without backticks | 006 | pending |
-| 009 | Driver integration tests: reserved-word entity, DataMigration, DatabaseTestHelper, delimiter DDL | 003, 004, 006, 007 | pending |
-| 010 | Docs (incl. upgrade note) | 001-009, 011 | pending |
-| 011 | PermissionRepository integration tests in admin-auth (MySQL/MariaDB/PostgreSQL) + CI MariaDB step | 003, 004, 006, 008 | pending |
+| 001 | MySqlIdentifier quoting class | - | completed |
+| 002 | PgSqlIdentifier quoting class | - | completed |
+| 003 | MySQL generator, query builder, introspector use MySqlIdentifier | 001 | completed |
+| 004 | PostgreSQL generator, query builder, introspector use PgSqlIdentifier; safe DO tag | 002 | completed |
+| 005 | ConnectionInterface::quoteIdentifier() in drivers and all stubs | 001, 002, 003, 004 | completed |
+| 006 | Repository quotes every identifier (all packages' tests, incl. PHPUnit mocks) | 005 | completed |
+| 007 | DataMigration and DatabaseTestHelper quote identifiers (incl. testing's TestDatabaseTest) | 005 | completed |
+| 008 | PermissionRepository::findByGroup() without backticks | 006 | completed |
+| 009 | Driver integration tests: reserved-word entity, DataMigration, DatabaseTestHelper, delimiter DDL | 003, 004, 006, 007 | completed |
+| 010 | Docs (incl. upgrade note) | 001-009, 011 | completed |
+| 011 | PermissionRepository integration tests in admin-auth (MySQL/MariaDB/PostgreSQL) + CI MariaDB step | 003, 004, 006, 008 | completed |
 
 ## Architecture Notes
 - Static `quote()` mirrors `IdentifierValidator`'s static helpers; the extensibility point is the connection's `quoteIdentifier()` (a Preference on the connection changes what `Repository` emits).

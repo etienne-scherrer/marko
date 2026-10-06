@@ -1,6 +1,6 @@
 # Task 004: PostgreSQL generator, query builder and introspector use PgSqlIdentifier; safe DO tag
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 002
 **Retry count**: 0
 
@@ -11,13 +11,13 @@ Replace every inline `"\"$name\""` in `PgSqlGenerator` with `PgSqlIdentifier::qu
 - Related files: `packages/database-pgsql/src/Sql/PgSqlGenerator.php`, `packages/database-pgsql/src/Query/PgSqlQueryBuilder.php`, `packages/database-pgsql/src/Introspection/PgSqlIntrospector.php`, `packages/database-pgsql/tests/Sql/PgSqlGeneratorTest.php`
 
 ## Requirements (Test Descriptions)
-- [ ] `it escapes a double quote in a table name in CREATE TABLE`
-- [ ] `it escapes a double quote in column, index, constraint and referenced names`
-- [ ] `it escapes a double quote in ALTER COLUMN statements`
-- [ ] `it dollar-quotes the sequence DO block with a tag that does not occur in its body`
-- [ ] `it picks another tag when a name contains the default tag`
-- [ ] `it has no inline double-quote identifier quoting in the generator, query builder or introspector`
-- [ ] `it passes the quoted table name and the unquoted column name to pg_get_serial_sequence`
+- [x] `it escapes a double quote in a table name in CREATE TABLE`
+- [x] `it escapes a double quote in column, index, constraint and referenced names`
+- [x] `it escapes a double quote in ALTER COLUMN statements`
+- [x] `it dollar-quotes the sequence DO block with a tag that does not occur in its body`
+- [x] `it picks another tag when a name contains the default tag`
+- [x] `it has no inline double-quote identifier quoting in the generator, query builder or introspector`
+- [x] `it passes the quoted table name and the unquoted column name to pg_get_serial_sequence`
 
 ## Acceptance Criteria
 - All requirements have passing tests

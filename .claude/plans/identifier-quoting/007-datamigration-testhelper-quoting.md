@@ -1,6 +1,6 @@
 # Task 007: DataMigration and DatabaseTestHelper quote identifiers
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 005
 **Retry count**: 0
 
@@ -12,11 +12,11 @@
 - File ownership vs. task 006 (runs in parallel): this task owns the files listed above; do not edit Repository tests
 
 ## Requirements (Test Descriptions)
-- [ ] `it quotes the table and columns in DataMigration insert`
-- [ ] `it quotes SET and WHERE columns in DataMigration update`
-- [ ] `it quotes the table and WHERE columns in DataMigration delete`
-- [ ] `it quotes the table and columns in seedTable`
-- [ ] `it quotes the table in truncateTable and getTableRowCount`
+- [x] `it quotes the table and columns in DataMigration insert`
+- [x] `it quotes SET and WHERE columns in DataMigration update`
+- [x] `it quotes the table and WHERE columns in DataMigration delete`
+- [x] `it quotes the table and columns in seedTable`
+- [x] `it quotes the table in truncateTable and getTableRowCount`
 
 ## Acceptance Criteria
 - All requirements have passing tests

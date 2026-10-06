@@ -1,6 +1,6 @@
 # Task 011: PermissionRepository integration tests on MySQL, MariaDB and PostgreSQL
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 003, 004, 006, 008
 **Retry count**: 0
 
@@ -15,8 +15,8 @@ Prove `PermissionRepository` findByKey/findByGroup/save/syncFromRegistry on real
 - `admin-auth` migrations are MySQL-only DDL; create `permissions` from the `Permission` entity via `SchemaBuilder` + the driver generator on both servers
 
 ## Requirements (Test Descriptions)
-- [ ] `it saves permissions and finds them by key and by group` (MySQL/MariaDB and PostgreSQL)
-- [ ] `it syncs permissions from the registry without duplicating existing ones` (MySQL/MariaDB and PostgreSQL)
+- [x] `it saves permissions and finds them by key and by group` (MySQL/MariaDB and PostgreSQL)
+- [x] `it syncs permissions from the registry without duplicating existing ones` (MySQL/MariaDB and PostgreSQL)
 
 ## Acceptance Criteria
 - Pass locally against MySQL 8.4, MariaDB 11.8 and PostgreSQL 17

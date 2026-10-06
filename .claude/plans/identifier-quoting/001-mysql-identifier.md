@@ -1,6 +1,6 @@
 # Task 001: MySqlIdentifier quoting class
 
-**Status**: pending
+**Status**: completed
 **Depends on**: none
 **Retry count**: 0
 
@@ -12,11 +12,11 @@ Add `Marko\Database\MySql\Sql\MySqlIdentifier` with a static `quote(string $iden
 - Patterns to follow: `MySqlQueryBuilder::quoteIdentifier()` (handles `table.column`)
 
 ## Requirements (Test Descriptions)
-- [ ] `it wraps a plain name in backticks`
-- [ ] `it quotes each part of a table.column name`
-- [ ] `it doubles an embedded backtick`
-- [ ] `it quotes a reserved word`
-- [ ] `it keeps mixed case and double quotes as written`
+- [x] `it wraps a plain name in backticks`
+- [x] `it quotes each part of a table.column name`
+- [x] `it doubles an embedded backtick`
+- [x] `it quotes a reserved word`
+- [x] `it keeps mixed case and double quotes as written`
 
 ## Acceptance Criteria
 - All requirements have passing tests

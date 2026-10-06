@@ -1,6 +1,6 @@
 # Task 006: Repository quotes every identifier
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 005
 **Retry count**: 0
 
@@ -12,14 +12,14 @@ Every table and column name `Repository` interpolates — find, findAll, findBy,
 - `isColumnUnique()` is `protected` (there is no `isUnique`); `RoleRepository` uses it, and `RoleRepositoryTest.php:99,116-117` asserts `slug = ?` / `id != ?`
 
 ## Requirements (Test Descriptions)
-- [ ] `it quotes the table and primary key in find`
-- [ ] `it quotes criteria columns in findBy and findOneBy`
-- [ ] `it quotes columns in insert and the RETURNING column`
-- [ ] `it quotes columns in insertBatch and the RETURNING column`
-- [ ] `it quotes SET columns and the primary key in update`
-- [ ] `it quotes the table and primary key in delete, count, exists and existsBy`
-- [ ] `it quotes the column and primary key in isColumnUnique`
-- [ ] `it reads the RETURNING key from the unquoted column name in the result row`
+- [x] `it quotes the table and primary key in find`
+- [x] `it quotes criteria columns in findBy and findOneBy`
+- [x] `it quotes columns in insert and the RETURNING column`
+- [x] `it quotes columns in insertBatch and the RETURNING column`
+- [x] `it quotes SET columns and the primary key in update`
+- [x] `it quotes the table and primary key in delete, count, exists and existsBy`
+- [x] `it quotes the column and primary key in isColumnUnique`
+- [x] `it reads the RETURNING key from the unquoted column name in the result row`
 
 ## Acceptance Criteria
 - All requirements have passing tests; existing SQL assertions updated to the quoted form

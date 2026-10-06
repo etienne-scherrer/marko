@@ -1,6 +1,6 @@
 # Task 008: PermissionRepository::findByGroup() without driver-specific syntax
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 006
 **Retry count**: 0
 
@@ -11,9 +11,9 @@ Replace the hard-coded MySQL backtick SQL in `PermissionRepository::findByGroup(
 - Related files: `packages/admin-auth/src/Repository/PermissionRepository.php`, `packages/admin-auth/tests/Unit/Repository/PermissionRepositoryTest.php` (line ~166 asserts `` `group` = ? ``; it becomes `"group" = ?` with the ANSI-quoting stub)
 
 ## Requirements (Test Descriptions)
-- [ ] `it finds permissions by group through the connection's quoting`
-- [ ] `it contains no backtick in PermissionRepository`
-- [ ] `it returns an array of Permission entities from findByGroup`
+- [x] `it finds permissions by group through the connection's quoting`
+- [x] `it contains no backtick in PermissionRepository`
+- [x] `it returns an array of Permission entities from findByGroup`
 
 ## Acceptance Criteria
 - All requirements have passing tests
