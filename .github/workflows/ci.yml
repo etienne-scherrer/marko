@@ -97,7 +97,8 @@ jobs:
   # in tests/Integration/App (Postgres and Redis), the database-pgsql and
   # database-mysql driver integration tests (MARKO_TEST_PGSQL_* and
   # MARKO_TEST_MYSQL_*) and the live Redis tests of pubsub-redis and
-  # broadcasting-amphp. MARKO_INTEGRATION_REQUIRED turns "service unreachable
+  # broadcasting-amphp. The database-mysql driver tests then run a second time
+  # against MariaDB. MARKO_INTEGRATION_REQUIRED turns "service unreachable
   # or not configured" into a failure, so this job can never pass by skipping.
   integration:
     name: Integration
@@ -125,6 +126,21 @@ jobs:
           - 3306:3306
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmarko"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # MariaDB-only paths (1020 snapshot conflicts, 4025 check failures, JSON
+      # stored as LONGTEXT) run only against MariaDB. 11.8 is the first LTS
+      # with innodb_snapshot_isolation=ON by default.
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MARIADB_ROOT_PASSWORD: marko
+          MARIADB_DATABASE: marko_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -157,6 +173,8 @@ jobs:
       MARKO_TEST_MYSQL_DATABASE: marko_test
       MARKO_TEST_MYSQL_USERNAME: root
       MARKO_TEST_MYSQL_PASSWORD: marko
+      # Fails a run that reached the other server (see ServerIdentityTest)
+      MARKO_TEST_MYSQL_SERVER: mysql
       MARKO_INTEGRATION_REQUIRED: '1'
     steps:
       - name: Checkout
@@ -180,3 +198,11 @@ jobs:
 
       - name: Run integration suite
         run: composer test:integration
+
+      # Only the MySQL driver suite runs twice: the fixture app and the other
+      # suites do not touch MySQL.
+      - name: Run MySQL driver integration suite against MariaDB
+        env:
+          MARKO_TEST_MYSQL_PORT: 3307
+          MARKO_TEST_MYSQL_SERVER: mariadb
+        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration

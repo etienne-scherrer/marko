@@ -92,7 +92,7 @@ Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `m
 | `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
 | `tests/Integration/App/*Test.php` | Cases grouped by topic (`ServicesTest`, `TransactionsTest`, `QueueTest`, `SchedulerTest`, `RateLimitTest`, `AuthTest`, `ErrorMappingTest`, ...), each tagged `->issue(N)` with the ticket it covers |
 | `tests/Integration/App/DatabaseTestingFixture/` | A second, smaller fixture for `RefreshDatabaseTest` and `TruncateDatabaseTest`. `databaseTestingProject()` builds it once per process with its own `_dbtesting` database, because `TestDatabase` boots and migrates once and keeps its connection open |
-| `tests/Integration/compose.yml` | Postgres 17, MySQL 8.4 and Redis 7 for local runs |
+| `tests/Integration/compose.yml` | Postgres 17, MySQL 8.4 and Redis 7 for local runs, plus MariaDB 11.8 under the `mariadb` profile |
 | `tests/Integration/postgres-init/` | Creates the `marko_test` database the pgsql driver tests use |
 
 Each fixture test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`). The driver tests create and drop their own tables in `marko_test`, a separate database, because the fixture drops `marko_integration` before every case.
@@ -105,6 +105,7 @@ Each fixture test copies the fixture into a fresh temporary directory and links 
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Fixture app, pubsub-redis and broadcasting-amphp live tests | unset (skip), `6379`, none |
 | `MARKO_TEST_PGSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-pgsql` driver tests | unset (skip), `5432`, `marko_test`, `postgres`, empty |
 | `MARKO_TEST_MYSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-mysql` driver tests | unset (skip), `3306`, `marko_test`, `root`, empty |
+| `MARKO_TEST_MYSQL_SERVER` | `database-mysql` driver tests | unset: no check. `mysql` or `mariadb`: a run that reached the other server fails |
 | `MARKO_INTEGRATION_REQUIRED` | Every suite in the group | unset: a missing or unreachable service skips. `1`: it fails |
 
 ### Running locally
@@ -130,6 +131,16 @@ MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
 
 # Live Redis tests
 REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/pubsub-redis packages/broadcasting-amphp
+```
+
+The `database-mysql` driver tests also run against MariaDB. CI runs them a second time against MariaDB 11.8 on port 3307 with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally:
+
+```bash
+docker compose -f tests/Integration/compose.yml --profile mariadb up -d --wait
+
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PORT=3307 MARKO_TEST_MYSQL_PASSWORD=marko \
+MARKO_TEST_MYSQL_SERVER=mariadb \
+  ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration
 ```
 
 If port 5432, 6379 or 3306 is already taken, start the services with `DB_PORT=55432 REDIS_PORT=56379 MYSQL_PORT=53306 docker compose -f tests/Integration/compose.yml up -d --wait` and export the same ports when running the suite (`DB_PORT`, `REDIS_PORT`, `MARKO_TEST_PGSQL_PORT=55432`, `MARKO_TEST_MYSQL_PORT=53306`).
