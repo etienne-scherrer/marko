@@ -83,6 +83,30 @@ readonly class HttpResponse
     }
 
     /**
+     * The body, trimmed and capped at $maxBytes for error messages and logs. A longer body is cut
+     * on a UTF-8 character boundary and ends with "... [truncated N bytes]".
+     */
+    public function bodyExcerpt(
+        int $maxBytes = 500,
+    ): string {
+        $body = trim($this->body);
+        $length = strlen($body);
+
+        if ($length <= $maxBytes) {
+            return $body;
+        }
+
+        $cut = max(0, $maxBytes);
+
+        // Back off continuation bytes (10xxxxxx) so a multibyte character is never split.
+        while ($cut > 0 && (ord($body[$cut]) & 0xC0) === 0x80) {
+            $cut--;
+        }
+
+        return substr($body, 0, $cut) . '... [truncated ' . ($length - $cut) . ' bytes]';
+    }
+
+    /**
      * @throws JsonException
      */
     public function json(): mixed
