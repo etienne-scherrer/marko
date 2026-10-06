@@ -24,6 +24,22 @@ class ImagickProcessingException extends MarkoException
         );
     }
 
+    public static function imageTooLarge(
+        string $imagePath,
+        int $width,
+        int $height,
+        int $maxWidth,
+        int $maxHeight,
+        int $maxPixels,
+    ): self {
+        return new self(
+            message: "Image dimensions {$width}x$height exceed the configured limits",
+            context: "While reading image at path: $imagePath (limits: max {$maxWidth}x$maxHeight, $maxPixels pixels)",
+            suggestion: 'Reject the upload, or raise media-imagick.limits.max_width, max_height or max_pixels '
+                . 'if images this large are expected',
+        );
+    }
+
     public static function processingFailed(
         string $operation,
         string $imagePath,
