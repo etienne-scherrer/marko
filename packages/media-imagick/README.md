@@ -13,11 +13,10 @@ composer require marko/media-imagick
 ## Quick Example
 
 ```php
-use Marko\MediaImagick\Driver\ImagickImageProcessor;
+use Marko\Media\Contracts\ImageProcessorInterface;
 
-$processor = new ImagickImageProcessor();
-
-$outputPath = $processor->resize(
+// Inject ImageProcessorInterface; this package binds it to ImagickImageProcessor.
+$outputPath = $imageProcessor->resize(
     imagePath: '/path/to/image.jpg',
     width: 800,
     height: 600,
@@ -26,4 +25,4 @@ $outputPath = $processor->resize(
 
 ## Documentation
 
-Full usage, API reference, and examples: [marko/media-imagick](https://marko.build/docs/packages/media-imagick/)
+Full usage, security model (input format sniffing, resource limits, recommended `policy.xml`), API reference, and examples: [marko/media-imagick](https://marko.build/docs/packages/media-imagick/)

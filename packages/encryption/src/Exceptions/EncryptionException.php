@@ -17,6 +17,38 @@ class EncryptionException extends MarkoException
         );
     }
 
+    public static function invalidKeyLength(
+        string $cipher,
+        int $expectedLength,
+    ): self {
+        return new self(
+            message: 'Invalid encryption key',
+            context: "The ENCRYPTION_KEY must be a base64-encoded $expectedLength-byte key for cipher '$cipher'",
+            suggestion: "Generate a key with: base64_encode(random_bytes($expectedLength))",
+        );
+    }
+
+    public static function invalidPreviousKey(
+        int $index,
+        string $cipher,
+        int $expectedLength,
+    ): self {
+        return new self(
+            message: "Invalid previous encryption key at index $index",
+            context: "Every entry in encryption.previous_keys must be a base64-encoded $expectedLength-byte key for cipher '$cipher'",
+            suggestion: 'Remove the entry, or fix it to the exact base64 key that was used before rotation',
+        );
+    }
+
+    public static function invalidPreviousKeys(): self
+    {
+        return new self(
+            message: 'Invalid encryption.previous_keys configuration',
+            context: 'encryption.previous_keys must be a list of base64-encoded key strings',
+            suggestion: 'Set ENCRYPTION_PREVIOUS_KEYS to a comma-separated list of base64 keys, or leave it empty',
+        );
+    }
+
     public static function invalidCipher(string $cipher): self
     {
         return new self(

@@ -19,8 +19,10 @@ function makeFakePageCache(): PageCacheInterface
 
         public bool $purgeTagReturn = true;
 
-        public function lookup(Request $request): ?Response
-        {
+        public function lookup(
+            Request $request,
+            array $queryParams,
+        ): ?Response {
             return null;
         }
 
