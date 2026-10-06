@@ -55,6 +55,7 @@ Closes #306
 | 004 | PostgreSQL matcher implementation + integration tests | 001, 002 | completed |
 | 005 | MySQL/MariaDB matcher implementation + integration tests | 001, 002 | completed |
 | 006 | Docs | 001, 002, 003, 004, 005 | completed |
+| 007 | Warn instead of failing when the post-migration drift check cannot probe (coordinator decision) | 003, 004, 005 | completed |
 
 ## Architecture Notes
 - The canonicalizer only probes a column when: the entity default is an `Expression`, the database column exists with a non-null default, the defaults do not already compare equal, and the column is otherwise equal (a column modified for another reason keeps the entity's expression so the generated SQL uses what the developer wrote).
