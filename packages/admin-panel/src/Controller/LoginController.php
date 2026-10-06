@@ -7,17 +7,17 @@ namespace Marko\AdminPanel\Controller;
 use Marko\Admin\Config\AdminConfigInterface;
 use Marko\AdminAuth\AdminGuardResolver;
 use Marko\Routing\Attributes\Get;
-use Marko\Routing\Attributes\Middleware;
 use Marko\Routing\Attributes\Post;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use Marko\Security\Contracts\CsrfTokenManagerInterface;
-use Marko\Security\Middleware\CsrfMiddleware;
 use Marko\View\ViewInterface;
 
 /**
  * Logs admins in and out on the admin guard (admin-auth.guard), never the
  * app's default guard, so only AdminUserProvider users can sign in here.
+ * The login and logout POST routes are CSRF-protected by the global
+ * CsrfMiddleware that marko/security registers.
  */
 readonly class LoginController
 {
@@ -43,7 +43,6 @@ readonly class LoginController
     }
 
     #[Post(path: '/admin/login')]
-    #[Middleware(CsrfMiddleware::class)]
     public function authenticate(
         Request $request,
     ): Response {
@@ -63,7 +62,6 @@ readonly class LoginController
     }
 
     #[Post(path: '/admin/logout')]
-    #[Middleware(CsrfMiddleware::class)]
     public function logout(
         Request $request,
     ): Response {
