@@ -10,12 +10,19 @@ use Marko\Core\Exceptions\MarkoException;
 
 /**
  * The MIME type sniffed from the file contents matches one of the listed types.
- * A `type/*` entry matches every subtype (`image/*`).
+ * A `type/*` entry matches every subtype (`image/*`), except `image/svg+xml`:
+ * SVG is XML that can carry script, so it passes only when listed explicitly
+ * (`mimetypes:image/*,image/svg+xml`), matching the `Image` rule.
  *
  * The media type the client sent is never consulted.
  */
 readonly class MimeTypes extends AbstractFileRule
 {
+    /**
+     * Sniffed types a wildcard never matches; they pass only when listed by name.
+     */
+    private const array WILDCARD_EXCLUDED = ['image/svg+xml'];
+
     /**
      * @var array<string>
      */
@@ -52,7 +59,11 @@ readonly class MimeTypes extends AbstractFileRule
         return array_any(
             $this->mimeTypes,
             fn (string $allowed): bool => $allowed === $mimeType
-                || (str_ends_with($allowed, '/*') && str_starts_with($mimeType, substr($allowed, 0, -1))),
+                || (
+                    str_ends_with($allowed, '/*')
+                    && str_starts_with($mimeType, substr($allowed, 0, -1))
+                    && !in_array($mimeType, self::WILDCARD_EXCLUDED, true)
+                ),
         );
     }
 
