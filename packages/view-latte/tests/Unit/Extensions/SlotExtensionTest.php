@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Latte\Engine;
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\UrlGeneratorInterface;
+use Marko\View\CacheDirectoryGuard;
 use Marko\View\Latte\Extensions\SlotExtension;
 use Marko\View\Latte\LatteEngineFactory;
 use Marko\View\Latte\LatteViewConfig;
@@ -123,6 +125,7 @@ describe('SlotExtension', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $factory->create();
 
