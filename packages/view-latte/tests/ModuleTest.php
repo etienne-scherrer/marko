@@ -38,14 +38,14 @@ describe('view-latte module.php', function (): void {
     test('the Engine closure resolves the engine via LatteEngineFactory::create()', function (): void {
         $module = require dirname(__DIR__) . '/module.php';
 
-        $engine = $this->createMock(Engine::class);
+        $engine = $this->createStub(Engine::class);
 
         $engineFactory = $this->createMock(LatteEngineFactory::class);
         $engineFactory->expects($this->once())
             ->method('create')
             ->willReturn($engine);
 
-        $container = $this->createMock(ContainerInterface::class);
+        $container = $this->createStub(ContainerInterface::class);
         $container->method('get')
             ->willReturnCallback(fn (string $class) => match ($class) {
                 LatteEngineFactory::class => $engineFactory,

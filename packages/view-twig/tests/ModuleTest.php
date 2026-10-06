@@ -38,14 +38,14 @@ describe('view-twig module.php', function (): void {
     test('the Environment closure resolves the engine via TwigEngineFactory::create()', function (): void {
         $module = require dirname(__DIR__) . '/module.php';
 
-        $engine = $this->createMock(Environment::class);
+        $engine = $this->createStub(Environment::class);
 
         $engineFactory = $this->createMock(TwigEngineFactory::class);
         $engineFactory->expects($this->once())
             ->method('create')
             ->willReturn($engine);
 
-        $container = $this->createMock(ContainerInterface::class);
+        $container = $this->createStub(ContainerInterface::class);
         $container->method('get')
             ->willReturnCallback(fn (string $class) => match ($class) {
                 TwigEngineFactory::class => $engineFactory,

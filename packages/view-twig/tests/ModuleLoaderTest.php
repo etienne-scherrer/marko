@@ -118,7 +118,7 @@ describe('ModuleLoader', function (): void {
     });
 
     it('does not throw from exists when the resolver throws TemplateNotFoundException', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $resolver->method('resolve')
             ->willThrowException(TemplateNotFoundException::forTemplate('blog::nope', []));
 
@@ -128,14 +128,14 @@ describe('ModuleLoader', function (): void {
     });
 
     it('returns false from exists when the name lacks module-namespaced format', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect($loader->exists('plain-template'))->toBeFalse();
     });
 
     it('throws LoaderError from getSourceContext when the name lacks module-namespaced format', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect(fn () => $loader->getSourceContext('plain-template'))
@@ -143,7 +143,7 @@ describe('ModuleLoader', function (): void {
     });
 
     it('throws LoaderError from getCacheKey when the name lacks module-namespaced format', function (): void {
-        $resolver = $this->createMock(TemplateResolverInterface::class);
+        $resolver = $this->createStub(TemplateResolverInterface::class);
         $loader = new ModuleLoader($resolver);
 
         expect(fn () => $loader->getCacheKey('plain-template'))
