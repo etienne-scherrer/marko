@@ -18,6 +18,18 @@ class BroadcastException extends MarkoException
         );
     }
 
+    public static function unsafeChannelName(string $channel): self
+    {
+        $printable = addcslashes($channel, "\0..\37\177");
+
+        return new self(
+            message: "Channel name '$printable' contains a character that is not allowed.",
+            context: 'While creating a broadcasting Channel',
+            suggestion: 'Channel names must not contain { } * , whitespace or control characters; '
+                . "use letters, digits and separators such as . - _ = @, e.g. 'orders.42'.",
+        );
+    }
+
     public static function emptyPresenceMemberId(): self
     {
         return new self(
