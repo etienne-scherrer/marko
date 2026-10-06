@@ -77,7 +77,7 @@ function writeExpiredCacheEntry(
         'created_at' => $now - 20,
     ];
 
-    file_put_contents($filePath, createTestCacheSigner()->wrap(serialize($data)));
+    file_put_contents($filePath, createTestCacheSigner()->wrap(serialize($data), $key));
 }
 
 beforeEach(function (): void {
@@ -406,7 +406,7 @@ it('treats a file cache entry that decodes to an unexpected shape as a miss', fu
     }
 
     // Write a serialized payload that is valid PHP but has the wrong shape (no 'value' key)
-    file_put_contents($filePath, $this->signer->wrap(serialize(['corrupt' => 'data'])));
+    file_put_contents($filePath, $this->signer->wrap(serialize(['corrupt' => 'data']), 'key'));
 
     expect($this->driver->get('key'))->toBeNull()
         ->and($this->driver->has('key'))->toBeFalse();
@@ -438,6 +438,25 @@ it(
         expect(glob($this->cachePath . '/*.tmp.*'))->toBeEmpty();
     },
 );
+
+it('throws a CacheException instead of failing open when increment cannot open the counter file', function (): void {
+    mkdir($this->cachePath, 0755, true);
+    $targetPath = cacheEntryPath($this->cachePath, 'counter');
+
+    // A directory where the counter file should be makes fopen() fail
+    mkdir($targetPath, 0755, true);
+
+    try {
+        $this->driver->increment('counter', 60);
+        $this->fail('Expected FileCacheException');
+    } catch (FileCacheException $e) {
+        expect($e)->toBeInstanceOf(CacheException::class)
+            ->and($e->getMessage())->toBe("Cache entry could not be opened: $targetPath")
+            ->and($e->getContext())->toContain('fopen(');
+    } finally {
+        rmdir($targetPath);
+    }
+});
 
 it('removes leftover tmp files when clear is called', function (): void {
     mkdir($this->cachePath, 0755, true);
@@ -531,7 +550,7 @@ function readCacheFileEntry(
 ): array {
     $envelope = file_get_contents($cachePath . '/' . hash('xxh128', $key) . '.cache');
 
-    return unserialize(createTestCacheSigner()->verifyAndUnwrap($envelope));
+    return unserialize(createTestCacheSigner()->verifyAndUnwrap($envelope, $key));
 }
 
 it('keeps an entry until its ttl has elapsed on the clock', function (): void {
@@ -619,7 +638,7 @@ it('signs every cache entry it writes with an HMAC envelope', function (): void 
     $contents = file_get_contents(cacheEntryPath($this->cachePath, 'key'));
 
     expect($contents)->toMatch('/\A[0-9a-f]{64}\./')
-        ->and($this->signer->unwrap($contents))->toBe(serialize([
+        ->and($this->signer->unwrap($contents, 'key'))->toBe(serialize([
             'value' => 'value',
             'expires_at' => $this->clock->now()->getTimestamp() + 3600,
             'created_at' => $this->clock->now()->getTimestamp(),
@@ -660,6 +679,18 @@ it('reports a tampered cache file as missing from has()', function (): void {
     expect($this->driver->has('key'))->toBeFalse();
 });
 
+it('treats a signed cache file copied to another cache key as a miss', function (): void {
+    $this->driver->set('role-alice', 'admin');
+    $this->driver->set('role-bob', 'guest');
+    $bobPath = cacheEntryPath($this->cachePath, 'role-bob');
+
+    copy(cacheEntryPath($this->cachePath, 'role-alice'), $bobPath);
+
+    expect($this->driver->get('role-bob'))->toBeNull()
+        ->and(file_exists($bobPath))->toBeFalse()
+        ->and($this->driver->get('role-alice'))->toBe('admin');
+});
+
 it('treats a cache file signed with a different key as a miss', function (): void {
     $otherDriver = new FileCacheDriver($this->config, $this->clock, createTestCacheSigner('some-other-key'));
     $otherDriver->set('key', 'value');
@@ -675,7 +706,7 @@ it('resets the counter when incrementing a tampered cache file', function (): vo
     tamperWithCacheEntry($filePath, 1000);
 
     expect($this->driver->increment('counter', 60))->toBe(1)
-        ->and($this->signer->unwrap(file_get_contents($filePath)))->not->toBeNull()
+        ->and($this->signer->unwrap(file_get_contents($filePath), 'counter'))->not->toBeNull()
         ->and($this->driver->get('counter'))->toBe(1);
 });
 
