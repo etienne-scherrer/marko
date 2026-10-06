@@ -14,6 +14,9 @@ use Throwable;
 
 readonly class CliKernel
 {
+    /** Commands that boot without the discovery cache, so they can rebuild or remove it. */
+    private const array LIVE_DISCOVERY_COMMANDS = ['discovery:cache', 'discovery:clear'];
+
     /** @var Closure(string): object */
     private Closure $applicationFactory;
 
@@ -73,15 +76,16 @@ readonly class CliKernel
         // Load the project's autoloader
         require_once $projectRoot . '/vendor/autoload.php';
 
-        // Create and boot the application
-        $app = ($this->applicationFactory)($projectRoot);
-        $app->initialize();
-
         // Parse input and create output
         $input = new Input($argv);
 
         // Get command name (default to 'list' if none provided)
         $commandName = $input->getCommand() ?? 'list';
+
+        // Create and boot the application. The discovery cache commands boot from live
+        // discovery so they still work when the cache is stale, corrupt or outdated.
+        $app = ($this->applicationFactory)($projectRoot);
+        $app->initialize(!in_array($commandName, self::LIVE_DISCOVERY_COMMANDS, true));
 
         // Delegate to command runner
         return $app->commandRunner->run($commandName, $input, $this->output);
