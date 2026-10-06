@@ -582,6 +582,15 @@ Each test should be independent and not rely on state from other tests.
 ### 4. Test the Contract
 For interfaces, test against the interface contract, not specific implementations.
 
+### 5. Deterministic Under Parallel Load
+`composer test` runs a paratest worker on every core, so a test must pass on a saturated machine as well as on an idle laptop.
+
+- **Poll for the condition. Never assert after a fixed delay.** `delay(1.2)` followed by an assertion breaks as soon as the machine is busy. Wait for the condition you're about to assert, with a generous timeout (5s or more). The timeout is only an upper bound: a passing test returns as soon as the condition holds. In amphp tests use `Marko\Broadcasting\Amphp\Tests\Support\Poll::until($condition, 'what is awaited')`. It polls with `delay()`, so the event loop keeps running. A fixed delay is fine only when the test has to prove that something stays true for a period of time, such as a stream outliving a timeout or nothing being logged.
+- **Give subprocess tests their own temp state.** A test that starts another process (Pest, Composer, a server) writes into a temp directory unique to that run, such as `sys_get_temp_dir() . '/name-' . bin2hex(random_bytes(8))`, and removes it afterwards. Never write to a fixed path: concurrent runs in worktrees, or `composer test` running next to `composer ci`, would share it.
+- **Pass the parent environment, minus the paratest variables.** Strip `PARATEST`, `TEST_TOKEN`, `UNIQUE_TEST_TOKEN` and `PEST_PARALLEL*` so the child doesn't act as a worker of the parent run. Keep everything else, including `TMPDIR`. Pass `-d memory_limit=...` explicitly when the child needs it.
+- **Boot a subprocess once per file** when several tests read the same result. Memoise the result in a `static` (see `packages/testing/tests/Feature/PestPluginRegistrationTest.php`).
+- **Put the subprocess output in every failure message**, e.g. `expect(str_contains($output, '...'))->toBeTrue($output)`. Pest's `toContain()` takes no message argument.
+
 ## Pest 4 Features
 
 > **Note:** The following sections document Pest 4 capabilities. Some features require additional plugins that may not be installed in the project yet. Check `composer.json` for current dependencies.
