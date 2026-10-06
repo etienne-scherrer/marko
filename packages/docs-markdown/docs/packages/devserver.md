@@ -36,6 +36,8 @@ marko up --foreground
 
 Runs services in the foreground. Press `Ctrl+C` to stop all services. This overrides the `detach` default.
 
+`Ctrl+C` waits until every service has exited before returning, including any child processes a service started (such as PHP server workers or the process behind `npx`). Each service gets `SIGTERM` and up to 3 seconds to shut down cleanly; anything still running after that is sent `SIGKILL`. All services share that grace period, so shutdown takes about as long as the slowest service.
+
 ### Detached Mode
 
 `marko up` runs detached by default. You can also make this explicit:
@@ -248,6 +250,20 @@ $processManager->getPids(): array; // array<string, int>
 $processManager->isRunning(string $name): bool;
 $processManager->runForeground(): void;
 ```
+
+`stop()` and `stopAll()` return only once each process and its whole process group are gone. They send `SIGTERM` to the process and its group, wait up to the stop timeout, then send `SIGKILL`. If a group survives `SIGKILL` (for example, a process stuck in uninterruptible I/O), they throw a `DevServerException` naming the PID. The stop timeout defaults to 3 seconds and is set through the constructor:
+
+```php
+use Marko\DevServer\Process\ProcessManager;
+
+$processManager = new ProcessManager(
+    output: $output,
+    stopTimeoutSeconds: 10.0, // grace period between SIGTERM and SIGKILL
+    startProbeSeconds: 0.5, // how long start() watches for "command not found"
+);
+```
+
+`start()` watches the new process for `startProbeSeconds` (default 0.15 seconds) and throws a `DevServerException` if it exits with code 126 or 127 (not executable or not found) in that window. It returns as soon as the process exits, so a longer window only delays commands that keep running.
 
 ### PidFile
 

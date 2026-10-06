@@ -651,6 +651,7 @@
             "packages/cors/tests/Helpers.php",
             "packages/database-mysql/tests/Connection/Helpers.php",
             "packages/devai/tests/Helpers.php",
+            "packages/devserver/tests/Helpers.php",
             "packages/inertia/tests/Helpers.php",
             "packages/ratelimiter/tests/Helpers.php",
             "packages/roadrunner/tests/Helpers.php",
