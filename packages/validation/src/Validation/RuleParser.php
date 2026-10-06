@@ -15,10 +15,16 @@ use Marko\Validation\Rules\Confirmed;
 use Marko\Validation\Rules\Date;
 use Marko\Validation\Rules\Different;
 use Marko\Validation\Rules\Email;
+use Marko\Validation\Rules\File;
+use Marko\Validation\Rules\Image;
 use Marko\Validation\Rules\In;
 use Marko\Validation\Rules\Integer;
 use Marko\Validation\Rules\Max;
+use Marko\Validation\Rules\MaxSize;
+use Marko\Validation\Rules\Mimes;
+use Marko\Validation\Rules\MimeTypes;
 use Marko\Validation\Rules\Min;
+use Marko\Validation\Rules\MinSize;
 use Marko\Validation\Rules\NotIn;
 use Marko\Validation\Rules\Nullable;
 use Marko\Validation\Rules\Numeric;
@@ -88,6 +94,31 @@ class RuleParser
         return $parsed;
     }
 
+    /**
+     * Unlike min/max, a file size limit never defaults: a missing limit is a bug in the rule string.
+     *
+     * @param array<?string> $params
+     *
+     * @throws InvalidArgumentException
+     */
+    private function kilobytes(
+        string $name,
+        array $params,
+    ): float {
+        $kilobytes = $params[0] ?? null;
+
+        if ($kilobytes === null || !is_numeric(trim($kilobytes))) {
+            throw new InvalidArgumentException(
+                "The $name rule needs a size in kilobytes, e.g. $name:2048",
+            );
+        }
+
+        return (float) $kilobytes;
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     */
     private function parseRule(
         string $rule,
     ): RuleInterface {
@@ -124,6 +155,12 @@ class RuleParser
             'different' => new Different($params[0] ?? ''),
             'regex' => new Regex($params[0] ?? '//'),
             'date' => new Date($params[0] ?? null),
+            'file' => new File(),
+            'image' => new Image(),
+            'mimes' => new Mimes(...array_map(strval(...), $params)),
+            'mimetypes' => new MimeTypes(...array_map(strval(...), $params)),
+            'max_size' => new MaxSize($this->kilobytes($name, $params)),
+            'min_size' => new MinSize($this->kilobytes($name, $params)),
             default => throw new InvalidArgumentException("Unknown validation rule: $name"),
         };
     }

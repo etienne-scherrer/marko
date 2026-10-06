@@ -4,6 +4,16 @@ declare(strict_types=1);
 
 use Marko\Validation\Contracts\RuleInterface;
 use Marko\Validation\Rules\Min;
+use Marko\Validation\Tests\Support\TestUploads;
+
+it('fails min for an uploaded file with a message pointing to min_size', function (): void {
+    $rule = new Min(1);
+    $file = TestUploads::sized(4096);
+
+    expect($rule->passes('avatar', $file, []))->toBeFalse()
+        ->and($rule->message('avatar', $file))
+        ->toBe('The avatar field is a file: use min_size:1 to require a minimum size in kilobytes.');
+});
 
 it('implements RuleInterface', function () {
     expect(new Min(3))->toBeInstanceOf(RuleInterface::class);
