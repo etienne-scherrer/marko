@@ -48,6 +48,13 @@ it('requires marko/cache package', function () {
     expect($composer['require'])->toHaveKey('marko/cache');
 });
 
+it('requires marko/clock package', function () {
+    $composerPath = dirname(__DIR__) . '/composer.json';
+    $composer = json_decode(file_get_contents($composerPath), true);
+
+    expect($composer['require'])->toHaveKey('marko/clock');
+});
+
 it('has PSR-4 autoloading configured for Marko\\Cache\\Memory namespace', function () {
     $composerPath = dirname(__DIR__) . '/composer.json';
     $composer = json_decode(file_get_contents($composerPath), true);
