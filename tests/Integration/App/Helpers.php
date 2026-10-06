@@ -489,6 +489,7 @@ function runIntegrationCommand(
  * Postgres driver and routing for the TestClient requests.
  */
 const DATABASE_TESTING_MODULES = [
+    'clock',
     'config',
     'core',
     'database',
