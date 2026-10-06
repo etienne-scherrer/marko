@@ -25,6 +25,20 @@ it('matches type wildcards', function (): void {
         ->and($rule->passes('upload', TestUploads::pdf(), []))->toBeFalse();
 });
 
+it('does not let the image wildcard admit svg', function (): void {
+    expect(new MimeTypes('image/*')->passes('upload', TestUploads::svg(), []))->toBeFalse()
+        ->and(new MimeTypes('IMAGE/*')->passes('upload', TestUploads::svg(), []))->toBeFalse();
+});
+
+it('allows svg only when listed explicitly', function (): void {
+    expect(new MimeTypes('image/svg+xml')->passes('upload', TestUploads::svg(), []))->toBeTrue()
+        ->and(new MimeTypes('image/*', 'image/svg+xml')->passes('upload', TestUploads::svg(), []))->toBeTrue();
+});
+
+it('still matches png with the image wildcard', function (): void {
+    expect(new MimeTypes('image/*')->passes('upload', TestUploads::png(), []))->toBeTrue();
+});
+
 it('matches types case-insensitively', function (): void {
     expect(new MimeTypes('IMAGE/PNG')->passes('upload', TestUploads::png(), []))->toBeTrue()
         ->and(new MimeTypes('Image/*')->passes('upload', TestUploads::png(), []))->toBeTrue();
