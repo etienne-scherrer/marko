@@ -8,6 +8,130 @@ Entries from `0.4.0` onward are generated automatically by `bin/release.sh` from
 
 <!-- new-entries-below — do not remove this marker; bin/release.sh inserts new versions directly below it -->
 
+## [0.9.0] - 2026-10-06
+
+### Breaking Changes
+* fix(mail-smtp): build RFC 5322 conformant messages and repair STARTTLS by @etienne-scherrer in https://github.com/marko-php/marko/pull/158
+* fix: mirror real env vars into $_ENV, share config, and add AppEnvironment by @markshust in https://github.com/marko-php/marko/pull/192
+* feat: support --name value for long cli options by @markshust in https://github.com/marko-php/marko/pull/196
+* fix: harden the rate limiter for redis, ipv6 and per-route limits by @markshust in https://github.com/marko-php/marko/pull/197
+* feat: add psr-20 clock with a fake for tests by @markshust in https://github.com/marko-php/marko/pull/200
+* feat: wire remember-me and auth events through AuthManager by @markshust in https://github.com/marko-php/marko/pull/201
+* fix: stop database queue retrying forever and bind the queue worker by @markshust in https://github.com/marko-php/marko/pull/202
+* feat: add entity casts, automatic timestamps and encrypted columns by @markshust in https://github.com/marko-php/marko/pull/206
+* feat: route precedence, 405, HEAD, OPTIONS and global cors by @markshust in https://github.com/marko-php/marko/pull/210
+* feat: savepoints, after-commit callbacks, row locks and upsert by @markshust in https://github.com/marko-php/marko/pull/213
+* fix: record a container-aware job that fails for the last time instead of crashing the worker by @markshust in https://github.com/marko-php/marko/pull/241
+* refactor: move the console confirmation prompter into core by @markshust in https://github.com/marko-php/marko/pull/244
+* fix: render authorization failures through the exception renderer by @markshust in https://github.com/marko-php/marko/pull/246
+* feat: typed exceptions and opt-in retries for database concurrency errors by @markshust in https://github.com/marko-php/marko/pull/247
+* feat: resolve the gate and guard lazily in the #[Can] middleware by @markshust in https://github.com/marko-php/marko/pull/249
+* feat: require --force for destructive db commands outside development and testing by @markshust in https://github.com/marko-php/marko/pull/259
+* feat: skip stateful middleware on unmatched requests and persist sessions lazily by @markshust in https://github.com/marko-php/marko/pull/260
+* feat!: wire the authentication-token guard through a guard driver registry by @markshust in https://github.com/marko-php/marko/pull/261
+* refactor: read time through the psr-20 clock in database, queue, queue-database and scheduler by @markshust in https://github.com/marko-php/marko/pull/272
+* refactor: read time through the psr-20 clock in authentication, admin-auth, errors and log by @markshust in https://github.com/marko-php/marko/pull/274
+* fix: run destructive test database helpers only in testing environments by @markshust in https://github.com/marko-php/marko/pull/278
+* fix: validate session ids against the store so unknown cookies are never adopted by @markshust in https://github.com/marko-php/marko/pull/285
+* feat: start the session lazily on cookieless requests by @markshust in https://github.com/marko-php/marko/pull/299
+* fix: store queue, token, notification and webhook timestamps in database.timezone by @markshust in https://github.com/marko-php/marko/pull/300
+* fix: throw for guard names missing from authentication.guards by @markshust in https://github.com/marko-php/marko/pull/302
+* refactor: render admin-api errors through HttpException instead of an errors envelope by @markshust in https://github.com/marko-php/marko/pull/316
+* feat: read database-generated primary keys back on save by @markshust in https://github.com/marko-php/marko/pull/321
+* feat: pin the database session time zone to database.timezone on connect by @markshust in https://github.com/marko-php/marko/pull/327
+* feat: quote every identifier through ConnectionInterface::quoteIdentifier() by @markshust in https://github.com/marko-php/marko/pull/331
+* feat: build admin sections on first use instead of at boot by @markshust in https://github.com/marko-php/marko/pull/333
+* feat: update, report and prune unregistered admin permissions on sync by @markshust in https://github.com/marko-php/marko/pull/335
+* fix: create the admin-auth tables from entities on db:migrate by @markshust in https://github.com/marko-php/marko/pull/340
+* feat: create the queue and session tables from entities with db:migrate by @markshust in https://github.com/marko-php/marko/pull/345
+* fix: give admin-auth keys, slugs and emails one canonical form on every driver by @markshust in https://github.com/marko-php/marko/pull/350
+* fix: capture warning reasons instead of suppressing them with @ by @markshust in https://github.com/marko-php/marko/pull/359
+* refactor: remove the deprecated global env() helper by @markshust in https://github.com/marko-php/marko/pull/361
+### New Features
+* feat: response decoration api with cookie support by @markshust in https://github.com/marko-php/marko/pull/152
+* feat: roadrunner application server support by @markshust in https://github.com/marko-php/marko/pull/153
+* feat: validate http client options and add FakeHttpClient by @markshust in https://github.com/marko-php/marko/pull/194
+* feat: parse json request bodies and map uploaded files by @markshust in https://github.com/marko-php/marko/pull/198
+* feat: map exceptions to http responses and fix errors-advanced by @markshust in https://github.com/marko-php/marko/pull/203
+* feat: add broadcasting interface with mercure and pusher drivers by @markshust in https://github.com/marko-php/marko/pull/205
+* feat: work queues in priority order and make retry backoff configurable by @markshust in https://github.com/marko-php/marko/pull/207
+* feat: throw typed exceptions for database constraint violations by @markshust in https://github.com/marko-php/marko/pull/208
+* feat: queue async observers through marko/queue instead of running them inline by @markshust in https://github.com/marko-php/marko/pull/209
+* feat: add an in-process HTTP test client to marko/testing by @markshust in https://github.com/marko-php/marko/pull/212
+* feat: add native async SSE broadcasting server (marko/broadcasting-amphp) by @markshust in https://github.com/marko-php/marko/pull/214
+* feat: add database test refresh and entity factories by @markshust in https://github.com/marko-php/marko/pull/215
+* feat: named routes, prefixes, catch-all and constrained parameters, WithoutMiddleware by @markshust in https://github.com/marko-php/marko/pull/216
+* feat: cache module discovery and routes so production requests skip re-scanning by @markshust in https://github.com/marko-php/marko/pull/237
+* feat: lossless, case-insensitive response header access by @markshust in https://github.com/marko-php/marko/pull/238
+* feat: multi-file uploads and a scoped cookie jar in the test client by @markshust in https://github.com/marko-php/marko/pull/240
+* feat: add file upload validation rules by @markshust in https://github.com/marko-php/marko/pull/242
+* feat: support pusher presence channels by @markshust in https://github.com/marko-php/marko/pull/273
+* feat: honour cookie expiry, samesite and public suffixes in the test client jar by @markshust in https://github.com/marko-php/marko/pull/279
+* feat: validate array items with wildcard keys like photos.* and items.*.name by @markshust in https://github.com/marko-php/marko/pull/280
+* feat: wire token_expiration_days as the default token lifetime by @markshust in https://github.com/marko-php/marko/pull/281
+* feat: back off between transaction retries and retry mariadb 1020 conflicts by @markshust in https://github.com/marko-php/marko/pull/284
+* feat: fail the boot when #[Can] routes exist but the guard cannot be built by @markshust in https://github.com/marko-php/marko/pull/286
+* feat: read config env values through a typed Env reader that rejects invalid input by @markshust in https://github.com/marko-php/marko/pull/334
+* feat: read generated keys back on mariadb with insert returning by @markshust in https://github.com/marko-php/marko/pull/339
+* feat: deprecate the global env() helper and drop stale marko/env requires by @markshust in https://github.com/marko-php/marko/pull/348
+* feat: name the config file in errors thrown while it loads by @markshust in https://github.com/marko-php/marko/pull/349
+### Bug Fixes
+* fix: retry the packagist update on transient upstream failures by @markshust in https://github.com/marko-php/marko/pull/148
+* fix: register marko/testing pest expectations through a pest plugin by @markshust in https://github.com/marko-php/marko/pull/190
+* fix: enforce #[Can] authorization via global middleware by @markshust in https://github.com/marko-php/marko/pull/191
+* fix: make the scheduler run boot-registered tasks, add overlap protection and schedule:work by @markshust in https://github.com/marko-php/marko/pull/193
+* fix: make redis and rabbitmq drivers honor their config by @markshust in https://github.com/marko-php/marko/pull/195
+* fix: share the database connection and entity hydrator across repositories by @markshust in https://github.com/marko-php/marko/pull/199
+* fix: make db:migrate and db:rebuild safe in production by @markshust in https://github.com/marko-php/marko/pull/211
+* fix: apply and reverse column default and nullability changes in migrations by @markshust in https://github.com/marko-php/marko/pull/243
+* fix: share one redis connection across pubsub-redis subscriptions by @markshust in https://github.com/marko-php/marko/pull/245
+* fix: make devserver process stop deterministic and its tests flake-free by @markshust in https://github.com/marko-php/marko/pull/248
+* fix: fail a job with an invalid backoff instead of stopping the worker by @markshust in https://github.com/marko-php/marko/pull/258
+* fix: serve never-expiring page cache entries and reject negative ttls by @markshust in https://github.com/marko-php/marko/pull/277
+* fix: report 4xx/5xx bodies from mercure, pusher and webhook senders by @markshust in https://github.com/marko-php/marko/pull/283
+* fix: keep accepted lengths, defaults and native definitions in mysql column modifications by @markshust in https://github.com/marko-php/marko/pull/287
+* fix: detect devserver startup failures without fixed sleeps by @markshust in https://github.com/marko-php/marko/pull/288
+* fix: send the stateless guard's challenge on #[Can] 401s by @markshust in https://github.com/marko-php/marko/pull/298
+* fix: cast postgresql type changes and support expression column defaults by @markshust in https://github.com/marko-php/marko/pull/301
+* fix: apply webhook.timeout to deliveries and cap recorded success bodies by @markshust in https://github.com/marko-php/marko/pull/308
+* fix: bind the admin permission registry as a shared singleton by @markshust in https://github.com/marko-php/marko/pull/309
+* fix: generate uniqueness changes and settle mysql introspected types and defaults by @markshust in https://github.com/marko-php/marko/pull/310
+* fix: roll back started services when marko up fails and support IPv6 hosts by @markshust in https://github.com/marko-php/marko/pull/312
+* fix: change the sequence type with a postgresql auto-increment key by @markshust in https://github.com/marko-php/marko/pull/317
+* fix: answer admin guests on a stateless guard with a 401 instead of a login redirect by @markshust in https://github.com/marko-php/marko/pull/319
+* fix: throw a helpful AdminException when a class lacks #[AdminSection] by @markshust in https://github.com/marko-php/marko/pull/320
+* fix: settle expression defaults the database rewrites so db:diff reaches zero by @markshust in https://github.com/marko-php/marko/pull/322
+* fix: discover admin sections and permissions at boot by @markshust in https://github.com/marko-php/marko/pull/326
+* fix: shorten derived index and foreign key names over 63 bytes by @markshust in https://github.com/marko-php/marko/pull/328
+* fix: compile mariadb shared-lock modifiers as lock in share mode by @markshust in https://github.com/marko-php/marko/pull/332
+* fix: step mysql batch insert ids by auto_increment_increment and document returning row order by @markshust in https://github.com/marko-php/marko/pull/351
+* fix: add primary-key columns to existing tables together with their key by @markshust in https://github.com/marko-php/marko/pull/352
+* fix: quote raw sql identifiers through the connection in every package by @markshust in https://github.com/marko-php/marko/pull/353
+* fix: sync admin user roles in one transaction with batched inserts by @markshust in https://github.com/marko-php/marko/pull/354
+### Documentation
+* docs: embed introduction video on the Introduction page by @markshust in https://github.com/marko-php/marko/pull/155
+* docs: remove scanlines and default captions from the intro video by @markshust in https://github.com/marko-php/marko/pull/157
+* docs: fix wrong snippets in readmes and docs and guard class references by @markshust in https://github.com/marko-php/marko/pull/189
+* docs: show env() and Env side by side in the env docs by @markshust in https://github.com/marko-php/marko/pull/360
+### Refactoring
+* refactor: use query builder row locks and savepoints in DatabaseQueue and RoleRepository by @markshust in https://github.com/marko-php/marko/pull/239
+* refactor: read time through the psr-20 clock in the cache drivers and rate limiter by @markshust in https://github.com/marko-php/marko/pull/270
+* refactor: read time through the psr-20 clock in notification, broadcasting, media and sse by @markshust in https://github.com/marko-php/marko/pull/271
+* refactor: throw http exceptions from admin auth middleware by @markshust in https://github.com/marko-php/marko/pull/282
+### Testing
+* test: add an integration suite that boots a real app against postgres and redis by @markshust in https://github.com/marko-php/marko/pull/204
+* test: use shared fakes in broadcasting and roadrunner tests by @markshust in https://github.com/marko-php/marko/pull/250
+* test: run the real-driver suites in ci and turn the known-gap todos into tests by @markshust in https://github.com/marko-php/marko/pull/262
+* test: make pest plugin and amphp sse server tests deterministic under parallel load by @markshust in https://github.com/marko-php/marko/pull/311
+* test: run the mysql driver integration suite against mariadb 11.8 in ci by @markshust in https://github.com/marko-php/marko/pull/318
+* test: fail the suite on notices, deprecations, risky tests and warnings by @markshust in https://github.com/marko-php/marko/pull/357
+### CI
+* ci(docs): deploy docs when docs-markdown content changes by @markshust in https://github.com/marko-php/marko/pull/156
+
+## New Contributors
+* @etienne-scherrer made their first contribution in https://github.com/marko-php/marko/pull/158
+
+
 ## [0.8.5] - 2026-07-26
 
 ### New Features
