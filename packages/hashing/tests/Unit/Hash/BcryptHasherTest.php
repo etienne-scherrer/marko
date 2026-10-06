@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Marko\Hashing\Contracts\HasherInterface;
 use Marko\Hashing\Exceptions\InvalidHasherConfigException;
+use Marko\Hashing\Exceptions\InvalidValueException;
 use Marko\Hashing\Hash\BcryptHasher;
 
 it('implements HasherInterface', function () {
@@ -110,4 +111,50 @@ it('accepts maximum valid cost of 31', function () {
     // We trust PHP's password_hash to handle the actual limit
     // For testing, we just verify the constructor accepts 31 without throwing
     expect(fn () => new BcryptHasher(cost: 31))->not->toThrow(InvalidHasherConfigException::class);
+});
+
+it('rejects a value longer than 72 bytes instead of silently truncating it', function () {
+    $hasher = new BcryptHasher(cost: 4);
+
+    expect(fn () => $hasher->hash(str_repeat('a', 73)))
+        ->toThrow(InvalidValueException::class, 'Value is longer than 72 bytes');
+});
+
+it('counts bytes rather than characters when enforcing the 72-byte limit', function () {
+    $hasher = new BcryptHasher(cost: 4);
+
+    // 37 two-byte characters = 74 bytes
+    expect(fn () => $hasher->hash(str_repeat('é', 37)))
+        ->toThrow(InvalidValueException::class);
+});
+
+it('rejects a value containing a NUL byte with a specific exception', function () {
+    $hasher = new BcryptHasher(cost: 4);
+
+    expect(fn () => $hasher->hash("secret\0suffix"))
+        ->toThrow(InvalidValueException::class, 'Value contains a NUL byte');
+});
+
+it('accepts a value of exactly 72 bytes', function () {
+    $hasher = new BcryptHasher(cost: 4);
+    $value = str_repeat('a', 72);
+
+    $hash = $hasher->hash($value);
+
+    expect($hasher->verify($value, $hash))->toBeTrue();
+});
+
+it('returns false when verifying a value longer than 72 bytes', function () {
+    $hasher = new BcryptHasher(cost: 4);
+    $hash = $hasher->hash(str_repeat('a', 72));
+
+    // bcrypt would otherwise ignore the 73rd byte and report a match
+    expect($hasher->verify(str_repeat('a', 72) . 'Y', $hash))->toBeFalse();
+});
+
+it('returns false when verifying a value containing a NUL byte', function () {
+    $hasher = new BcryptHasher(cost: 4);
+    $hash = $hasher->hash('secret');
+
+    expect($hasher->verify("secret\0", $hash))->toBeFalse();
 });

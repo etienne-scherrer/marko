@@ -148,7 +148,7 @@ it('handles unicode password', function (): void {
 });
 
 it('handles very long password', function (): void {
-    // Note: bcrypt truncates at 72 bytes, so we test with argon2id for long passwords
+    // Note: bcrypt rejects values over 72 bytes, so we test with argon2id for long passwords
     $manager = createIntegrationManager(['hashing.default' => 'argon2id']);
     $password = str_repeat('a', 1000);
 
