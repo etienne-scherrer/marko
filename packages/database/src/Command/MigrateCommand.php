@@ -7,15 +7,18 @@ namespace Marko\Database\Command;
 use Marko\Core\Attributes\Command;
 use Marko\Core\Command\CommandInterface;
 use Marko\Core\Command\ConfirmationPrompterInterface;
+use Marko\Core\Command\ErrorOutput;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 use Marko\Core\Environment\AppEnvironment;
 use Marko\Core\Path\ProjectPaths;
 use Marko\Database\Diff\DiffCalculator;
+use Marko\Database\Diff\ExpressionDefaultCanonicalizer;
 use Marko\Database\Diff\SchemaDiff;
 use Marko\Database\Diff\SqlGeneratorInterface;
 use Marko\Database\Entity\EntityDiscovery;
 use Marko\Database\Exceptions\EntityException;
+use Marko\Database\Exceptions\ExpressionDefaultProbeException;
 use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Introspection\IntrospectorInterface;
 use Marko\Database\Migration\DataMigrator;
@@ -33,6 +36,10 @@ use Marko\Database\Schema\Table;
  * committed files and only warns about drift, unless --generate is passed.
  * A generated migration that would drop columns, indexes or foreign keys is listed
  * first and needs confirmation, or --force when nobody can answer.
+ *
+ * When the drift check after migrating cannot probe an expression default (the database
+ * rejects it, or the user may not create a temporary table), the migrations already ran:
+ * the command warns on STDERR and keeps their exit status instead of failing the deploy.
  *
  * @noinspection PhpUnused
  */
@@ -55,10 +62,12 @@ readonly class MigrateCommand implements CommandInterface
         private ProjectPaths $paths,
         private AppEnvironment $appEnvironment,
         private ConfirmationPrompterInterface $confirmationPrompter,
+        private ExpressionDefaultCanonicalizer $expressionDefaultCanonicalizer,
+        private ErrorOutput $errorOutput,
     ) {}
 
     /**
-     * @throws EntityException
+     * @throws EntityException|MigrationException
      */
     public function execute(
         Input $input,
@@ -196,6 +205,9 @@ readonly class MigrateCommand implements CommandInterface
         } elseif (!$noGenerate) {
             try {
                 $this->reportDrift($output);
+            } catch (ExpressionDefaultProbeException $e) {
+                // The migrations are applied; a drift check that cannot run must not fail the deploy
+                $this->warnDriftCheckSkipped($e);
             } catch (MigrationException $e) {
                 $output->writeLine("Error: {$e->getMessage()}");
 
@@ -241,6 +253,26 @@ readonly class MigrateCommand implements CommandInterface
 
         $output->writeLine('Run db:migrate in development to generate a migration, then commit and deploy it.');
         $output->writeLine('');
+    }
+
+    /**
+     * Tell the deploy, on STDERR, that the drift check could not compare an expression default with the database,
+     * so it was skipped. The migrations it follows were applied, so the command still succeeds.
+     */
+    private function warnDriftCheckSkipped(
+        ExpressionDefaultProbeException $e,
+    ): void {
+        $this->errorOutput->writeLine('');
+        $this->errorOutput->writeLine(
+            'Warning: The drift check could not compare an expression default with the database, so it was '
+            . 'skipped.',
+        );
+        $this->errorOutput->writeLine("  {$e->getMessage()}");
+        $this->errorOutput->writeLine("  {$e->getSuggestion()}");
+        $this->errorOutput->writeLine(
+            '  The migrations were applied. Run db:diff once the probe works to see any drift.',
+        );
+        $this->errorOutput->writeLine('');
     }
 
     /**
@@ -333,7 +365,7 @@ readonly class MigrateCommand implements CommandInterface
     /**
      * Calculate the diff between entities and database.
      *
-     * @throws EntityException
+     * @throws EntityException|MigrationException When the database rejects an entity's default expression
      */
     private function calculateDiff(): SchemaDiff
     {
@@ -350,8 +382,11 @@ readonly class MigrateCommand implements CommandInterface
         // Get database schema
         $databaseSchema = $this->getDatabaseSchema();
 
-        // Calculate diff
-        return $this->diffCalculator->calculate($entitySchema, $databaseSchema);
+        // Settle expression defaults the database stores in its own spelling, then calculate the diff
+        return $this->diffCalculator->calculate(
+            $this->expressionDefaultCanonicalizer->canonicalize($entitySchema, $databaseSchema),
+            $databaseSchema,
+        );
     }
 
     /**

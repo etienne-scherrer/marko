@@ -134,7 +134,11 @@ public string $placeholder;
 
 The SQL is not checked against the database: a function the database doesn't have (`UUID()` on PostgreSQL, `gen_random_uuid()` on MySQL) fails when the migration runs. MySQL needs 8.0.13 or later for any expression default except the `CURRENT_TIMESTAMP` family; the generator adds the parentheses MySQL requires.
 
-The introspectors read an expression default back as an `Expression`, so the diff compares it with the entity's. The comparison ignores case, whitespace and parentheses around the whole expression, because databases report `NOW()` as `now()` and MySQL reports `(UUID())` as `uuid()`. A database can rewrite a more complex expression (PostgreSQL reports `now() + interval '1 day'` as `(now() + '1 day'::interval)`); write it the way the database reports it, or `db:diff` keeps showing the column as changed.
+The introspectors read an expression default back as an `Expression`, so the diff compares it with the entity's. The comparison ignores case, whitespace and parentheses around the whole expression, because databases report `NOW()` as `now()` and MySQL reports `(UUID())` as `uuid()`.
+
+A database stores its own rewritten form of a more complex expression, not the text you wrote. PostgreSQL reports `now() + interval '1 day'` as `(now() + '1 day'::interval)`, and MySQL reports `CONCAT('a', 'b')` as `concat(_utf8mb4'a',_utf8mb4'b')`. Write the expression the way you would in SQL. When an `Expression` default still differs from the database's after that comparison, `db:diff` and `db:migrate` ask the database how it would store your expression. They declare it on a temporary column of the same type, read back what the database stored, and compare that with the column's current default. If the two match, the column is unchanged. If not, the diff modifies the column and the migration sets your expression as written. The temporary table is dropped (MySQL) or rolled back (PostgreSQL), so the real schema never changes. Columns whose defaults already compare equal, and columns the diff modifies for another reason, are never probed.
+
+If the probe fails, `db:diff` fails with an `ExpressionDefaultProbeException` (a `MigrationException`) naming the table, column, expression and database error. That happens when the database rejects the expression (`now() + 'tomorrow'` on a timestamp column), which you now see at diff time instead of when the migration runs, or when the connection's user may not create a temporary table. `db:migrate` in development fails the same way. The drift check that `db:migrate` runs outside development, after the pending migrations are applied, only warns on STDERR and exits with the migrations' own status, so a deploy that migrated successfully isn't reported as failed. See [Environment Behaviour](#environment-behaviour). A third-party driver whose introspector doesn't implement `ExpressionDefaultMatcherInterface` keeps the plain text comparison.
 
 ### Union-Typed Columns
 
@@ -1565,6 +1569,8 @@ The commands read the environment from core's [`AppEnvironment`](/docs/packages/
 | `production`, `prod`, or unset | Applies pending files only, and warns about drift | Refused with exit code 1, even with `--force` |
 | Anything else (`staging`, `qa`, `preview`, a typo, ...) | Applies pending files only, and warns about drift | Refused with exit code 1 unless you pass `--force`; with `--force`, asks for confirmation when a terminal is attached |
 
+Outside development, the drift warning is informational. If the drift check can't probe an expression default (see [Column Defaults](#column-defaults)), `db:migrate` prints `Warning: The drift check could not compare an expression default with the database, so it was skipped.` on STDERR, followed by the database error and how to fix it, such as granting the user `CREATE TEMPORARY TABLES` on MySQL or `TEMPORARY` on PostgreSQL. It then exits with the status of the migrations it applied.
+
 Destructive commands need evidence that the database is disposable, not merely the absence of the word "production". Only development and testing names count as disposable, so a staging database (which often holds a production snapshot or QA's data) or a misspelled environment name is protected by default:
 
 ```
@@ -1801,7 +1807,7 @@ Every driver package binds six interfaces. They fall into two categories:
 | `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, and `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING` |
 | `ConnectionFactoryInterface` | **Wire** | Creates `ConnectionInterface` instances from a `DatabaseConfig` |
 | `SqlGeneratorInterface` | Dialect | DDL generation for schema diffs |
-| `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. |
+| `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. Implement `ExpressionDefaultMatcherInterface` on it too so the diff can settle expression defaults the database rewrites (see [Column Defaults](#column-defaults)) |
 | `QueryBuilderInterface` | Dialect | SELECT/INSERT/UPDATE/DELETE SQL generation |
 | `QueryBuilderFactoryInterface` | Dialect | Constructs query builder instances |
 
