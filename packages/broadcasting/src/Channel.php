@@ -12,6 +12,12 @@ use Marko\Broadcasting\Exceptions\BroadcastException;
 readonly class Channel
 {
     /**
+     * Characters a channel name must never contain: URI-template braces, the wildcard and list
+     * separators drivers use as selector syntax, whitespace, and control characters.
+     */
+    public const string FORBIDDEN_CHARACTERS_PATTERN = '/[{}*,\s\x00-\x1F\x7F]/';
+
+    /**
      * @throws BroadcastException
      */
     public function __construct(
@@ -19,6 +25,10 @@ readonly class Channel
     ) {
         if ($this->name === '') {
             throw BroadcastException::emptyChannelName();
+        }
+
+        if (preg_match(self::FORBIDDEN_CHARACTERS_PATTERN, $this->name) === 1) {
+            throw BroadcastException::unsafeChannelName($this->name);
         }
     }
 
