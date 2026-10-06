@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Marko\Validation\Rules;
 
 use Marko\Validation\Contracts\RuleInterface;
+use Marko\Validation\Validation\DataPath;
 
 class Confirmed implements RuleInterface
 {
@@ -17,10 +18,7 @@ class Confirmed implements RuleInterface
             return true;
         }
 
-        $confirmationField = $field . '_confirmation';
-        $confirmationValue = $data[$confirmationField] ?? null;
-
-        return $value === $confirmationValue;
+        return $value === DataPath::get($data, $field . '_confirmation');
     }
 
     public function message(

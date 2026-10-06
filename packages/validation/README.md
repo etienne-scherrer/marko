@@ -18,6 +18,7 @@ $errors = $this->validator->validate([...$request->input(), ...$request->files()
     'email' => 'required|email',
     'age' => 'nullable|integer|min:18',
     'avatar' => 'nullable|file|image|max_size:2048',
+    'photos.*' => 'image|max_size:2048', // every file of a photos[] upload
 ]);
 
 if ($errors->isNotEmpty()) {
