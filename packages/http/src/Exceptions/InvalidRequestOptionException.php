@@ -60,4 +60,50 @@ class InvalidRequestOptionException extends MarkoException
             suggestion: "Pass $expected for the '$key' option.",
         );
     }
+
+    public static function conflictingOptions(
+        string $key,
+        string $otherKey,
+        string $reason,
+    ): self {
+        return new self(
+            message: "HTTP request options '$key' and '$otherKey' cannot be used together.",
+            context: $reason,
+            suggestion: "Remove either '$key' or '$otherKey' from the request options.",
+        );
+    }
+
+    public static function unsupportedByDriver(
+        string $key,
+        string $driver,
+        string $reason,
+    ): self {
+        return new self(
+            message: "HTTP request option '$key' is not supported by $driver.",
+            context: $reason,
+            suggestion: "Use an HTTP client driver that supports '$key', or remove the option. "
+                . 'The option is never silently ignored, because callers rely on it for security.',
+        );
+    }
+
+    public static function pinnedRequestFollowsRedirects(): self
+    {
+        return new self(
+            message: "HTTP request option 'resolve_to' requires 'allow_redirects' => false.",
+            context: "'resolve_to' pins the connection for the request URL's host only. A redirect to another host"
+                . ' would be resolved normally, escaping the pin.',
+            suggestion: "Pass 'allow_redirects' => false alongside 'resolve_to', and validate and pin any"
+                . ' redirect target yourself before following it.',
+        );
+    }
+
+    public static function unpinnableUrl(): self
+    {
+        return new self(
+            message: "HTTP request option 'resolve_to' needs an absolute http or https URL with a host.",
+            context: "The connection is pinned by mapping the URL's host and port to the given IP address,"
+                . ' so the URL must name both a scheme and a host.',
+            suggestion: "Pass an absolute URL such as 'https://example.com/path', or remove 'resolve_to'.",
+        );
+    }
 }

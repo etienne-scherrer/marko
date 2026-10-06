@@ -53,6 +53,17 @@ class RequestOptions
     /** Throw HttpException on 4xx/5xx responses: bool (default true) */
     public const string HTTP_ERRORS = 'http_errors';
 
+    /**
+     * Connect to this pre-resolved IP address instead of resolving the URL's host,
+     * while keeping the host in the Host header and TLS SNI/certificate checks: string
+     * (an IPv4 or IPv6 literal, IPv6 without brackets). Pins only the request URL's
+     * host and port, so it cannot be combined with a proxy and requires
+     * 'allow_redirects' => false (a redirect could lead to a host the pin does not
+     * cover). A driver that cannot pin
+     * the connection must throw InvalidRequestOptionException rather than ignore it.
+     */
+    public const string RESOLVE_TO = 'resolve_to';
+
     /** @var array<string> */
     public const array SUPPORTED = [
         self::HEADERS,
@@ -68,6 +79,7 @@ class RequestOptions
         self::ALLOW_REDIRECTS,
         self::PROXY,
         self::HTTP_ERRORS,
+        self::RESOLVE_TO,
     ];
 
     /** @var array<string> */
@@ -132,6 +144,30 @@ class RequestOptions
 
             if (!is_bool($value) && !is_string($value)) {
                 throw InvalidRequestOptionException::invalidType(self::VERIFY, 'bool or a CA bundle path', $value);
+            }
+        }
+
+        if (array_key_exists(self::RESOLVE_TO, $options)) {
+            $value = $options[self::RESOLVE_TO];
+
+            if (!is_string($value) || filter_var($value, FILTER_VALIDATE_IP) === false) {
+                throw InvalidRequestOptionException::invalidType(
+                    self::RESOLVE_TO,
+                    'an IPv4 or IPv6 address string',
+                    $value,
+                );
+            }
+
+            if (array_key_exists(self::PROXY, $options)) {
+                throw InvalidRequestOptionException::conflictingOptions(
+                    self::RESOLVE_TO,
+                    self::PROXY,
+                    'A proxy resolves the destination host itself, so the connection cannot be pinned to an IP.',
+                );
+            }
+
+            if (($options[self::ALLOW_REDIRECTS] ?? true) !== false) {
+                throw InvalidRequestOptionException::pinnedRequestFollowsRedirects();
             }
         }
     }
