@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Marko\Cache\Redis\Exceptions;
-
-use Marko\Cache\Exceptions\CacheException;
+namespace Marko\Cache\Exceptions;
 
 class TamperedCacheValueException extends CacheException
 {
