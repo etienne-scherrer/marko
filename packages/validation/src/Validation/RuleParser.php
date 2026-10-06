@@ -133,7 +133,7 @@ class RuleParser
         return match ($name) {
             'required' => new Required(),
             'email' => new Email(),
-            'url' => new Url(),
+            'url' => new Url(...array_map(strval(...), $params)),
             'numeric' => new Numeric(),
             'integer' => new Integer(),
             'string' => new StringType(),
