@@ -153,3 +153,19 @@ it('reports $connected as false before connect and after close, and true while t
 
     fclose($server);
 });
+
+it('opens a plain connection for tls so that STARTTLS can upgrade it', function (): void {
+    // A plain TCP listener never answers a TLS handshake, so an implicit TLS socket would hang until the timeout
+    $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+    [, $port] = explode(':', stream_socket_get_name($server, false));
+
+    $socket = new StreamSocket();
+    $started = microtime(true);
+    $socket->connect('127.0.0.1', (int) $port, 'tls', 2);
+
+    expect($socket->connected)->toBeTrue()
+        ->and(microtime(true) - $started)->toBeLessThan(1.0);
+
+    $socket->close();
+    fclose($server);
+});
