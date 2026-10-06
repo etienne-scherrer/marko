@@ -998,7 +998,7 @@ $host = $_ENV['DB_HOST'] ?? 'localhost';
 
 This centralizes environment handling and ensures all configurable values are documented in config files.
 
-Read environment variables through `Marko\Config\Env` (`string`, `nullableString`, `int`, `nullableInt`, `float`, `bool`, `list`), never with casts, `filter_var()` or the global `env()` helper. `Env` throws `ConfigException` on a value it can't parse, naming the variable, so a typo fails the boot instead of becoming `0`, `false` or `true`. An unset or empty variable returns the default. `tests/ConfigEnvReadsTest.php` enforces this for every shipped `packages/*/config/*.php`.
+Read environment variables through `Marko\Config\Env` (`string`, `nullableString`, `int`, `nullableInt`, `float`, `bool`, `list`), never with casts or `filter_var()`. The global `env()` helper no longer exists (removed in 0.9.0), so calling it is a fatal `Call to undefined function env()`. `Env` throws `ConfigException` on a value it can't parse, naming the variable, so a typo fails the boot instead of becoming `0`, `false` or `true`. An unset or empty variable returns the default. `tests/ConfigEnvReadsTest.php` enforces this for every shipped `packages/*/config/*.php`.
 
 ### Scoped Configuration (Multi-tenant)
 

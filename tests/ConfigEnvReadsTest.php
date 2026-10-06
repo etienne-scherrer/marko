@@ -5,8 +5,10 @@ declare(strict_types=1);
 /**
  * Shipped config files read environment variables only through Marko\Config\Env (#289).
  *
- * Casts, filter_var(), the global env() helper and raw $_ENV/getenv() reads turn a
- * misspelled value into 0, false or true without an error. This scans the tokens of
+ * Casts, filter_var() and raw $_ENV/getenv() reads turn a misspelled value into 0,
+ * false or true without an error. The global env() helper was removed in 0.9.0 (#355),
+ * so a config file that still calls it fails with "Call to undefined function env()";
+ * this check names the file and line before that happens. This scans the tokens of
  * every packages/{package}/config/*.php file, so comments and strings are ignored.
  * It lives in the monorepo suite because each package is split into its own repository.
  */
