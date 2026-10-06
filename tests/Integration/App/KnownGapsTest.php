@@ -153,7 +153,10 @@ it('never generates migrations when db:migrate runs in production')
 
 // #171 Router precedence, 405, HEAD, OPTIONS
 it('answers an OPTIONS preflight through the CORS middleware')
-    ->todo(note: 'OPTIONS /health with Origin and Access-Control-Request-Method must get the CORS headers.', issue: 171);
+    ->todo(
+        note: 'OPTIONS /health with Origin and Access-Control-Request-Method must get the CORS headers.',
+        issue: 171
+    );
 
 it('answers a wrong method with 405 and an Allow header')
     ->todo(note: 'POST /health must return 405 with "Allow: GET, HEAD", not 404.', issue: 171);
@@ -166,13 +169,3 @@ it('routes identically with the discovery cache warm and cold')
         issue: 173,
     );
 
-// #176 Savepoints and after-commit callbacks
-it('rolls back a savepoint without rolling back the outer transaction')
-    ->todo(
-        note: 'Inside an outer transaction, a failing nested transaction must undo only its own writes; the outer '
-            . 'writes commit.',
-        issue: 176,
-    );
-
-it('runs an after-commit callback only when the transaction commits')
-    ->todo(note: 'A callback registered inside a transaction runs after COMMIT and never after ROLLBACK.', issue: 176);
