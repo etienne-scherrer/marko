@@ -46,6 +46,19 @@ class MigrationException extends MarkoException
         );
     }
 
+    public static function controlCharacterInIdentifier(
+        string $identifier,
+    ): self {
+        $visible = addcslashes($identifier, "\0..\37\177\\");
+
+        return new self(
+            message: "Identifier '$visible' contains a control character",
+            context: 'While generating a migration from the schema diff',
+            suggestion: 'Rename the table, column, index or constraint in the database so its name holds no control '
+                . 'characters (newlines, tabs, NUL), then run the migration generator again.',
+        );
+    }
+
     public static function emptyDefaultExpression(): self
     {
         return new self(
@@ -131,6 +144,17 @@ class MigrationException extends MarkoException
             message: "Migration file for '$migrationName' not found",
             context: "While looking for migration '$migrationName'",
             suggestion: 'Ensure the migration file exists in the database/migrations/ directory.',
+        );
+    }
+
+    public static function invalidMigrationName(
+        string $migrationName,
+    ): self {
+        return new self(
+            message: "Invalid migration name '$migrationName': names must not contain '/', '\\', '..' or NUL bytes",
+            context: 'While resolving a migration name read from the migrations table',
+            suggestion: 'Migration names are plain file names in database/migrations/. Remove or correct the row in '
+                . 'the migrations table; a name like this suggests the table was tampered with.',
         );
     }
 

@@ -7,11 +7,19 @@ namespace Marko\Validation\Rules;
 use Marko\Core\Contracts\UploadedFileInterface;
 use Marko\Validation\Contracts\RuleInterface;
 
-readonly class Max implements RuleInterface
+readonly class Max extends AbstractSizeRule
 {
     public function __construct(
         private int|float $maximum,
-    ) {}
+        bool $numeric = false,
+    ) {
+        parent::__construct($numeric);
+    }
+
+    public function asNumeric(): RuleInterface
+    {
+        return new self($this->maximum, true);
+    }
 
     public function passes(
         string $field,
@@ -27,19 +35,9 @@ readonly class Max implements RuleInterface
             return false;
         }
 
-        if (is_array($value)) {
-            return count($value) <= $this->maximum;
-        }
+        $size = $this->size($value);
 
-        if (is_numeric($value)) {
-            return (float) $value <= $this->maximum;
-        }
-
-        if (is_string($value)) {
-            return mb_strlen($value) <= $this->maximum;
-        }
-
-        return false;
+        return $size !== null && $size <= $this->maximum;
     }
 
     public function message(
@@ -54,11 +52,7 @@ readonly class Max implements RuleInterface
             return "The $field field must not have more than $this->maximum items.";
         }
 
-        if (is_numeric($value)) {
-            return "The $field field must not exceed $this->maximum.";
-        }
-
-        if (is_string($value)) {
+        if ($this->measuresLength($value)) {
             return "The $field field must not exceed $this->maximum characters.";
         }
 
