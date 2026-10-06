@@ -161,4 +161,40 @@ describe('HttpResponse header values', function (): void {
 
         expect($response->headers())->toBe(['Set-Cookie' => 'a=1, b=2', 'Content-Type' => 'text/plain']);
     });
+
+    it('returns the whole body as the excerpt when it fits the limit', function (): void {
+        $response = new HttpResponse(statusCode: 413, body: 'Payload too large');
+
+        expect($response->bodyExcerpt())->toBe('Payload too large');
+    });
+
+    it('truncates the excerpt to the byte limit and notes how many bytes were cut', function (): void {
+        $response = new HttpResponse(statusCode: 500, body: str_repeat('a', 30));
+
+        expect($response->bodyExcerpt(10))->toBe('aaaaaaaaaa... [truncated 20 bytes]');
+    });
+
+    it('caps the excerpt at 500 bytes by default', function (): void {
+        $response = new HttpResponse(statusCode: 500, body: str_repeat('x', 600));
+
+        expect($response->bodyExcerpt())->toBe(str_repeat('x', 500) . '... [truncated 100 bytes]');
+    });
+
+    it('does not split a multibyte character when truncating the excerpt', function (): void {
+        $response = new HttpResponse(statusCode: 500, body: 'ab€cd');
+
+        expect($response->bodyExcerpt(4))->toBe('ab... [truncated 5 bytes]');
+    });
+
+    it('trims surrounding whitespace from the excerpt', function (): void {
+        $response = new HttpResponse(statusCode: 502, body: "\n  <h1>Bad Gateway</h1>\n\n");
+
+        expect($response->bodyExcerpt())->toBe('<h1>Bad Gateway</h1>');
+    });
+
+    it('returns an empty excerpt for an empty body', function (): void {
+        $response = new HttpResponse(statusCode: 500, body: '');
+
+        expect($response->bodyExcerpt())->toBe('');
+    });
 });
