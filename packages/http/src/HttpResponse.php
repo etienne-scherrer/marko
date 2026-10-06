@@ -9,7 +9,8 @@ use JsonException;
 readonly class HttpResponse
 {
     /**
-     * @param array<string, string> $headers One string per header name; repeated values joined with ", "
+     * @param array<string, string> $headers One string per header name; repeated values joined with ", ".
+     *     When empty, headers() joins $headerValues instead.
      * @param array<string, list<string>> $headerValues Every value of each header, in the order received.
      *     When empty, derived from $headers as one-element lists.
      */
@@ -31,10 +32,17 @@ readonly class HttpResponse
     }
 
     /**
+     * One string per header name, repeated values joined with ", ". When the
+     * response was built with only headerValues, they are joined here.
+     *
      * @return array<string, string>
      */
     public function headers(): array
     {
+        if ($this->headers === [] && $this->headerValues !== []) {
+            return array_map(static fn (array $values): string => implode(', ', $values), $this->headerValues);
+        }
+
         return $this->headers;
     }
 

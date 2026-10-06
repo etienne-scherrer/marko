@@ -151,4 +151,14 @@ describe('HttpResponse header values', function (): void {
 
         expect($response->headers())->toBe(['Set-Cookie' => 'a=1, b=2']);
     });
+
+    it('derives comma-joined headers from headerValues when headers is not given', function (): void {
+        $response = new HttpResponse(
+            statusCode: 200,
+            body: '',
+            headerValues: ['Set-Cookie' => ['a=1', 'b=2'], 'Content-Type' => ['text/plain']],
+        );
+
+        expect($response->headers())->toBe(['Set-Cookie' => 'a=1, b=2', 'Content-Type' => 'text/plain']);
+    });
 });

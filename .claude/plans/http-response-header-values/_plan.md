@@ -57,6 +57,6 @@ Closes #220
 
 ## Risks & Mitigations
 - Inconsistent `headers` and `headerValues` passed by a driver: `headerValues` is authoritative for the new accessors whenever it is non-empty; documented.
-- `headers()` is not derived from `headerValues`, so a response built only with `headerValues:` returns `[]` from `headers()`. The docs must say so, and examples pass both (task 004).
+- Maintainer decision (PR #238): when `headers` is not passed, `headers()` falls back to `headerValues` joined with `", "`, so a response built only with `headerValues:` is consistent. Callers that pass `headers` see identical behaviour.
 - PHPStan level 6: Guzzle's `getHeaders()` is `string[][]`, so the driver normalises the values to lists before passing them in (task 002).
 - `testing.md` is also edited by #227, so task 004 keeps its edits inside the FakeHttpClient section.

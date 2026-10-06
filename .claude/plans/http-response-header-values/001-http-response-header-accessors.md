@@ -20,6 +20,7 @@ Add an optional `headerValues` constructor parameter (`array<string, list<string
 - [x] `it returns null from header for a missing header`
 - [x] `it derives header values from headers when headerValues is not given`
 - [x] `it keeps headers unchanged when headerValues is given`
+- [x] `it derives comma-joined headers from headerValues when headers is not given`
 
 ## Acceptance Criteria
 - All requirements have passing tests
