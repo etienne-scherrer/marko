@@ -19,7 +19,7 @@
             <directory>packages/*/tests</directory>
         </testsuite>
     </testsuites>
-    <source>
+    <source ignoreIndirectDeprecations="true">
         <include>
             <directory>packages/*/src</directory>
         </include>

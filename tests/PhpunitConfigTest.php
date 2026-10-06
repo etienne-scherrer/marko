@@ -18,6 +18,11 @@ it(
     'failOnWarning',
 ]);
 
+it('ignores deprecations raised inside third-party vendor code', function () use ($phpunitXml): void {
+    // Only Marko's own deprecations should fail the run, not a dependency's.
+    expect((string) $phpunitXml->source['ignoreIndirectDeprecations'])->toBe('true');
+});
+
 it('does not fail the run on skipped tests', function () use ($phpunitXml): void {
     // Integration tests skip when their services are unavailable.
     expect((string) $phpunitXml['failOnSkipped'])->not->toBe('true');
