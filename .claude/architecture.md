@@ -887,7 +887,7 @@ Each attribute accepts a path, an optional middleware array and an optional uniq
 
 ### Route Precedence and Unmatched Requests
 
-Match order never depends on registration order: static paths first, catch-alls last, then dynamic paths by more static segments, then more constrained parameters, then longer static prefix, then registration order. A request that matches no route still runs through global middleware and gets a 404, or a 405 with `Allow` when another method matches the path.
+Match order never depends on registration order: static paths first, catch-alls last, then dynamic paths by more static segments, then more constrained parameters, then longer static prefix, then registration order. A request that matches no route gets a 404, or a 405 with `Allow` when another method matches the path. It runs only the global middleware marked `#[RunsOnUnmatched]` (CORS), never session, CSRF or auth middleware.
 
 ### Route Parameters
 
@@ -1086,6 +1086,7 @@ Attributes are wrong for system wiring and environment configuration:
 | `#[DisableRoute]`         | Method       | Explicitly removes inherited route        |
 | `#[RoutePrefix]`          | Class        | Prefixes route paths and names            |
 | `#[WithoutMiddleware]`    | Method/Class | Skips global or route middleware          |
+| `#[RunsOnUnmatched]`      | Class        | Global middleware also runs on 404/405    |
 | `#[Command]`              | Class        | Registers CLI command                     |
 
 ### PHP Built-in Attributes to Use

@@ -83,6 +83,13 @@ function makeRepeatVisitSession(): SessionInterface
         }
 
         public function save(): void {}
+
+        public function isModified(): bool
+        {
+            return false;
+        }
+
+        public function discard(): void {}
     };
 }
 
