@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Marko\Api\Value;
 
-readonly class ConditionalValue
+use JsonSerializable;
+use Marko\Api\Exceptions\ApiResourceException;
+
+readonly class ConditionalValue implements JsonSerializable
 {
     public function __construct(
         public bool $condition,
@@ -22,5 +25,15 @@ readonly class ConditionalValue
         }
 
         return new MissingValue();
+    }
+
+    /**
+     * Refuse direct serialization so a hidden value can never leak.
+     *
+     * @throws ApiResourceException
+     */
+    public function jsonSerialize(): never
+    {
+        throw ApiResourceException::unresolvedValue(self::class);
     }
 }

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Marko\Api\Exceptions\ApiResourceException;
 use Marko\Api\Value\ConditionalValue;
 use Marko\Api\Value\MissingValue;
 
@@ -30,4 +31,15 @@ it('resolves to MissingValue when condition is false', function () {
     $conditional = new ConditionalValue(false, 'hello');
 
     expect($conditional->resolve())->toBeInstanceOf(MissingValue::class);
+});
+
+it('throws instead of serializing its wrapped value when passed to json_encode', function () {
+    $conditional = new ConditionalValue(false, 'SECRET');
+
+    expect(fn () => json_encode(['token' => $conditional], JSON_THROW_ON_ERROR))
+        ->toThrow(ApiResourceException::class, 'ConditionalValue');
+});
+
+it('implements JsonSerializable so it cannot be silently serialized', function () {
+    expect(new ConditionalValue(true, 'x'))->toBeInstanceOf(JsonSerializable::class);
 });

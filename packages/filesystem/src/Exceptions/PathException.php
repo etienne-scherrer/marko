@@ -16,6 +16,26 @@ class PathException extends FilesystemException
         );
     }
 
+    public static function rootDeletion(
+        string $path,
+    ): self {
+        return new self(
+            message: 'Refusing to delete the disk root',
+            context: "Path '$path' resolves to the root of the disk",
+            suggestion: 'Pass the name of a subdirectory to deleteDirectory(); to clear a disk, delete its entries individually',
+        );
+    }
+
+    public static function outsideRoot(
+        string $path,
+    ): self {
+        return new self(
+            message: 'Path resolves outside the disk root',
+            context: "Path '$path' follows a symbolic link that points outside the disk root",
+            suggestion: 'Remove the symbolic link, or configure a disk whose root contains the link target',
+        );
+    }
+
     public static function invalidPath(
         string $path,
         string $reason,

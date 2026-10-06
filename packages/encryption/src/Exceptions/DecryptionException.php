@@ -23,4 +23,26 @@ class DecryptionException extends EncryptionException
             suggestion: 'Ensure the same ENCRYPTION_KEY is used for both encryption and decryption',
         );
     }
+
+    public static function invalidTagLength(
+        int $actual,
+        int $expected,
+    ): self {
+        return new self(
+            message: "Authentication tag must be $expected bytes, got $actual",
+            context: 'Decrypting data that may be corrupted or tampered with',
+            suggestion: 'Verify the data has not been modified after encryption; truncated tags are rejected to prevent forgery',
+        );
+    }
+
+    public static function invalidIvLength(
+        int $actual,
+        int $expected,
+    ): self {
+        return new self(
+            message: "Initialization vector must be $expected bytes, got $actual",
+            context: 'Decrypting data that may be corrupted or tampered with',
+            suggestion: 'Verify the data has not been modified after encryption and was encrypted with the same cipher',
+        );
+    }
 }
