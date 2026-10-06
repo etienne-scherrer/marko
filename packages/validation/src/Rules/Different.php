@@ -4,10 +4,16 @@ declare(strict_types=1);
 
 namespace Marko\Validation\Rules;
 
+use InvalidArgumentException;
 use Marko\Validation\Contracts\RuleInterface;
+use Marko\Validation\Contracts\WildcardAwareRuleInterface;
+use Marko\Validation\Validation\DataPath;
 
-readonly class Different implements RuleInterface
+readonly class Different implements WildcardAwareRuleInterface
 {
+    /**
+     * @param string $otherField An absolute dot path; a `*` is replaced by the current row's index
+     */
     public function __construct(
         private string $otherField,
     ) {}
@@ -21,9 +27,7 @@ readonly class Different implements RuleInterface
             return true;
         }
 
-        $otherValue = $data[$this->otherField] ?? null;
-
-        return $value !== $otherValue;
+        return $value !== DataPath::get($data, $this->otherField);
     }
 
     public function message(
@@ -31,5 +35,20 @@ readonly class Different implements RuleInterface
         mixed $value,
     ): string {
         return "The $field field must be different from the $this->otherField field.";
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     */
+    public function forWildcardIndexes(
+        string $key,
+        array $indexes,
+    ): RuleInterface {
+        $otherField = DataPath::fillWildcards($this->otherField, $indexes)
+            ?? throw new InvalidArgumentException(
+                "The different:$this->otherField rule has more wildcards than the $key key it validates",
+            );
+
+        return new self($otherField);
     }
 }
