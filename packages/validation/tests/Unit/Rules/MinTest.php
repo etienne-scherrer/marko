@@ -104,15 +104,15 @@ it('returns correct message for number', function () {
     expect($rule->message('age', 5))->toBe('The age field must be at least 10.');
 });
 
-it('accepts a numeric string at or above the minimum for the integer min rule', function () {
-    $rule = new Min(18);
+it('accepts a numeric string at or above the minimum in numeric mode', function () {
+    $rule = new Min(18, numeric: true);
 
     expect($rule->passes('age', '25', []))->toBeTrue()
         ->and($rule->passes('age', '18', []))->toBeTrue();
 });
 
-it('rejects a numeric string below the minimum for the integer min rule', function () {
-    $rule = new Min(18);
+it('rejects a numeric string below the minimum in numeric mode', function () {
+    $rule = new Min(18, numeric: true);
 
     expect($rule->passes('age', '5', []))->toBeFalse();
 });
@@ -131,8 +131,23 @@ it('counts array items for the min and between rules on an array value', functio
         ->and($minRule->passes('items', ['a'], []))->toBeFalse();
 });
 
-it('produces a value-oriented (not character-length) failure message for a numeric string failing min', function () {
-    $rule = new Min(18);
+it('produces a value-oriented failure message for a numeric string in numeric mode', function () {
+    $rule = new Min(18, numeric: true);
 
     expect($rule->message('age', '5'))->toBe('The age field must be at least 18.');
+});
+
+it('measures a numeric string by length when not in numeric mode', function (): void {
+    $rule = new Min(8);
+
+    expect($rule->passes('password', '9', []))->toBeFalse()
+        ->and($rule->passes('password', '12345678', []))->toBeTrue()
+        ->and($rule->message('password', '9'))->toBe('The password field must be at least 8 characters.');
+});
+
+it('returns a numeric-mode copy from asNumeric', function (): void {
+    $rule = new Min(8);
+
+    expect($rule->asNumeric()->passes('age', '9', []))->toBeTrue()
+        ->and($rule->passes('age', '9', []))->toBeFalse();
 });
