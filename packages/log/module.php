@@ -16,6 +16,7 @@ return [
                 format: $config->format(),
                 dateFormat: $config->dateFormat(),
                 escapeNewlines: $config->escapeNewlines(),
+                redactKeys: $config->redactKeys(),
             );
         },
     ],
