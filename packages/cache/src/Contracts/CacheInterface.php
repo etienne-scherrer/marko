@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Cache\Contracts;
 
+use Marko\Cache\Exceptions\CacheException;
 use Marko\Cache\Exceptions\InvalidKeyException;
 
 interface CacheInterface
@@ -112,7 +113,11 @@ interface CacheInterface
      * The counter is a plain integer: for every driver, get(), getItem() and
      * getMultiple() on an incremented key return an `int`.
      *
-     * @throws InvalidKeyException
+     * A driver that cannot read or persist the counter throws a CacheException;
+     * it never fails open by returning 1, which would let a rate limiter allow
+     * every request.
+     *
+     * @throws InvalidKeyException|CacheException
      */
     public function increment(
         string $key,
