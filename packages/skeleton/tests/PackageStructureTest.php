@@ -69,7 +69,8 @@ it('has .env.example with placeholder values', function (): void {
 
     expect($content)
         ->toContain('APP_ENV=')
-        ->toContain('APP_DEBUG=');
+        ->toContain('APP_DEBUG=')
+        ->toContain('APP_URL=');
 });
 
 it('has empty app/ directory with .gitkeep', function (): void {

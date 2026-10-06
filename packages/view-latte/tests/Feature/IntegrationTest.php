@@ -9,6 +9,7 @@ use Marko\Core\Module\ModuleManifest;
 use Marko\Core\Module\ModuleRepository;
 use Marko\Core\Module\ModuleRepositoryInterface;
 use Marko\Routing\Http\Response;
+use Marko\Routing\UrlGeneratorInterface;
 use Marko\View\Exceptions\NoDriverException;
 use Marko\View\Exceptions\TemplateNotFoundException;
 use Marko\View\Latte\LatteEngineFactory;
@@ -56,7 +57,11 @@ describe('View Integration', function (): void {
         $viewConfig = new ViewConfig($config);
         $latteViewConfig = new LatteViewConfig($config);
         $templateResolver = new ModuleTemplateResolver($moduleRepository, $viewConfig);
-        $engineFactory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $engineFactory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $engineFactory->create();
         $view = new LatteView($engine, $templateResolver);
 
@@ -117,6 +122,7 @@ describe('View Integration', function (): void {
         $container = new Container();
         $container->instance(ConfigRepositoryInterface::class, $config);
         $container->instance(ModuleRepositoryInterface::class, $moduleRepository);
+        $container->instance(UrlGeneratorInterface::class, $this->createStub(UrlGeneratorInterface::class));
 
         // Bind TemplateResolverInterface to ModuleTemplateResolver
         $container->bind(
@@ -196,7 +202,11 @@ describe('View Integration', function (): void {
         $viewConfig = new ViewConfig($config);
         $latteViewConfig = new LatteViewConfig($config);
         $templateResolver = new ModuleTemplateResolver($moduleRepository, $viewConfig);
-        $engineFactory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $engineFactory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $engineFactory->create();
         $view = new LatteView($engine, $templateResolver);
 

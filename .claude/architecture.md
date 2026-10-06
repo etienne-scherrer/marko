@@ -881,15 +881,19 @@ Routes are defined via attributes on controller methods. No separate route files
 - `#[Head(path)]` - HEAD request (optional: HEAD falls back to the GET route, body removed)
 - `#[Options(path)]` - OPTIONS request (optional: OPTIONS is answered automatically with 204 and `Allow`)
 
-Each attribute accepts a path and optional middleware array.
+Each attribute accepts a path, an optional middleware array and an optional unique `name`. Class-level `#[RoutePrefix('/api/v1', namePrefix: 'api.v1.')]` prefixes paths and names. `#[WithoutMiddleware]` (class or method) removes global or route middleware from a route; excluding middleware that is not in the stack fails at boot.
 
 ### Route Precedence and Unmatched Requests
 
-Match order never depends on registration order: static paths first, then dynamic paths by more static segments, then longer static prefix, then registration order. A request that matches no route still runs through global middleware and gets a 404, or a 405 with `Allow` when another method matches the path.
+Match order never depends on registration order: static paths first, catch-alls last, then dynamic paths by more static segments, then more constrained parameters, then longer static prefix, then registration order. A request that matches no route still runs through global middleware and gets a 404, or a 405 with `Allow` when another method matches the path.
 
 ### Route Parameters
 
-Route parameters are defined in the path using curly braces: `/posts/{slug}`. Parameters are passed to the controller method.
+Route parameters are defined in the path using curly braces: `/posts/{slug}`. `{id:\d+}` adds a regex constraint and `{path*}` is a catch-all for the final segment. Parameters are passed to the controller method.
+
+### URL Generation
+
+Named routes are turned into URLs through the injected `UrlGeneratorInterface` (and `route()` in Latte and Twig templates). There is no global helper. Absolute URLs use `routing.url` (`APP_URL`), never the request's `Host` header.
 
 ### Modifying Route Behavior
 
@@ -1078,6 +1082,8 @@ Attributes are wrong for system wiring and environment configuration:
 | `#[Get]`, `#[Post]`, etc. | Method       | Defines HTTP route                        |
 | `#[Middleware]`           | Method/Class | Applies middleware                        |
 | `#[DisableRoute]`         | Method       | Explicitly removes inherited route        |
+| `#[RoutePrefix]`          | Class        | Prefixes route paths and names            |
+| `#[WithoutMiddleware]`    | Method/Class | Skips global or route middleware          |
 | `#[Command]`              | Class        | Registers CLI command                     |
 
 ### PHP Built-in Attributes to Use

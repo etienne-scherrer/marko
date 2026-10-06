@@ -6,9 +6,11 @@
     "require": {
         "php": "^8.5",
         "marko/view": "self.version",
-        "latte/latte": "^3.0"
+        "latte/latte": "^3.0",
+        "marko/routing": "self.version"
     },
     "require-dev": {
+        "marko/testing": "self.version",
         "pestphp/pest": "^4.0"
     },
     "autoload": {

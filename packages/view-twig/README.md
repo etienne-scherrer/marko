@@ -16,6 +16,10 @@ Note: `marko/view-twig` conflicts with `marko/view-latte` --- install only one v
 $view->render('blog::post/index', ['posts' => $posts]);
 ```
 
+```twig
+<a href="{{ route('blog.post.show', {slug: post.slug}) }}">{{ post.title }}</a>
+```
+
 ## Documentation
 
 Full usage, API reference, and examples: [marko/view-twig](https://marko.build/docs/packages/view-twig/)

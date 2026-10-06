@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Latte\Engine;
 use Latte\Feature;
+use Marko\Routing\UrlGeneratorInterface;
 use Marko\View\Latte\LatteEngineFactory;
 use Marko\View\Latte\LatteViewConfig;
 use Marko\View\ViewConfig;
@@ -17,7 +18,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig = $this->createMock(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         expect($engine)->toBeInstanceOf(Engine::class);
@@ -31,7 +36,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig = $this->createMock(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         expect($engine)->toBeInstanceOf(Engine::class);
@@ -49,14 +58,22 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfigTrue = $this->createMock(LatteViewConfig::class);
         $latteViewConfigTrue->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfigTrue);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfigTrue,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         // Test with strict types disabled
         $latteViewConfigFalse = $this->createMock(LatteViewConfig::class);
         $latteViewConfigFalse->method('strictTypes')->willReturn(false);
 
-        $factory2 = new LatteEngineFactory($viewConfig, $latteViewConfigFalse);
+        $factory2 = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfigFalse,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine2 = $factory2->create();
 
         expect($engine->hasFeature(Feature::StrictTypes))->toBeTrue()
@@ -78,7 +95,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig = $this->createMock(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         // Verify by rendering a simple template - it should create cache files
@@ -107,7 +128,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig = $this->createMock(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         // Verify by rendering a simple template - it should create cache files
@@ -137,7 +162,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig = $this->createMock(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         // Use reflection to access the cache property and check autoRefresh
@@ -153,7 +182,11 @@ describe('LatteEngineFactory', function (): void {
         $latteViewConfig2 = $this->createMock(LatteViewConfig::class);
         $latteViewConfig2->method('strictTypes')->willReturn(true);
 
-        $factory2 = new LatteEngineFactory($viewConfig2, $latteViewConfig2);
+        $factory2 = new LatteEngineFactory(
+            $viewConfig2,
+            $latteViewConfig2,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine2 = $factory2->create();
 
         $cache2 = $cacheProperty->getValue($engine2);
