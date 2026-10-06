@@ -934,11 +934,24 @@ it(
         // and call build() which re-scans and returns real data
         $cache2 = makeOneModuleStubs($rootPath, $module);
 
-        // The corrupt cache must NOT produce an empty index; it must rebuild
-        $modules = $cache2->getModules();
+        // The corrupt cache must NOT produce an empty index; it must rebuild, and
+        // reading the corrupt file must not raise a PHP warning (even a suppressed one)
+        $warnings = [];
+        set_error_handler(function (int $errno, string $message) use (&$warnings): bool {
+            $warnings[] = $message;
+
+            return true;
+        });
+
+        try {
+            $modules = $cache2->getModules();
+        } finally {
+            restore_error_handler();
+        }
 
         expect($modules)->toHaveCount(1)
-            ->and($modules[0]->name)->toBe('test/module');
+            ->and($modules[0]->name)->toBe('test/module')
+            ->and($warnings)->toBeEmpty();
     },
 );
 
@@ -1170,15 +1183,71 @@ it(
             $cache->build();
         } catch (IndexCacheException $e) {
             $thrown = $e;
+        } finally {
+            // Restore permissions so afterEach cleanup can delete the dir
+            chmod($markoDir, 0755);
         }
 
         expect($thrown)->toBeInstanceOf(IndexCacheException::class)
             ->and($thrown->getMessage())->toContain('Cannot write to index cache')
+            ->and($thrown->getContext())->toContain('Permission denied')
             ->and($thrown->getSuggestion())->not->toBeEmpty()
             ->and($thrown->getSuggestion())->toContain('.marko');
+    },
+);
 
-        // Restore permissions so afterEach cleanup can delete the dir
-        chmod($markoDir, 0755);
+it(
+    'it throws IndexCacheException with the OS reason when the cache file cannot be written',
+    function () use (&$tmpDirs): void {
+        $rootPath = makeTempDir();
+        $tmpDirs[] = $rootPath;
+
+        // A directory where the cache file should be makes file_put_contents() fail
+        mkdir($rootPath . '/.marko/index.cache', 0755, true);
+
+        $cache = makeEmptyStubs($rootPath);
+
+        try {
+            $cache->build();
+            $this->fail('Expected IndexCacheException');
+        } catch (IndexCacheException $e) {
+            expect($e->getMessage())->toBe("Cannot write to index cache: $rootPath/.marko/index.cache")
+                ->and($e->getContext())->toContain('file_put_contents(')
+                ->and($e->getContext())->toContain('Is a directory');
+        }
+    },
+);
+
+it(
+    'it throws IndexCacheException::cacheNotRemovable with the OS reason when invalidate cannot remove the cache file',
+    function () use (&$tmpDirs): void {
+        $rootPath = makeTempDir();
+        $tmpDirs[] = $rootPath;
+
+        $cache = makeEmptyStubs($rootPath);
+        $cache->build();
+
+        $markoDir = $rootPath . '/.marko';
+        chmod($markoDir, 0555);
+
+        try {
+            if (function_exists('posix_geteuid') && posix_geteuid() === 0 || is_writable($markoDir)) {
+                $this->markTestSkipped('Directory permissions are not enforced for this user (e.g. root).');
+            }
+
+            $thrown = null;
+            try {
+                $cache->invalidate();
+            } catch (IndexCacheException $e) {
+                $thrown = $e;
+            }
+
+            expect($thrown)->toBeInstanceOf(IndexCacheException::class)
+                ->and($thrown->getMessage())->toBe("Cannot remove index cache: $markoDir/index.cache")
+                ->and($thrown->getContext())->toContain('Permission denied');
+        } finally {
+            chmod($markoDir, 0755);
+        }
     },
 );
 

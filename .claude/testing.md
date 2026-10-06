@@ -608,7 +608,7 @@ For interfaces, test against the interface contract, not specific implementation
 
 - **Stubs via `createStub()`.** Use `createMock()` only for a double that gets `expects()` (or a `with()` rule). A mock with no expectation triggers a PHPUnit notice. Don't silence it with `#[AllowMockObjectsWithoutExpectations]`. When a shared double needs `expects()` in only some tests, stub it in the shared setup and create a mock in those tests.
 - **Every test asserts.** A test that performs no assertion is risky. Test helpers that check something go through `PHPUnit\Framework\Assert` (`Assert::assertSame()`, `Assert::assertArrayHasKey()`, ...), never a hand-thrown `AssertionFailedError`, so a passing check still counts.
-- **No raw PHP warnings from code under test.** Don't hide them with `@`. Catch the failure and fold the reason (`error_get_last()` or a scoped error handler) into the loud exception, then assert the reason in the test.
+- **No raw PHP warnings from code under test.** Don't hide them with `@`. Run the failing call through `Marko\Core\Support\ErrorCapture::run($reason, fn () => ...)`, fold `$reason` into the loud exception, then assert the reason in the test. Don't use `@` + `error_get_last()`: PHPUnit still records the suppressed warning, and `error_get_last()` can return a stale, unrelated error.
 - **Find issues** with `--display-notices --display-deprecations --display-warnings --display-phpunit-deprecations --display-phpunit-notices`.
 
 ## Pest 4 Features

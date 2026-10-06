@@ -9,22 +9,31 @@ class TransportException extends MailException
     public static function connectionFailed(
         string $host,
         int $port,
+        ?string $reason = null,
     ): self {
         return new self(
             message: 'Failed to connect to mail server.',
-            context: "Could not establish connection to $host:$port",
+            context: self::withReason("Could not establish connection to $host:$port", $reason),
             suggestion: 'Verify the server address and port are correct and the server is reachable.',
         );
     }
 
     public static function tlsFailed(
         string $host,
+        ?string $reason = null,
     ): self {
         return new self(
             message: 'TLS negotiation failed.',
-            context: "Could not establish secure connection to $host",
+            context: self::withReason("Could not establish secure connection to $host", $reason),
             suggestion: 'Check server TLS configuration or try disabling TLS verification for testing.',
         );
+    }
+
+    private static function withReason(
+        string $context,
+        ?string $reason,
+    ): string {
+        return $reason === null || $reason === '' ? $context : "$context ($reason)";
     }
 
     public static function authenticationFailed(
