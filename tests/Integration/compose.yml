@@ -6,10 +6,18 @@
 #   MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
 #   composer test:integration
 #
-# If port 5432, 6379 or 3306 is already taken locally, start with
-# DB_PORT=55432, REDIS_PORT=56379 and/or MYSQL_PORT=53306, and export the same
-# ports when running the suite (MARKO_TEST_PGSQL_PORT and MARKO_TEST_MYSQL_PORT
-# for the driver tests).
+# MariaDB is optional (the `mariadb` profile). CI runs the database-mysql
+# driver tests against it as well; to do the same locally:
+#
+#   docker compose -f tests/Integration/compose.yml --profile mariadb up -d --wait
+#   MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PORT=3307 MARKO_TEST_MYSQL_PASSWORD=marko \
+#   MARKO_TEST_MYSQL_SERVER=mariadb \
+#   ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration
+#
+# If port 5432, 6379, 3306 or 3307 is already taken locally, start with
+# DB_PORT=55432, REDIS_PORT=56379, MYSQL_PORT=53306 and/or MARIADB_PORT=53307,
+# and export the same ports when running the suite (MARKO_TEST_PGSQL_PORT and
+# MARKO_TEST_MYSQL_PORT for the driver tests).
 name: marko-integration
 
 services:
@@ -41,6 +49,20 @@ services:
       - "${MYSQL_PORT:-3306}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pmarko"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mariadb:
+    image: mariadb:11.8
+    profiles: ["mariadb"]
+    environment:
+      MARIADB_ROOT_PASSWORD: marko
+      MARIADB_DATABASE: marko_test
+    ports:
+      - "${MARIADB_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
       timeout: 5s
       retries: 30
