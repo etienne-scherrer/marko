@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\UrlGeneratorInterface;
 use Marko\Testing\Fake\FakeConfigRepository;
+use Marko\View\CacheDirectoryGuard;
+use Marko\View\Exceptions\InsecureCacheDirectoryException;
 use Marko\View\Twig\TwigEngineFactory;
 use Marko\View\Twig\TwigViewConfig;
 use Twig\Environment;
@@ -25,7 +28,11 @@ function makeTwigViewConfig(array $overrides = []): TwigViewConfig
 
 describe('TwigEngineFactory', function (): void {
     test('it returns a Twig Environment instance', function (): void {
-        $factory = new TwigEngineFactory(makeTwigViewConfig(), $this->createStub(UrlGeneratorInterface::class));
+        $factory = new TwigEngineFactory(
+            makeTwigViewConfig(),
+            $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
+        );
 
         expect($factory->create())->toBeInstanceOf(Environment::class);
     });
@@ -35,6 +42,7 @@ describe('TwigEngineFactory', function (): void {
         $factory = new TwigEngineFactory(
             makeTwigViewConfig(['view.cache_directory' => $cacheDir]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
 
         expect($factory->create()->getCache())->toBe($cacheDir);
@@ -44,10 +52,12 @@ describe('TwigEngineFactory', function (): void {
         $factoryTrue = new TwigEngineFactory(
             makeTwigViewConfig(['view.auto_refresh' => true]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $factoryFalse = new TwigEngineFactory(
             makeTwigViewConfig(['view.auto_refresh' => false]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
 
         expect($factoryTrue->create()->isAutoReload())->toBeTrue()
@@ -58,10 +68,12 @@ describe('TwigEngineFactory', function (): void {
         $factoryTrue = new TwigEngineFactory(
             makeTwigViewConfig(['view.strict_variables' => true]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $factoryFalse = new TwigEngineFactory(
             makeTwigViewConfig(['view.strict_variables' => false]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
 
         expect($factoryTrue->create()->isStrictVariables())->toBeTrue()
@@ -72,6 +84,7 @@ describe('TwigEngineFactory', function (): void {
         $factory = new TwigEngineFactory(
             makeTwigViewConfig(['view.autoescape' => 'js']),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $env = $factory->create();
 
@@ -83,10 +96,12 @@ describe('TwigEngineFactory', function (): void {
         $factoryTrue = new TwigEngineFactory(
             makeTwigViewConfig(['view.debug' => true]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $factoryFalse = new TwigEngineFactory(
             makeTwigViewConfig(['view.debug' => false]),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
 
         expect($factoryTrue->create()->isDebug())->toBeTrue()
@@ -97,8 +112,50 @@ describe('TwigEngineFactory', function (): void {
         $factory = new TwigEngineFactory(
             makeTwigViewConfig(['view.charset' => 'ISO-8859-1']),
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
 
         expect($factory->create()->getCharset())->toBe('ISO-8859-1');
+    });
+});
+
+describe('TwigEngineFactory cache directory hardening', function (): void {
+    beforeEach(function (): void {
+        $this->base = sys_get_temp_dir() . '/marko-twig-base-' . bin2hex(random_bytes(8));
+        mkdir($this->base, 0o700);
+    });
+
+    afterEach(function (): void {
+        foreach (array_reverse(glob($this->base . '/{,*/,*/*/}*', GLOB_BRACE | GLOB_MARK)) as $path) {
+            str_ends_with($path, '/') ? rmdir($path) : unlink($path);
+        }
+
+        rmdir($this->base);
+    });
+
+    test('it resolves the default storage/views cache directory under the project base path', function (): void {
+        $factory = new TwigEngineFactory(
+            makeTwigViewConfig(['view.cache_directory' => 'storage/views']),
+            $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths($this->base)),
+        );
+
+        expect($factory->create()->getCache())->toBe($this->base . '/storage/views')
+            ->and(fileperms($this->base . '/storage/views') & 0o777)->toBe(0o700);
+    });
+
+    test('it refuses a world-writable cache directory', function (): void {
+        $shared = $this->base . '/views';
+        mkdir($shared);
+        chmod($shared, 0o777);
+
+        $factory = new TwigEngineFactory(
+            makeTwigViewConfig(['view.cache_directory' => $shared]),
+            $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths($this->base)),
+        );
+
+        expect(fn (): Environment => $factory->create())
+            ->toThrow(InsecureCacheDirectoryException::class, 'world-writable');
     });
 });
