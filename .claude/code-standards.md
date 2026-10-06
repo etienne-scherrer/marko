@@ -418,7 +418,7 @@ return $this->config->getInt('blog.posts_per_page', 10);
 ### Environment Variables in Config Files Only
 `$_ENV` should only be referenced in `config/*.php` files, never in application code.
 
-In config files, read environment variables through `Marko\Config\Env`, never with casts, `filter_var()` or the global `env()` helper. `Env` throws `ConfigException` naming the variable when a value doesn't parse, so a typo fails the boot instead of becoming `0`, `false` or `true`.
+In config files, read environment variables through `Marko\Config\Env`, never with casts or `filter_var()`. The global `env()` helper no longer exists (removed in 0.9.0). `Env` throws `ConfigException` naming the variable when a value doesn't parse, so a typo fails the boot instead of becoming `0`, `false` or `true`.
 
 ```php
 // CORRECT
