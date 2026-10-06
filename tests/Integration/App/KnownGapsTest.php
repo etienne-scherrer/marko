@@ -130,11 +130,3 @@ it('answers a missing entity with 404')
 
 it('answers a CSRF failure with 419')
     ->todo(note: 'A state-changing request with a missing or wrong CSRF token must return 419.', issue: 169);
-
-// #173 Route and module discovery cache
-it('routes identically with the discovery cache warm and cold')
-    ->todo(
-        note: 'Every fixture route must return the same status and body with the route and module cache built as '
-            . 'without it.',
-        issue: 173,
-    );

@@ -406,6 +406,8 @@ Module configuration is split between two files with clear responsibilities:
 - `bindings` - Interface → implementation mappings
 - `singletons` - Shared instances (see Dependency Injection section)
 - `boot` - Closure that runs after all bindings are registered (receives the Container)
+- `globalMiddleware` - Global HTTP middleware classes
+- `discovery` - Discovery cache contributors (`DiscoveryCacheContributorInterface`) that store this package's own discovery results in the discovery cache
 
 This split keeps standard PHP metadata in the standard location (composer.json) while Marko-specific config lives in module.php. A minimal module only needs a composer.json with a `name` field.
 
@@ -1195,6 +1197,8 @@ Every Marko application starts with `vendor/marko/core/bootstrap.php`. This is t
 6. **Sort**: Topological sort determines load order
 7. **Boot**: Modules are loaded in order, bindings registered
 8. **Ready**: Container is ready, application can handle requests
+
+Outside development, `marko discovery:cache` compiles steps 3-6 plus attribute, route, global middleware and entity discovery into `storage/cache/discovery.php`. A boot from that cache scans nothing: it requires each cached module's `module.php` (closures stay live) and hydrates everything else. Packages add their own sections through `DiscoveryCacheContributorInterface` (declared under `discovery` in `module.php`). A fingerprint of `vendor/composer/installed.json` and the `modules/`/`app/` module directories makes a stale cache fail loudly; it is never rebuilt silently.
 
 ### Web Entry Point
 
