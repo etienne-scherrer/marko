@@ -8,12 +8,40 @@ use Marko\Mail\Exceptions\MessageException;
 
 readonly class Attachment
 {
+    /**
+     * RFC 2045 `type/subtype`, each side an RFC 2045 token (no parameters).
+     */
+    private const string MIME_TYPE_PATTERN = '~^[!#$%&\'*+\-.^_`|\~0-9A-Za-z]+/[!#$%&\'*+\-.^_`|\~0-9A-Za-z]+$~';
+
+    /**
+     * RFC 5322 msg-id characters: atext plus "." and "@" (the angle brackets are added on render).
+     */
+    private const string CONTENT_ID_PATTERN = '~^[!#$%&\'*+\-/=?^_`{|}\~.@0-9A-Za-z]+$~';
+
+    /**
+     * @throws MessageException
+     */
     private function __construct(
         public string $content,
         public string $name,
         public string $mimeType,
         public ?string $contentId = null,
-    ) {}
+    ) {
+        self::assertNoHeaderBreak('attachment name', $name);
+        self::assertNoHeaderBreak('attachment mime type', $mimeType);
+
+        if (!preg_match(self::MIME_TYPE_PATTERN, $mimeType)) {
+            throw MessageException::invalidAttachmentMimeType($mimeType);
+        }
+
+        if ($contentId !== null) {
+            self::assertNoHeaderBreak('attachment content ID', $contentId);
+
+            if (!preg_match(self::CONTENT_ID_PATTERN, $contentId)) {
+                throw MessageException::invalidAttachmentContentId($contentId);
+            }
+        }
+    }
 
     /**
      * @throws MessageException
@@ -34,6 +62,9 @@ readonly class Attachment
         );
     }
 
+    /**
+     * @throws MessageException
+     */
     public static function fromContent(
         string $content,
         string $name,
@@ -65,5 +96,17 @@ readonly class Attachment
             mimeType: $mimeType ?? mime_content_type($path) ?: 'application/octet-stream',
             contentId: $contentId,
         );
+    }
+
+    /**
+     * @throws MessageException
+     */
+    private static function assertNoHeaderBreak(
+        string $field,
+        string $value,
+    ): void {
+        if (strpbrk($value, "\r\n\0") !== false) {
+            throw MessageException::headerInjection($field, $value);
+        }
     }
 }

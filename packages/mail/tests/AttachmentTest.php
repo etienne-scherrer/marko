@@ -195,4 +195,95 @@ describe('Attachment', function (): void {
         expect(fn () => Attachment::inline('/nonexistent/file.png', 'id'))
             ->toThrow(MessageException::class, "Attachment file not found: '/nonexistent/file.png'");
     });
+
+    it('rejects CR, LF or NUL in the attachment name', function (string $name): void {
+        expect(fn () => Attachment::fromContent('data', $name))
+            ->toThrow(MessageException::class, 'Header injection attempt detected in attachment name');
+    })->with([
+        'carriage return' => ["file\r.txt"],
+        'line feed' => ["file\nContent-Type: text/html.txt"],
+        'NUL byte' => ["file\0.txt"],
+        'bare-LF dot sequence' => ["a\n.\r\nMAIL FROM:<evil@example.com>"],
+    ]);
+
+    it('rejects CR, LF or NUL in the mime type', function (string $mimeType): void {
+        expect(fn () => Attachment::fromContent('data', 'file.txt', $mimeType))
+            ->toThrow(MessageException::class, 'Header injection attempt detected in attachment mime type');
+    })->with([
+        'carriage return' => ["text/plain\r"],
+        'line feed' => ["text/plain\nX-Injected: yes"],
+        'NUL byte' => ["text/plain\0"],
+    ]);
+
+    it('rejects a mime type that is not a type/subtype token pair', function (string $mimeType): void {
+        expect(fn () => Attachment::fromContent('data', 'file.txt', $mimeType))
+            ->toThrow(MessageException::class, "Invalid attachment mime type: '$mimeType'");
+    })->with([
+        'no subtype' => ['text'],
+        'empty' => [''],
+        'with parameters' => ['text/plain; charset=UTF-8'],
+        'quote' => ['text/"html'],
+        'space' => ['text/ html'],
+        'extra slash' => ['text/plain/html'],
+    ]);
+
+    it('accepts valid mime types', function (string $mimeType): void {
+        expect(Attachment::fromContent('data', 'file.bin', $mimeType)->mimeType)->toBe($mimeType);
+    })->with([
+        ['application/octet-stream'],
+        ['image/svg+xml'],
+        ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        ['application/x-www-form-urlencoded'],
+    ]);
+
+    it('rejects CR, LF or NUL in the content ID', function (string $contentId): void {
+        $testFile = sys_get_temp_dir() . '/inline-cid-crlf.png';
+        file_put_contents($testFile, 'png');
+
+        try {
+            expect(fn () => Attachment::inline($testFile, $contentId))
+                ->toThrow(MessageException::class, 'Header injection attempt detected in attachment content ID');
+        } finally {
+            unlink($testFile);
+        }
+    })->with([
+        'carriage return' => ["logo\r"],
+        'line feed' => ["logo>\nX-Injected: yes"],
+        'NUL byte' => ["logo\0"],
+    ]);
+
+    it('rejects a content ID outside the RFC 5322 msg-id charset', function (string $contentId): void {
+        $testFile = sys_get_temp_dir() . '/inline-cid-charset.png';
+        file_put_contents($testFile, 'png');
+
+        try {
+            expect(fn () => Attachment::inline($testFile, $contentId))
+                ->toThrow(MessageException::class, "Invalid attachment content ID: '$contentId'");
+        } finally {
+            unlink($testFile);
+        }
+    })->with([
+        'empty' => [''],
+        'angle bracket' => ['logo>'],
+        'space' => ['my logo'],
+        'quote' => ['logo"'],
+        'semicolon' => ['logo;x'],
+        'non-ASCII' => ['logö'],
+    ]);
+
+    it('accepts content IDs in the RFC 5322 msg-id charset', function (string $contentId): void {
+        $testFile = sys_get_temp_dir() . '/inline-cid-valid.png';
+        file_put_contents($testFile, 'png');
+
+        try {
+            expect(Attachment::inline($testFile, $contentId)->contentId)->toBe($contentId);
+        } finally {
+            unlink($testFile);
+        }
+    })->with([
+        ['logo'],
+        ['logo.v2-2024'],
+        ['part1.abc123@example.com'],
+        ["a!#$%&'*+/=?^_`{|}~b"],
+    ]);
 });
