@@ -24,9 +24,11 @@ describe('DecryptionException', function (): void {
         $exception = DecryptionException::invalidKey();
 
         expect($exception->getMessage())->toBe('The encryption key is invalid or does not match')
-            ->and($exception->getContext())->toBe('Decrypting data with a different key than was used for encryption')
+            ->and($exception->getContext())->toBe(
+                'Decrypting data with a different key, or different associated data, than was used for encryption',
+            )
             ->and($exception->getSuggestion())->toBe(
-                'Ensure the same ENCRYPTION_KEY is used for both encryption and decryption',
+                'Ensure the same ENCRYPTION_KEY (or a key listed in encryption.previous_keys) and the same associated data are used for both encryption and decryption',
             );
     });
 
