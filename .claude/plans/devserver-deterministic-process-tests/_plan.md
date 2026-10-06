@@ -29,7 +29,7 @@ Closes #219
 
 ### Out of Scope
 - Changing `dev:down` / `PidFile::killProcessGroup()` (detached processes)
-- Removing the fixed sleeps from other devserver test files or production `start()`/`startDetached()`
+- Removing the fixed sleeps from other devserver test files or production `startDetached()` (`start()`'s probe became a polling window in task 004 after the stress run exposed it)
 
 ## Success Criteria
 - [ ] No fixed `usleep()`/`sleep()` waits remain in `ProcessManagerTest.php`
@@ -45,6 +45,7 @@ Closes #219
 | 001 | Polling test helper + bounded, escalating ProcessManager::stop() | - | completed |
 | 002 | Replace fixed sleeps in ProcessManagerTest with polling | 001 | completed |
 | 003 | Document stop semantics | 001 | completed |
+| 004 | Polling start() probe (found by stress run) | 001 | completed |
 
 ## Architecture Notes
 - The process group id equals the leader PID because the wrapper calls `posix_setsid()` before `pcntl_exec()`.
