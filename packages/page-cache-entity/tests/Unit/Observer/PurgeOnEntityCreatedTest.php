@@ -18,8 +18,10 @@ it('invokes IdentityPurger from PurgeOnEntityCreated when EntityCreated is dispa
         /** @var array<string> */
         public array $purgedTags = [];
 
-        public function lookup(Request $request): ?Response
-        {
+        public function lookup(
+            Request $request,
+            array $queryParams,
+        ): ?Response {
             return null;
         }
 
