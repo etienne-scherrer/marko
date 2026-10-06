@@ -90,7 +90,9 @@ it('routes a request through the global session middleware and persists the sess
     $first = $this->app->router->handle(integrationRequest('GET', '/visits'));
     $sessionId = integrationCookieValue($first, 'marko_session');
 
-    $second = $this->app->router->handle(integrationRequest('GET', '/visits', cookies: ['marko_session' => (string) $sessionId]));
+    $second = $this->app->router->handle(
+        integrationRequest('GET', '/visits', cookies: ['marko_session' => (string) $sessionId]),
+    );
     $rows = $this->app->container->get(ConnectionInterface::class)->query(
         'SELECT id FROM sessions WHERE id = ?',
         [(string) $sessionId],
@@ -178,3 +180,36 @@ it('enforces #[Can] globally: 401 for a guest, 403 for a user without the abilit
         ->and($denied->statusCode())->toBe(403)
         ->and($denied->body())->not->toContain('admin area');
 })->issue(167);
+
+it('answers an OPTIONS preflight through the CORS middleware', function (): void {
+    $response = $this->app->router->handle(integrationRequest('OPTIONS', '/health', server: [
+        'HTTP_ORIGIN' => 'https://app.example.test',
+        'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST',
+    ]));
+
+    expect($response->statusCode())->toBe(204)
+        ->and($response->headers()['Access-Control-Allow-Origin'])->toBe('https://app.example.test')
+        ->and($response->headers()['Access-Control-Allow-Methods'])->toBe('GET, POST')
+        ->and($response->headers()['Access-Control-Max-Age'])->toBe('600');
+})->issue(171);
+
+it('answers a wrong method with 405 and an Allow header', function (): void {
+    $response = $this->app->router->handle(integrationRequest('POST', '/health', server: [
+        'HTTP_ACCEPT' => 'application/json',
+        'HTTP_ORIGIN' => 'https://app.example.test',
+    ]));
+
+    expect($response->statusCode())->toBe(405)
+        ->and($response->headers()['Allow'])->toBe('GET, HEAD, OPTIONS')
+        ->and($response->headers()['Access-Control-Allow-Origin'])->toBe('https://app.example.test')
+        ->and(json_decode($response->body(), true))->toBe(['message' => 'Method Not Allowed']);
+})->issue(171);
+
+it('answers HEAD with the GET headers and no body', function (): void {
+    $get = $this->app->router->handle(integrationRequest('GET', '/health'));
+    $head = $this->app->router->handle(integrationRequest('HEAD', '/health'));
+
+    expect($head->statusCode())->toBe($get->statusCode())
+        ->and($head->body())->toBe('')
+        ->and($get->body())->not->toBe('');
+})->issue(171);

@@ -13,7 +13,7 @@ return new class () extends Migration
         $this->execute($connection, <<<'SQL'
             CREATE TABLE authors (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
+                name VARCHAR(255) NOT NULL DEFAULT ''
             )
             SQL);
     }

@@ -210,6 +210,8 @@ class AttributeParser
             'Marko\Routing\Attributes\Put' => 'PUT',
             'Marko\Routing\Attributes\Patch' => 'PATCH',
             'Marko\Routing\Attributes\Delete' => 'DELETE',
+            'Marko\Routing\Attributes\Head' => 'HEAD',
+            'Marko\Routing\Attributes\Options' => 'OPTIONS',
         ];
 
         foreach ($this->phpFiles($module) as $file) {

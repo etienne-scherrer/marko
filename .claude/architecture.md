@@ -877,8 +877,14 @@ Routes are defined via attributes on controller methods. No separate route files
 - `#[Put(path)]` - PUT request
 - `#[Patch(path)]` - PATCH request
 - `#[Delete(path)]` - DELETE request
+- `#[Head(path)]` - HEAD request (optional: HEAD falls back to the GET route, body removed)
+- `#[Options(path)]` - OPTIONS request (optional: OPTIONS is answered automatically with 204 and `Allow`)
 
 Each attribute accepts a path and optional middleware array.
+
+### Route Precedence and Unmatched Requests
+
+Match order never depends on registration order: static paths first, then dynamic paths by more static segments, then longer static prefix, then registration order. A request that matches no route still runs through global middleware and gets a 404, or a 405 with `Allow` when another method matches the path.
 
 ### Route Parameters
 

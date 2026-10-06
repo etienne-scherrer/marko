@@ -131,16 +131,6 @@ it('answers a missing entity with 404')
 it('answers a CSRF failure with 419')
     ->todo(note: 'A state-changing request with a missing or wrong CSRF token must return 419.', issue: 169);
 
-// #171 Router precedence, 405, HEAD, OPTIONS
-it('answers an OPTIONS preflight through the CORS middleware')
-    ->todo(
-        note: 'OPTIONS /health with Origin and Access-Control-Request-Method must get the CORS headers.',
-        issue: 171
-    );
-
-it('answers a wrong method with 405 and an Allow header')
-    ->todo(note: 'POST /health must return 405 with "Allow: GET, HEAD", not 404.', issue: 171);
-
 // #173 Route and module discovery cache
 it('routes identically with the discovery cache warm and cold')
     ->todo(
@@ -148,4 +138,3 @@ it('routes identically with the discovery cache warm and cold')
             . 'without it.',
         issue: 173,
     );
-
