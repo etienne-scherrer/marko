@@ -9,11 +9,21 @@ use function Amp\Postgres\connect;
 use Amp\Postgres\PostgresConfig;
 
 use Amp\Postgres\PostgresConnection;
+use Marko\PubSub\Exceptions\PubSubException;
 
 class PgSqlPubSubConnection
 {
+    /**
+     * The libpq sslmode values. Only verify-full both encrypts and checks that the server certificate
+     * belongs to the host; prefer (libpq's default when unset) falls back to plain text silently.
+     */
+    public const array SSL_MODES = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
+
     private ?PostgresConnection $connection = null;
 
+    /**
+     * @throws PubSubException
+     */
     public function __construct(
         public readonly string $host = '127.0.0.1',
         public readonly int $port = 5432,
@@ -21,7 +31,12 @@ class PgSqlPubSubConnection
         public readonly ?string $password = null,
         public readonly ?string $database = null,
         public readonly string $prefix = 'marko_',
-    ) {}
+        public readonly ?string $sslMode = null,
+    ) {
+        if ($sslMode !== null && !in_array($sslMode, self::SSL_MODES, true)) {
+            throw PubSubException::invalidConnectionOption('pubsub-pgsql.sslmode', $sslMode, self::SSL_MODES);
+        }
+    }
 
     public function connection(): PostgresConnection
     {
@@ -50,6 +65,7 @@ class PgSqlPubSubConnection
             user: $this->user,
             password: $this->password,
             database: $this->database,
+            sslMode: $this->sslMode,
         );
     }
 

@@ -9,6 +9,7 @@ use Amp\Postgres\PostgresResult;
 use Amp\Postgres\PostgresStatement;
 use Amp\Postgres\PostgresTransaction;
 use Amp\Sql\SqlTransactionIsolation;
+use Marko\PubSub\Exceptions\PubSubException;
 use Marko\PubSub\PgSql\PgSqlPubSubConnection;
 
 /**
@@ -191,4 +192,39 @@ it('provides disconnect and isConnected methods', function (): void {
 
     $connection->disconnect();
     expect($connection->isConnected())->toBeFalse();
+});
+
+it('leaves sslmode unset by default', function (): void {
+    $connection = new PgSqlPubSubConnection();
+
+    expect($connection->sslMode)->toBeNull()
+        ->and(new ConfigExposingConnection()->exposeCreateConfig()->getSslMode())->toBeNull();
+});
+
+it('passes sslmode through to the PostgresConfig connection string', function (): void {
+    $connection = new class () extends PgSqlPubSubConnection
+    {
+        public function __construct()
+        {
+            parent::__construct(host: 'db.example.com', sslMode: 'verify-full');
+        }
+
+        public function exposeCreateConfig(): PostgresConfig
+        {
+            return $this->createConfig();
+        }
+    };
+
+    $config = $connection->exposeCreateConfig();
+
+    expect($config->getSslMode())->toBe('verify-full')
+        ->and($config->getConnectionString())->toContain('sslmode=verify-full');
+});
+
+it('throws a PubSubException for an unknown sslmode', function (): void {
+    expect(fn () => new PgSqlPubSubConnection(sslMode: 'verify_full'))
+        ->toThrow(
+            PubSubException::class,
+            "Invalid value 'verify_full' for pub/sub connection option 'pubsub-pgsql.sslmode'",
+        );
 });

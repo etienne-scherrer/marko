@@ -49,4 +49,21 @@ class PubSubException extends MarkoException
             suggestion: 'Use the Redis driver if you need pattern-based subscriptions',
         );
     }
+
+    /**
+     * @param list<string> $validValues
+     */
+    public static function invalidConnectionOption(
+        string $configKey,
+        string $value,
+        array $validValues,
+    ): self {
+        $valid = implode(', ', $validValues);
+
+        return new self(
+            message: "Invalid value '$value' for pub/sub connection option '$configKey'",
+            context: "While configuring the pub/sub connection from '$configKey'",
+            suggestion: "Set '$configKey' to one of: $valid",
+        );
+    }
 }
