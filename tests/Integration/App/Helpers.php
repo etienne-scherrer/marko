@@ -48,8 +48,10 @@ const INTEGRATION_MODULES = [
     'ratelimiter',
     'routing',
     'scheduler',
+    'security',
     'session',
     'session-database',
+    'validation',
 ];
 
 function integrationFixturePath(): string
@@ -375,12 +377,14 @@ function integrationCookieValue(
  *
  * @param array<string, string> $cookies
  * @param array<string, string> $server
+ * @param array<string, mixed> $post Form fields, as PHP would put them in $_POST
  */
 function integrationRequest(
     string $method,
     string $uri,
     array $cookies = [],
     array $server = [],
+    array $post = [],
 ): Request {
     return new Request(
         server: [
@@ -389,6 +393,7 @@ function integrationRequest(
             'REMOTE_ADDR' => '127.0.0.1',
             ...$server,
         ],
+        post: $post,
         cookies: $cookies,
     );
 }

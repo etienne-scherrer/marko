@@ -1,10 +1,15 @@
 # Services for the `integration-services` test group (see .claude/testing.md).
 #
-#   docker compose -f tests/Integration/compose.yml up -d
-#   DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 composer test:integration
+#   docker compose -f tests/Integration/compose.yml up -d --wait
+#   DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 \
+#   MARKO_TEST_PGSQL_HOST=127.0.0.1 MARKO_TEST_PGSQL_USERNAME=marko MARKO_TEST_PGSQL_PASSWORD=marko \
+#   MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
+#   composer test:integration
 #
-# If port 5432 or 6379 is already taken locally, start with DB_PORT=55432
-# and/or REDIS_PORT=56379 and export the same values when running the suite.
+# If port 5432, 6379 or 3306 is already taken locally, start with
+# DB_PORT=55432, REDIS_PORT=56379 and/or MYSQL_PORT=53306, and export the same
+# ports when running the suite (MARKO_TEST_PGSQL_PORT and MARKO_TEST_MYSQL_PORT
+# for the driver tests).
 name: marko-integration
 
 services:
@@ -16,11 +21,29 @@ services:
       POSTGRES_DB: marko_integration
     ports:
       - "${DB_PORT:-5432}:5432"
+    volumes:
+      # Creates marko_test for the database-pgsql driver tests. The fixture
+      # suite drops and recreates marko_integration before every case, so the
+      # driver tests must not share it.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marko -d marko_integration"]
       interval: 2s
       timeout: 5s
       retries: 15
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: marko
+      MYSQL_DATABASE: marko_test
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pmarko"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   redis:
     image: redis:7

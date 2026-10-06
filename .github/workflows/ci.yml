@@ -93,10 +93,12 @@ jobs:
       - name: PHPStan
         run: composer phpstan
 
-  # Boots the fixture app in tests/Integration/App against real Postgres and
-  # Redis (the integration-services group). MARKO_INTEGRATION_REQUIRED turns
-  # "services unreachable" into a failure, so this job can never pass by
-  # skipping every case.
+  # Runs the integration-services group against real services: the fixture app
+  # in tests/Integration/App (Postgres and Redis), the database-pgsql and
+  # database-mysql driver integration tests (MARKO_TEST_PGSQL_* and
+  # MARKO_TEST_MYSQL_*) and the live Redis tests of pubsub-redis and
+  # broadcasting-amphp. MARKO_INTEGRATION_REQUIRED turns "service unreachable
+  # or not configured" into a failure, so this job can never pass by skipping.
   integration:
     name: Integration
     runs-on: ubuntu-latest
@@ -114,6 +116,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: marko
+          MYSQL_DATABASE: marko_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmarko"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
       redis:
         image: redis:7
         ports:
@@ -131,6 +145,18 @@ jobs:
       DB_DATABASE: marko_integration
       REDIS_HOST: 127.0.0.1
       REDIS_PORT: 6379
+      # The pgsql driver tests use their own database on the same server: the
+      # fixture suite drops marko_integration before every case.
+      MARKO_TEST_PGSQL_HOST: 127.0.0.1
+      MARKO_TEST_PGSQL_PORT: 5432
+      MARKO_TEST_PGSQL_DATABASE: marko_test
+      MARKO_TEST_PGSQL_USERNAME: marko
+      MARKO_TEST_PGSQL_PASSWORD: marko
+      MARKO_TEST_MYSQL_HOST: 127.0.0.1
+      MARKO_TEST_MYSQL_PORT: 3306
+      MARKO_TEST_MYSQL_DATABASE: marko_test
+      MARKO_TEST_MYSQL_USERNAME: root
+      MARKO_TEST_MYSQL_PASSWORD: marko
       MARKO_INTEGRATION_REQUIRED: '1'
     steps:
       - name: Checkout
@@ -140,12 +166,17 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: sockets, pdo_pgsql
+          extensions: sockets, pdo_pgsql, pdo_mysql
           coverage: none
           ini-values: memory_limit=2G
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
+
+      # Service containers cannot mount tests/Integration/postgres-init, so the
+      # database the local compose file creates on startup is created here.
+      - name: Create the pgsql driver test database
+        run: docker exec ${{ job.services.postgres.id }} createdb -U marko marko_test
 
       - name: Run integration suite
         run: composer test:integration

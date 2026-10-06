@@ -38,21 +38,24 @@ it('runs tests, lint, and static analysis as separate jobs', function () use ($c
         ->toContain('composer phpstan');
 });
 
-it('runs the integration-services group in its own job against postgres and redis services', function () use ($ci): void {
-    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
-
-    expect($ci)->toContain('name: Integration')
-        ->and($job)
-        ->toContain('services:')
-        ->toContain('image: postgres:17')
-        ->toContain('image: redis:7')
-        ->toContain('- 5432:5432')
-        ->toContain('- 6379:6379')
-        ->toContain('pdo_pgsql')
-        ->toContain('DB_HOST: 127.0.0.1')
-        ->toContain('REDIS_HOST: 127.0.0.1')
-        ->toContain('run: composer test:integration');
-});
+it(
+    'runs the integration-services group in its own job against postgres and redis services',
+    function () use ($ci): void {
+        $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+    
+        expect($ci)->toContain('name: Integration')
+            ->and($job)
+            ->toContain('services:')
+            ->toContain('image: postgres:17')
+            ->toContain('image: redis:7')
+            ->toContain('- 5432:5432')
+            ->toContain('- 6379:6379')
+            ->toContain('pdo_pgsql')
+            ->toContain('DB_HOST: 127.0.0.1')
+            ->toContain('REDIS_HOST: 127.0.0.1')
+            ->toContain('run: composer test:integration');
+    }
+);
 
 it('health-checks the integration services before running the suite', function () use ($ci): void {
     $job = substr($ci, (int) strpos($ci, 'name: Integration'));
@@ -67,6 +70,68 @@ it('fails the integration job instead of skipping when services are unreachable'
     $job = substr($ci, (int) strpos($ci, 'name: Integration'));
 
     expect($job)->toContain("MARKO_INTEGRATION_REQUIRED: '1'");
+});
+
+it('runs a mysql service with a health check in the integration job', function () use ($ci): void {
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($job)
+        ->toContain('image: mysql:8.4')
+        ->toContain('- 3306:3306')
+        ->toContain('MYSQL_DATABASE: marko_test')
+        ->toContain('--health-cmd "mysqladmin ping');
+});
+
+it('installs pdo_mysql alongside pdo_pgsql in the integration job', function () use ($ci): void {
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($job)->toContain('extensions: sockets, pdo_pgsql, pdo_mysql');
+});
+
+it(
+    'points the pgsql driver integration tests at the postgres service with their own database',
+    function () use ($ci): void {
+        // The fixture suite drops marko_integration before every case, so the
+        // driver tests need a database of their own, created before the run.
+        $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+        $createdAt = strpos($job, 'createdb -U marko marko_test');
+        $suiteAt = strpos($job, 'run: composer test:integration');
+
+        expect($job)
+            ->toContain('MARKO_TEST_PGSQL_HOST: 127.0.0.1')
+            ->toContain('MARKO_TEST_PGSQL_PORT: 5432')
+            ->toContain('MARKO_TEST_PGSQL_DATABASE: marko_test')
+            ->toContain('MARKO_TEST_PGSQL_USERNAME: marko')
+            ->toContain('MARKO_TEST_PGSQL_PASSWORD: marko')
+            ->and($createdAt)->not->toBeFalse()
+            ->and($createdAt)->toBeLessThan($suiteAt);
+    },
+);
+
+it('points the mysql driver integration tests at the mysql service', function () use ($ci): void {
+    $job = substr($ci, (int) strpos($ci, 'name: Integration'));
+
+    expect($job)
+        ->toContain('MARKO_TEST_MYSQL_HOST: 127.0.0.1')
+        ->toContain('MARKO_TEST_MYSQL_PORT: 3306')
+        ->toContain('MARKO_TEST_MYSQL_DATABASE: marko_test')
+        ->toContain('MARKO_TEST_MYSQL_USERNAME: root')
+        ->toContain('MARKO_TEST_MYSQL_PASSWORD: marko');
+});
+
+it('defines every integration service in the local compose file', function (): void {
+    $compose = (string) file_get_contents(dirname(__DIR__) . '/tests/Integration/compose.yml');
+    $init = (string) file_get_contents(
+        dirname(__DIR__) . '/tests/Integration/postgres-init/01-create-driver-test-database.sql',
+    );
+
+    expect($compose)
+        ->toContain('image: postgres:17')
+        ->toContain('image: mysql:8.4')
+        ->toContain('image: redis:7')
+        ->toContain('MYSQL_DATABASE: marko_test')
+        ->toContain('./postgres-init:/docker-entrypoint-initdb.d')
+        ->and($init)->toContain('CREATE DATABASE marko_test');
 });
 
 it('exposes a composer test:integration script scoped to the integration-services group', function (): void {

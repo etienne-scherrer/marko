@@ -8,8 +8,8 @@ use Marko\Queue\Job;
 
 /**
  * serialize() writes a private property's name as "\0ClassName\0property",
- * so this job's payload contains NUL bytes that a Postgres TEXT column
- * rejects (#161).
+ * so this job's serialized form contains NUL bytes, which a Postgres TEXT
+ * column cannot store. The queue must still round-trip it (#161).
  */
 class PrivatePropertyJob extends Job
 {

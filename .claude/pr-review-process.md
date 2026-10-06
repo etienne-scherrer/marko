@@ -46,6 +46,7 @@ composer test                                              # full suite (exclude
 ./vendor/bin/phpcs --standard=phpcs.xml packages/<name>/   # phpcs
 ./vendor/bin/php-cs-fixer fix packages/<name>/ --dry-run   # cs-fixer
 composer phpstan                                           # static analysis
+composer test:integration                                  # real Postgres/MySQL/Redis (see .claude/testing.md)
 ```
 
 All tests must pass, lint must be clean, and **PHPStan must report zero errors**. Fix ALL lint errors in touched files before merging, including pre-existing ones.
@@ -53,6 +54,8 @@ All tests must pass, lint must be clean, and **PHPStan must report zero errors**
 **PHPStan is not optional and is not covered by `composer test`.** It went unrun for months precisely because this checklist omitted it, and `packages/core` accumulated 12 errors through normal PR review — type-level drift that PHP tolerates at runtime, so no test could have caught it. `composer ci` runs the whole gate in one command; prefer it.
 
 **The `CI` workflow gates every PR.** `gh pr checks <N>` reports `Tests`, `Lint`, and `Static analysis`. A red check blocks the merge — `develop` is never allowed to carry a failing test, lint error, or PHPStan error. The `integration-destructive` group is excluded from the gate (it deletes `vendor/`, runs `composer update`, and re-runs the suite in a subprocess); it runs on the `Nightly` schedule and again inside `bin/release.sh` before any tag is cut.
+
+**The `Integration` job runs on every PR too.** It runs the `integration-services` group (`composer test:integration`) against real Postgres, MySQL and Redis: the fixture app in `tests/Integration/App`, the `database-pgsql` and `database-mysql` driver integration tests, and the live Redis tests. `MARKO_INTEGRATION_REQUIRED=1` makes an unreachable or unconfigured service a failure, so it cannot pass by skipping. It is not yet a required status check on `develop` (making it one is a maintainer decision tracked in #226), so `gh pr checks <N>` will not block on it by itself: treat a red `Integration` run as blocking anyway, and don't merge until it is green.
 
 ## 5. Review the code
 
@@ -246,7 +249,7 @@ Before merging any package PR:
 - [ ] `./vendor/bin/phpcs` clean on touched files
 - [ ] `./vendor/bin/php-cs-fixer fix --dry-run` clean on touched files
 - [ ] `composer phpstan` reports zero errors
-- [ ] `gh pr checks <N>` green — `Tests`, `Lint`, `Static analysis` all passing
+- [ ] `gh pr checks <N>` green — `Tests`, `Lint`, `Static analysis` all passing, and `Integration` too (not yet a required check, but still blocking)
 - [ ] New code has corresponding tests
 - [ ] No hardcoded paths or environment-specific values
 - [ ] No `final` classes (including exceptions)
