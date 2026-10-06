@@ -29,4 +29,24 @@ describe('DecryptionException', function (): void {
                 'Ensure the same ENCRYPTION_KEY is used for both encryption and decryption',
             );
     });
+
+    it('creates invalidTagLength exception naming the expected and actual lengths', function (): void {
+        $exception = DecryptionException::invalidTagLength(1, 16);
+
+        expect($exception->getMessage())->toBe('Authentication tag must be 16 bytes, got 1')
+            ->and($exception->getContext())->toBe('Decrypting data that may be corrupted or tampered with')
+            ->and($exception->getSuggestion())->toBe(
+                'Verify the data has not been modified after encryption; truncated tags are rejected to prevent forgery',
+            );
+    });
+
+    it('creates invalidIvLength exception naming the expected and actual lengths', function (): void {
+        $exception = DecryptionException::invalidIvLength(8, 12);
+
+        expect($exception->getMessage())->toBe('Initialization vector must be 12 bytes, got 8')
+            ->and($exception->getContext())->toBe('Decrypting data that may be corrupted or tampered with')
+            ->and($exception->getSuggestion())->toBe(
+                'Verify the data has not been modified after encryption and was encrypted with the same cipher',
+            );
+    });
 });
