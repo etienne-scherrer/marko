@@ -62,8 +62,13 @@ it('refreshes last activity of a resumed session that the request did not modify
     );
     $payloadBefore = $connection->query('SELECT payload FROM sessions WHERE id = ?', [$sessionId]);
 
+    // A browser replays every cookie the first response set, including the
+    // XSRF-TOKEN cookie marko/security mirrors from the session.
     $second = $this->app->router->handle(
-        integrationRequest('GET', '/health', cookies: ['marko_session' => $sessionId]),
+        integrationRequest('GET', '/health', cookies: [
+            'marko_session' => $sessionId,
+            'XSRF-TOKEN' => (string) integrationCookieValue($first, 'XSRF-TOKEN'),
+        ]),
     );
     $row = $connection->query('SELECT payload, last_activity FROM sessions WHERE id = ?', [$sessionId]);
 

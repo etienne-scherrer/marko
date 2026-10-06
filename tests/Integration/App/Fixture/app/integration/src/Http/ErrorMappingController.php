@@ -7,11 +7,9 @@ namespace Marko\Integration\Fixture\Http;
 use Marko\Database\Exceptions\RepositoryException;
 use Marko\Integration\Fixture\Repository\AuthorRepository;
 use Marko\Routing\Attributes\Get;
-use Marko\Routing\Attributes\Middleware;
 use Marko\Routing\Attributes\Post;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
-use Marko\Security\Middleware\CsrfMiddleware;
 use Marko\Validation\Contracts\ValidatorInterface;
 use Marko\Validation\Exceptions\ValidationException;
 
@@ -56,10 +54,9 @@ readonly class ErrorMappingController
 
     /**
      * A state-changing request without a valid CSRF token throws
-     * CsrfTokenMismatchException in the middleware: 419.
+     * CsrfTokenMismatchException in the global CsrfMiddleware: 419.
      */
     #[Post('/csrf-protected')]
-    #[Middleware(CsrfMiddleware::class)]
     public function csrfProtected(): Response
     {
         return new Response('csrf ok');

@@ -20,11 +20,18 @@ afterEach(fn () => tearDownIntegrationTest($this));
 const ERROR_MAPPING_JSON = ['HTTP_ACCEPT' => 'application/json'];
 
 it('answers a validation failure with a 422 JSON response', function (): void {
+    // The global CsrfMiddleware guards POST /authors: start a session, then
+    // echo the XSRF-TOKEN cookie it issues as an SPA client would.
+    $session = $this->app->router->handle(integrationRequest('GET', '/visits'));
+    $token = (string) integrationCookieValue($session, 'XSRF-TOKEN');
+    $cookies = ['marko_session' => (string) integrationCookieValue($session, 'marko_session'), 'XSRF-TOKEN' => $token];
+    $server = [...ERROR_MAPPING_JSON, 'HTTP_X_XSRF_TOKEN' => $token];
+
     $invalid = $this->app->router->handle(
-        integrationRequest('POST', '/authors', server: ERROR_MAPPING_JSON, post: ['name' => 'Al']),
+        integrationRequest('POST', '/authors', cookies: $cookies, server: $server, post: ['name' => 'Al']),
     );
     $valid = $this->app->router->handle(
-        integrationRequest('POST', '/authors', server: ERROR_MAPPING_JSON, post: ['name' => 'Alice']),
+        integrationRequest('POST', '/authors', cookies: $cookies, server: $server, post: ['name' => 'Alice']),
     );
     $body = json_decode($invalid->body(), true);
 
