@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Marko\Validation\Validation;
 
 use InvalidArgumentException;
+use Marko\Validation\Contracts\NumericAwareRuleInterface;
 use Marko\Validation\Contracts\RuleInterface;
 use Marko\Validation\Rules\Alpha;
 use Marko\Validation\Rules\AlphaNumeric;
@@ -47,14 +48,42 @@ class RuleParser
         }
 
         if (is_string($rules)) {
-            return $this->parseString($rules);
+            return $this->applyNumericMode($this->parseString($rules));
         }
 
         if (is_array($rules)) {
-            return $this->parseArray($rules);
+            return $this->applyNumericMode($this->parseArray($rules));
         }
 
         return [];
+    }
+
+    /**
+     * Size rules compare numeric strings by value only when the field is declared numeric;
+     * otherwise `string|min:8` would accept the password `"9"`.
+     *
+     * @param array<RuleInterface> $rules
+     *
+     * @return array<RuleInterface>
+     */
+    private function applyNumericMode(
+        array $rules,
+    ): array {
+        $isNumeric = array_any(
+            $rules,
+            static fn (RuleInterface $rule): bool => $rule instanceof Numeric || $rule instanceof Integer,
+        );
+
+        if (!$isNumeric) {
+            return $rules;
+        }
+
+        return array_map(
+            static fn (RuleInterface $rule): RuleInterface => $rule instanceof NumericAwareRuleInterface
+                ? $rule->asNumeric()
+                : $rule,
+            $rules,
+        );
     }
 
     /**
@@ -133,7 +162,7 @@ class RuleParser
         return match ($name) {
             'required' => new Required(),
             'email' => new Email(),
-            'url' => new Url(),
+            'url' => new Url(...array_map(strval(...), $params)),
             'numeric' => new Numeric(),
             'integer' => new Integer(),
             'string' => new StringType(),

@@ -106,9 +106,9 @@ it('returns correct message for number', function () {
 });
 
 it(
-    'compares numerically for the between rule on a numeric string and keeps length mode for non-numeric strings',
+    'compares numerically for the between rule on a numeric string in numeric mode and keeps length mode for non-numeric strings',
     function () {
-        $numericRule = new Between(18, 65);
+        $numericRule = new Between(18, 65, numeric: true);
 
         expect($numericRule->passes('age', '25', []))->toBeTrue()
             ->and($numericRule->passes('age', '17', []))->toBeFalse()
@@ -120,3 +120,11 @@ it(
             ->and($stringRule->passes('name', 'ab', []))->toBeFalse();
     },
 );
+
+it('measures a numeric string by length when not in numeric mode', function (): void {
+    $rule = new Between(1, 3);
+
+    expect($rule->passes('code', ' 1e3', []))->toBeFalse()
+        ->and($rule->passes('code', '500', []))->toBeTrue()
+        ->and($rule->message('code', ' 1e3'))->toBe('The code field must be between 1 and 3 characters.');
+});
