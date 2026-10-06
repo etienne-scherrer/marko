@@ -8,6 +8,7 @@ use Marko\Broadcasting\Attributes\BroadcastChannel;
 use Marko\Broadcasting\ChannelAuthorizerInterface;
 use Marko\Broadcasting\ChannelDefinition;
 use Marko\Broadcasting\Exceptions\ChannelAuthorizationException;
+use Marko\Broadcasting\PresenceChannelAuthorizerInterface;
 use Marko\Core\Discovery\ClassFileParser;
 use Marko\Core\Module\ModuleRepositoryInterface;
 use ReflectionClass;
@@ -80,11 +81,13 @@ readonly class BroadcastChannelDiscovery
             return null;
         }
 
-        if (!$reflection->implementsInterface(ChannelAuthorizerInterface::class)) {
+        if (!$reflection->implementsInterface(ChannelAuthorizerInterface::class)
+            && !$reflection->implementsInterface(PresenceChannelAuthorizerInterface::class)
+        ) {
             throw ChannelAuthorizationException::notAnAuthorizer($className);
         }
 
-        /** @var class-string<ChannelAuthorizerInterface> $className */
+        /** @var class-string<ChannelAuthorizerInterface|PresenceChannelAuthorizerInterface> $className */
         return new ChannelDefinition(
             pattern: $attributes[0]->newInstance()->pattern,
             authorizerClass: $className,

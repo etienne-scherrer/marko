@@ -36,4 +36,9 @@ readonly class Channel
     {
         return false;
     }
+
+    public function isPresence(): bool
+    {
+        return false;
+    }
 }

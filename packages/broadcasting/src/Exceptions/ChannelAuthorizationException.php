@@ -17,12 +17,45 @@ class ChannelAuthorizationException extends BroadcastException
         );
     }
 
+    public static function unknownPresenceChannel(string $channelName): self
+    {
+        return new self(
+            message: "No authorizer is registered for presence channel '$channelName'.",
+            context: "While authorizing a subscription to presence channel '$channelName'",
+            suggestion: "Create a class implementing PresenceChannelAuthorizerInterface and mark it with #[BroadcastChannel('...')] "
+                . 'using a pattern that matches this channel (placeholders like {id} match one dot-separated segment). '
+                . 'Presence channels are never allowed by default.',
+        );
+    }
+
+    public static function presenceAuthorizerRequired(
+        string $channelName,
+        string $authorizerClass,
+    ): self {
+        return new self(
+            message: "Authorizer '$authorizerClass' matches presence channel '$channelName' but does not implement PresenceChannelAuthorizerInterface.",
+            context: "While authorizing a subscription to presence channel '$channelName'",
+            suggestion: "Implement PresenceChannelAuthorizerInterface on $authorizerClass so authorize() returns a PresenceMember (or null to deny).",
+        );
+    }
+
+    public static function privateAuthorizerRequired(
+        string $channelName,
+        string $authorizerClass,
+    ): self {
+        return new self(
+            message: "Authorizer '$authorizerClass' matches private channel '$channelName' but implements PresenceChannelAuthorizerInterface.",
+            context: "While authorizing a subscription to private channel '$channelName'",
+            suggestion: "Private channels need a ChannelAuthorizerInterface implementation that returns a bool. $authorizerClass serves presence channels only.",
+        );
+    }
+
     public static function notAnAuthorizer(string $className): self
     {
         return new self(
-            message: "Class '$className' has #[BroadcastChannel] but must implement ChannelAuthorizerInterface.",
+            message: "Class '$className' has #[BroadcastChannel] but must implement ChannelAuthorizerInterface or PresenceChannelAuthorizerInterface.",
             context: 'While discovering #[BroadcastChannel] authorizers',
-            suggestion: "Add 'implements ChannelAuthorizerInterface' to $className and implement authorize().",
+            suggestion: "Add 'implements ChannelAuthorizerInterface' (private channels) or 'implements PresenceChannelAuthorizerInterface' (presence channels) to $className and implement authorize().",
         );
     }
 
