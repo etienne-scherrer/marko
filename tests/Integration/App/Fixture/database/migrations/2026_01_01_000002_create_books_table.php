@@ -13,8 +13,8 @@ return new class () extends Migration
         $this->execute($connection, <<<'SQL'
             CREATE TABLE books (
                 id SERIAL PRIMARY KEY,
-                author_id INTEGER NOT NULL,
-                title VARCHAR(255) NOT NULL
+                author_id INTEGER NOT NULL DEFAULT 0,
+                title VARCHAR(255) NOT NULL DEFAULT ''
             )
             SQL);
     }

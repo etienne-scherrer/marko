@@ -88,6 +88,7 @@ it('round-trips an entity partial index through db:migrate on postgres', functio
         ->and($indexes)->toHaveKey('books_titled_idx')
         ->and($indexes['books_titled_idx'])->toContain('WHERE')
         ->and($second['exitCode'])->toBe(0, $second['output'])
+        ->and($second['output'])->not->toContain('Generated:')
         ->and($second['output'])->toContain('Nothing to migrate.')
         ->and(integrationMigrationFiles($this->project))->toBe($filesAfterFirst);
 })->issue(170);
