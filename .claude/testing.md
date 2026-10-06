@@ -88,6 +88,7 @@ Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `m
 | `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
 | `tests/Integration/App/BootTest.php`, `ServicesTest.php` | Cases that pass today |
 | `tests/Integration/App/KnownGapsTest.php` | Known-broken behaviour as `->todo()` tests, one per owning ticket |
+| `tests/Integration/App/DatabaseTestingFixture/` | A second, smaller fixture for `RefreshDatabaseTest` and `TruncateDatabaseTest`. `databaseTestingProject()` builds it once per process with its own `_dbtesting` database, because `TestDatabase` boots and migrates once and keeps its connection open |
 | `tests/Integration/compose.yml` | Postgres 17 and Redis 7 for local runs |
 
 Each test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`).
