@@ -15,7 +15,8 @@ use RuntimeException;
 
 /**
  * Remember-me and the authentication events through the default (session)
- * guard (#168). GET keeps the CSRF middleware out of the way.
+ * guard (#168), and the bearer-token guard (#232). GET keeps the CSRF
+ * middleware out of the way.
  */
 readonly class AuthController
 {
@@ -61,5 +62,17 @@ readonly class AuthController
     public function whoami(): Response
     {
         return new Response((string) ($this->auth->guard()->id() ?? 'guest'));
+    }
+
+    /**
+     * The user the `api` guard (marko/authentication-token's `token` driver)
+     * authenticates from the request's bearer token, or "guest".
+     *
+     * @throws AuthException|ConfigNotFoundException|RandomException
+     */
+    #[Get('/token/whoami')]
+    public function tokenWhoami(): Response
+    {
+        return new Response((string) ($this->auth->guard('api')->id() ?? 'guest'));
     }
 }

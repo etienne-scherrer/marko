@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\AuthenticationToken\Contracts\TokenRepositoryInterface;
+use Marko\AuthenticationToken\Tests\Fixtures\InMemoryTokenRepository;
 use Marko\Authorization\Contracts\GateInterface;
 use Marko\Core\Path\ProjectPaths;
 use Marko\Integration\Fixture\Auth\AuthEventLog;
@@ -18,9 +20,13 @@ return [
         UserProviderInterface::class => static fn (): UserProviderInterface => new FakeUserProvider(
             users: [1 => new FakeAuthenticatable(id: 1)],
         ),
+        // Personal access tokens for the `api` (token driver) guard, kept in
+        // memory; the fixture has no personal_access_tokens table (#232).
+        TokenRepositoryInterface::class => InMemoryTokenRepository::class,
     ],
     'singletons' => [
         UserProviderInterface::class,
+        TokenRepositoryInterface::class,
         AuthEventLog::class,
     ],
     'boot' => static function (Schedule $schedule, GateInterface $gate, ProjectPaths $paths): void {

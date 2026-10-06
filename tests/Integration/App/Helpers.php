@@ -29,6 +29,7 @@ const INTEGRATION_COMPOSE_COMMAND = 'docker compose -f tests/Integration/compose
  */
 const INTEGRATION_MODULES = [
     'authentication',
+    'authentication-token',
     'authorization',
     'cache',
     'cache-redis',

@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+use Marko\Authentication\AuthManager;
+use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\AuthenticationToken\Guard\TokenGuard;
+use Marko\AuthenticationToken\Service\TokenManager;
 use Marko\Core\RequestStateResetter;
 use Marko\Integration\Fixture\Auth\AuthEventLog;
 use Marko\Routing\Http\Request;
@@ -9,7 +13,8 @@ use Marko\Routing\Http\Response;
 
 /*
  * Remember-me cookies and authentication events through the real router,
- * session middleware and queued-cookie middleware (#168).
+ * session middleware and queued-cookie middleware (#168), and bearer tokens
+ * through marko/authentication-token's guard driver (#232).
  */
 
 pest()->group('integration-services');
@@ -53,6 +58,29 @@ it('issues a remember-me cookie that re-authenticates a later request', function
         ->and($guest->body())->toBe('guest')
         ->and($forged->body())->toBe('guest');
 })->issue(168);
+
+it('authenticates a bearer token per request through the token guard driver', function (): void {
+    $user = $this->app->container->get(UserProviderInterface::class)->retrieveById(1)
+        ?? throw new RuntimeException('The fixture user provider has no user 1.');
+    $tokens = $this->app->container->get(TokenManager::class);
+    $valid = $tokens->createToken($user, 'integration')->plainTextToken;
+    $expired = $tokens->createToken($user, 'expired', expiresAt: new DateTimeImmutable('-1 hour'))->plainTextToken;
+    $bearer = static fn (string $token): array => ['HTTP_AUTHORIZATION' => "Bearer $token"];
+
+    $authenticated = nextAuthRequest($this, integrationRequest('GET', '/token/whoami', server: $bearer($valid)));
+    // The same worker, the next request: AuthManager's cached token guard
+    // must not answer with the previous request's user.
+    $anonymous = nextAuthRequest($this, integrationRequest('GET', '/token/whoami'));
+    $rejected = nextAuthRequest($this, integrationRequest('GET', '/token/whoami', server: $bearer($expired)));
+    $again = nextAuthRequest($this, integrationRequest('GET', '/token/whoami', server: $bearer($valid)));
+
+    expect($this->app->container->get(AuthManager::class)->guard('api'))->toBeInstanceOf(TokenGuard::class)
+        ->and($authenticated->body())->toBe('1')
+        ->and($anonymous->body())->toBe('guest')
+        ->and($rejected->body())->toBe('guest')
+        ->and($again->body())->toBe('1')
+        ->and(integrationCookieValue($authenticated, 'marko_session'))->toBeNull();
+})->issue(232);
 
 it('dispatches login and logout events', function (): void {
     $login = nextAuthRequest($this, integrationRequest('GET', '/login/remember'));

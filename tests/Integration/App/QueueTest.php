@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Integration\Fixture\Job\AlwaysFailingJob;
+use Marko\Integration\Fixture\Job\InvalidBackoffJob;
 use Marko\Integration\Fixture\Job\PrivatePropertyJob;
 use Marko\Integration\Fixture\Job\RecordingJob;
 use Marko\Queue\FailedJobRepositoryInterface;
@@ -12,7 +13,7 @@ use Marko\Queue\QueueInterface;
 /*
  * The database queue driver through queue:work against real Postgres:
  * retries, failed jobs and payload encoding (#161), priority order and
- * backoff (#162).
+ * backoff (#162), and an invalid backoff failing only its own job (#234).
  */
 
 pest()->group('integration-services');
@@ -99,3 +100,25 @@ it('waits the configured backoff before retrying a failed job', function (): voi
         ->and($availableAt)->toBeGreaterThanOrEqual($before + 45)
         ->and($availableAt)->toBeLessThanOrEqual($after + 45);
 })->issue(162);
+
+it('fails a job with an invalid backoff instead of stopping the worker', function (): void {
+    $container = $this->app->container;
+    $queue = $container->get(QueueInterface::class);
+    $failedJobs = $container->get(FailedJobRepositoryInterface::class);
+    $marker = $this->project . '/storage/after-invalid-backoff.txt';
+    $queue->push(new InvalidBackoffJob());
+    $queue->push(new RecordingJob($marker, 'next job ran'));
+
+    // Attempt 1 of 3 fails, and [-5] cannot be used as a retry delay.
+    $invalid = runIntegrationCommand($this->app, 'queue:work', ['--once']);
+    $failed = $failedJobs->all();
+    $next = runIntegrationCommand($this->app, 'queue:work', ['--once']);
+
+    expect($invalid['exitCode'])->toBe(0, $invalid['output'])
+        ->and($failed)->toHaveCount(1)
+        ->and($failed[0]->exception)->toContain('InvalidBackoffJob failed on purpose')
+        ->toContain('Job could not be retried')
+        ->and($next['exitCode'])->toBe(0, $next['output'])
+        ->and(file_get_contents($marker))->toBe('next job ran')
+        ->and($queue->size())->toBe(0);
+})->issue(234);

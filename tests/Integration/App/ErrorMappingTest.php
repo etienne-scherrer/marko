@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Marko\Database\Connection\ConnectionInterface;
 use Marko\Integration\Fixture\Entity\Author;
 use Marko\Integration\Fixture\Repository\AuthorRepository;
 
@@ -58,3 +59,20 @@ it('answers a CSRF failure with 419', function (): void {
         ->and($wrong->statusCode())->toBe(419)
         ->and($wrong->body())->not->toContain('csrf ok');
 })->issue(169);
+
+it('answers unmatched requests with 404 and 405 without saving a session', function (): void {
+    $notFound = $this->app->router->handle(integrationRequest('GET', '/no-such-page', server: ERROR_MAPPING_JSON));
+    $notAllowed = $this->app->router->handle(integrationRequest('POST', '/health', server: ERROR_MAPPING_JSON));
+    // Matched, but the route never touches the session.
+    $missing = $this->app->router->handle(integrationRequest('GET', '/authors/999999', server: ERROR_MAPPING_JSON));
+    $rows = $this->app->container->get(ConnectionInterface::class)->query('SELECT id FROM sessions');
+
+    expect($notFound->statusCode())->toBe(404)
+        ->and($notAllowed->statusCode())->toBe(405)
+        ->and($notAllowed->headers()['Allow'])->toContain('GET')
+        ->and($missing->statusCode())->toBe(404)
+        ->and(integrationCookieValue($notFound, 'marko_session'))->toBeNull()
+        ->and(integrationCookieValue($notAllowed, 'marko_session'))->toBeNull()
+        ->and(integrationCookieValue($missing, 'marko_session'))->toBeNull()
+        ->and($rows)->toBeEmpty();
+})->issue(236);
