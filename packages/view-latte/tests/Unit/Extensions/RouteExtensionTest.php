@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Latte\Engine;
 use Latte\Loaders\StringLoader;
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\Exceptions\UrlGenerationException;
 use Marko\Routing\RouteCollection;
 use Marko\Routing\RouteDefinition;
@@ -11,6 +12,7 @@ use Marko\Routing\RoutingConfig;
 use Marko\Routing\UrlGenerator;
 use Marko\Routing\UrlGeneratorInterface;
 use Marko\Testing\Fake\FakeConfigRepository;
+use Marko\View\CacheDirectoryGuard;
 use Marko\View\Latte\Extensions\RouteExtension;
 use Marko\View\Latte\LatteEngineFactory;
 use Marko\View\Latte\LatteViewConfig;
@@ -80,7 +82,12 @@ describe('RouteExtension', function (): void {
         $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $engine = (new LatteEngineFactory($viewConfig, $latteViewConfig, latteRouteGenerator()))->create();
+        $engine = (new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            latteRouteGenerator(),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
+        ))->create();
         $engine->setLoader(new StringLoader(['main' => '{route("shows.show", [id: 9])}']));
         $html = $engine->renderToString('main');
         array_map(unlink(...), glob($cacheDir . '/*'));

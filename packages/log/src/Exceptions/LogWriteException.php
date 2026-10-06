@@ -23,7 +23,7 @@ class LogWriteException extends LogException
         return new self(
             message: 'Log directory is not writable',
             context: "Directory: $path",
-            suggestion: 'Set appropriate permissions on the log directory (chmod 755 or 775)',
+            suggestion: 'Make the log directory writable by the PHP process user (e.g. chown it to that user and chmod 700)',
         );
     }
 }
