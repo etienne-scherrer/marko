@@ -17,7 +17,15 @@ readonly class BcryptHasher implements HasherInterface
      */
     public const int MAX_VALUE_BYTES = 72;
 
+    /**
+     * Salt and digest of a bcrypt hash no real value is expected to match; the cost prefix is
+     * added per instance so a dummy verification costs exactly as much as a real one.
+     */
+    private const string DUMMY_HASH_BODY = 'ZxSPF.27pFWWE6Ew0jDzE.HiJNsq8davb61hvjFFesMqHyLDmjNbe';
+
     private int $cost;
+
+    private string $dummyHash;
 
     /**
      * @throws InvalidHasherConfigException
@@ -27,6 +35,7 @@ readonly class BcryptHasher implements HasherInterface
     ) {
         $this->cost = $cost ?? self::DEFAULT_COST;
         $this->validateCost();
+        $this->dummyHash = sprintf('$2y$%02d$%s', $this->cost, self::DUMMY_HASH_BODY);
     }
 
     /**
@@ -48,13 +57,16 @@ readonly class BcryptHasher implements HasherInterface
 
     /**
      * Returns false for a value bcrypt cannot hash in full (over 72 bytes or containing a NUL byte),
-     * since no hash() result can belong to it.
+     * since no hash() result can belong to it. A dummy hash of the configured cost is still checked
+     * so rejecting such a value costs the same time as checking a real one.
      */
     public function verify(
         string $value,
         string $hash,
     ): bool {
         if (strlen($value) > self::MAX_VALUE_BYTES || str_contains($value, "\0")) {
+            $this->verifyDummy($value);
+
             return false;
         }
 
@@ -70,6 +82,16 @@ readonly class BcryptHasher implements HasherInterface
     public function algorithm(): string
     {
         return 'bcrypt';
+    }
+
+    /**
+     * Runs a full-cost bcrypt verification and discards the result, so a rejected value takes as
+     * long as a real check.
+     */
+    protected function verifyDummy(
+        string $value,
+    ): void {
+        password_verify($value, $this->dummyHash);
     }
 
     /**

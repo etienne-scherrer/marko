@@ -215,3 +215,45 @@ it('can verify hashes created by specific hashers', function () {
     expect($manager->hasher('bcrypt')->verify('password', $bcryptHash))->toBeTrue()
         ->and($manager->hasher('argon2id')->verify('password', $argon2Hash))->toBeTrue();
 });
+
+it('runs the bcrypt dummy verification when verifying a value bcrypt refuses', function () {
+    $dummyChecks = new ArrayObject();
+    $hashConfig = $this->createStub(HashConfig::class);
+    $hashConfig->method('defaultHasher')->willReturn('bcrypt');
+    $factory = new readonly class ($hashConfig, $dummyChecks) extends HasherFactory
+    {
+        public function __construct(
+            HashConfig $config,
+            private ArrayObject $dummyChecks,
+        ) {
+            parent::__construct($config);
+        }
+
+        public function make(
+            string $name,
+        ): HasherInterface {
+            return new readonly class ($this->dummyChecks) extends BcryptHasher
+            {
+                public function __construct(
+                    private ArrayObject $dummyChecks,
+                ) {
+                    parent::__construct(cost: 4);
+                }
+
+                protected function verifyDummy(
+                    string $value,
+                ): void {
+                    $this->dummyChecks->append($value);
+
+                    parent::verifyDummy($value);
+                }
+            };
+        }
+    };
+    $manager = new HashManager($hashConfig, $factory);
+    $hash = $manager->hash('secret');
+
+    expect($manager->verify(str_repeat('a', 73), $hash))->toBeFalse()
+        ->and($manager->verify("secret\0", $hash))->toBeFalse()
+        ->and($dummyChecks->getArrayCopy())->toBe([str_repeat('a', 73), "secret\0"]);
+});
