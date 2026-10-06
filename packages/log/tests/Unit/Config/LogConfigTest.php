@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use Marko\Config\Exceptions\ConfigNotFoundException;
 use Marko\Log\Config\LogConfig;
+use Marko\Log\Exceptions\InvalidLogConfigException;
 use Marko\Log\Exceptions\InvalidLogLevelException;
+use Marko\Log\Formatter\LineFormatter;
 use Marko\Log\LogLevel;
 use Marko\Testing\Fake\FakeConfigRepository;
 
@@ -151,7 +153,61 @@ it('config file contains all required keys with defaults', function (): void {
         ->and($config)->toHaveKey('max_files')
         ->and($config)->toHaveKey('max_file_size')
         ->and($config)->toHaveKey('escape_newlines')
-        ->and($config['escape_newlines'])->toBeTrue();
+        ->and($config['escape_newlines'])->toBeTrue()
+        ->and($config['redact_keys'])->toBe(LineFormatter::DEFAULT_REDACT_KEYS)
+        ->and($config['file_mode'])->toBe(0600)
+        ->and($config['dir_mode'])->toBe(0700);
+});
+
+it('reads redact_keys from config', function (): void {
+    $config = new LogConfig(new FakeConfigRepository([
+        'log.redact_keys' => ['password', 'ssn'],
+    ]));
+
+    expect($config->redactKeys())->toBe(['password', 'ssn']);
+});
+
+it('throws when redact_keys is not configured', function (): void {
+    $config = new LogConfig(new FakeConfigRepository());
+
+    expect(fn () => $config->redactKeys())
+        ->toThrow(ConfigNotFoundException::class);
+});
+
+it('throws InvalidLogConfigException when a redact_keys entry is not a non-empty string', function (): void {
+    $config = new LogConfig(new FakeConfigRepository([
+        'log.redact_keys' => ['password', 42],
+    ]));
+
+    expect(fn () => $config->redactKeys())
+        ->toThrow(InvalidLogConfigException::class, 'expected a non-empty string, got int');
+});
+
+it('reads file_mode and dir_mode from config', function (): void {
+    $config = new LogConfig(new FakeConfigRepository([
+        'log.file_mode' => 0640,
+        'log.dir_mode' => 0750,
+    ]));
+
+    expect($config->fileMode())->toBe(0640)
+        ->and($config->dirMode())->toBe(0750);
+});
+
+it('throws when file_mode or dir_mode is not configured', function (): void {
+    $config = new LogConfig(new FakeConfigRepository());
+
+    expect(fn () => $config->fileMode())->toThrow(ConfigNotFoundException::class)
+        ->and(fn () => $config->dirMode())->toThrow(ConfigNotFoundException::class);
+});
+
+it('throws InvalidLogConfigException for a permission mode outside 0 to 0777', function (): void {
+    $config = new LogConfig(new FakeConfigRepository([
+        'log.file_mode' => 0o4755,
+        'log.dir_mode' => -1,
+    ]));
+
+    expect(fn () => $config->fileMode())->toThrow(InvalidLogConfigException::class, "'log.file_mode'")
+        ->and(fn () => $config->dirMode())->toThrow(InvalidLogConfigException::class, "'log.dir_mode'");
 });
 
 it('reads escape_newlines from config', function (): void {

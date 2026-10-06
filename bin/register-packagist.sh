@@ -20,9 +20,13 @@ for pkg_dir in "$REPO_ROOT"/packages/*/; do
 
     response=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST \
-        "https://packagist.org/api/create-package?username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_TOKEN}" \
+        "https://packagist.org/api/create-package" \
         -H "Content-Type: application/json" \
-        -d "{\"repository\":{\"url\":\"${repo_url}\"}}")
+        -d "{\"repository\":{\"url\":\"${repo_url}\"}}" \
+        --config - <<CURL_CONFIG
+header = "Authorization: Bearer ${PACKAGIST_USERNAME}:${PACKAGIST_TOKEN}"
+CURL_CONFIG
+)
 
     if [[ "$response" == "200" || "$response" == "201" || "$response" == "202" ]]; then
         echo "  ✓ Registered marko/${pkg}"

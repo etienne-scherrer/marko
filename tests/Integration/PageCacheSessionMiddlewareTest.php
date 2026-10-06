@@ -121,6 +121,9 @@ function makePageCacheabilityChecker(): CacheabilityChecker
     $config = new PageCacheConfig(new FakeConfigRepository([
         'page-cache.cacheable_methods' => ['GET', 'HEAD'],
         'page-cache.cacheable_status_codes' => [200],
+        'page-cache.bypass_cookies' => [],
+        'page-cache.trusted_hosts' => [],
+        'session.cookie.name' => 'marko_session',
     ]));
 
     return new CacheabilityChecker($matcher, $config);
@@ -145,7 +148,7 @@ function makeSessionConfig(): SessionConfig
 }
 
 it(
-    'still caches a repeat visit response that passed through session middleware without a new session',
+    'never caches a repeat visit that resumes a session, even though the response carries no new cookie',
     function (): void {
         $session = makeRepeatVisitSession();
         $sessionConfig = makeSessionConfig();
@@ -162,7 +165,16 @@ it(
 
         $checker = makePageCacheabilityChecker();
 
+        // Resuming a session emits no Set-Cookie, so the response alone looks cacheable;
+        // the session cookie on the request is what keeps the page out of the cache.
         expect($response->cookies())->toBeEmpty()
-            ->and($checker->isResponseCacheable($response))->toBeTrue();
+            ->and($checker->isResponseCacheable($response))->toBeTrue()
+            ->and($checker->isRequestCacheable($request))->toBeFalse();
     },
 );
+
+it('keeps caching an anonymous request that carries no session cookie', function (): void {
+    $request = new Request(server: ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/']);
+
+    expect(makePageCacheabilityChecker()->isRequestCacheable($request))->toBeTrue();
+});

@@ -8,8 +8,10 @@ use Marko\Core\Container\Container;
 use Marko\Core\Module\ModuleManifest;
 use Marko\Core\Module\ModuleRepository;
 use Marko\Core\Module\ModuleRepositoryInterface;
+use Marko\Core\Path\ProjectPaths;
 use Marko\Routing\Http\Response;
 use Marko\Routing\UrlGeneratorInterface;
+use Marko\View\CacheDirectoryGuard;
 use Marko\View\Exceptions\NoDriverException;
 use Marko\View\Exceptions\TemplateNotFoundException;
 use Marko\View\Latte\LatteEngineFactory;
@@ -61,6 +63,7 @@ describe('View Integration', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $engineFactory->create();
         $view = new LatteView($engine, $templateResolver);
@@ -206,6 +209,7 @@ describe('View Integration', function (): void {
             $viewConfig,
             $latteViewConfig,
             $this->createStub(UrlGeneratorInterface::class),
+            new CacheDirectoryGuard(new ProjectPaths(sys_get_temp_dir())),
         );
         $engine = $engineFactory->create();
         $view = new LatteView($engine, $templateResolver);
