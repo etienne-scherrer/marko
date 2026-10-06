@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Marko\Api\Resource;
 
 use JsonException;
+use Marko\Api\Contracts\ResourceCollectionInterface;
 use Marko\Api\Contracts\ResourceInterface;
 use Marko\Api\Value\ConditionalValue;
 use Marko\Api\Value\MissingValue;
@@ -24,13 +25,24 @@ abstract class JsonResource implements ResourceInterface
     abstract public function toArray(): array;
 
     /**
+     * Transform the resource into its filtered output array, with every
+     * ConditionalValue resolved and every MissingValue removed (recursively).
+     *
+     * @return array<string, mixed>
+     */
+    public function resolve(): array
+    {
+        return $this->filterArray($this->toArray());
+    }
+
+    /**
      * Transform the resource into a JSON HTTP response.
      *
      * @throws JsonException
      */
     public function toResponse(): Response
     {
-        return Response::json(['data' => $this->filterArray($this->toArray())]);
+        return Response::json(['data' => $this->resolve()]);
     }
 
     /**
@@ -52,10 +64,12 @@ abstract class JsonResource implements ResourceInterface
     }
 
     /**
-     * Filter the array, resolving ConditionalValues and removing MissingValues.
+     * Filter the array, resolving ConditionalValues, removing MissingValues,
+     * and recursing into nested arrays, resources, and resource collections.
+     * Lists stay lists: removed entries are re-indexed so they encode as JSON arrays.
      *
-     * @param array<string, mixed> $array
-     * @return array<string, mixed>
+     * @param array<int|string, mixed> $array
+     * @return array<int|string, mixed>
      */
     protected function filterArray(
         array $array,
@@ -63,7 +77,7 @@ abstract class JsonResource implements ResourceInterface
         $result = [];
 
         foreach ($array as $key => $value) {
-            if ($value instanceof ConditionalValue) {
+            while ($value instanceof ConditionalValue) {
                 $value = $value->resolve();
             }
 
@@ -71,13 +85,17 @@ abstract class JsonResource implements ResourceInterface
                 continue;
             }
 
-            if ($value instanceof ResourceInterface) {
-                $value = $value->toArray();
+            if ($value instanceof self) {
+                $value = $value->resolve();
+            } elseif ($value instanceof ResourceInterface || $value instanceof ResourceCollectionInterface) {
+                $value = $this->filterArray($value->toArray());
+            } elseif (is_array($value)) {
+                $value = $this->filterArray($value);
             }
 
             $result[$key] = $value;
         }
 
-        return $result;
+        return array_is_list($array) ? array_values($result) : $result;
     }
 }
