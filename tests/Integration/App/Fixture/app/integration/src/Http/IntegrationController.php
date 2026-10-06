@@ -11,6 +11,7 @@ use Marko\Authorization\Contracts\GateInterface;
 use Marko\Authorization\Exceptions\AuthorizationException;
 use Marko\Authorization\Exceptions\PolicyException;
 use Marko\Config\Exceptions\ConfigNotFoundException;
+use Marko\RateLimiter\Attributes\RateLimit;
 use Marko\RateLimiter\Middleware\RateLimitMiddleware;
 use Marko\Routing\Attributes\Get;
 use Marko\Routing\Attributes\Middleware;
@@ -44,11 +45,28 @@ readonly class IntegrationController
         return new Response((string) $visits);
     }
 
+    /**
+     * Two requests per minute per client, counted in Redis through
+     * marko/cache-redis (#165).
+     */
     #[Get('/limited')]
     #[Middleware(RateLimitMiddleware::class)]
+    #[RateLimit(maxAttempts: 2, decaySeconds: 60)]
     public function limited(): Response
     {
         return new Response('limited ok');
+    }
+
+    /**
+     * Its own limit and its own counter: exhausting /limited must not deny
+     * this route (#165).
+     */
+    #[Get('/limited/other')]
+    #[Middleware(RateLimitMiddleware::class)]
+    #[RateLimit(maxAttempts: 3, decaySeconds: 60)]
+    public function limitedOther(): Response
+    {
+        return new Response('other limited ok');
     }
 
     /**

@@ -66,9 +66,9 @@ it('builds a fixture project whose vendor modules link to the monorepo packages'
         ->and(is_dir(dirname(__DIR__, 3) . '/packages/core'))->toBeTrue();
 });
 
-it('lists a todo naming each owning ticket from the hand-off table', function (): void {
-    // The #187 hand-off table. A ticket that turns its todo into a real test
-    // tags that test with ->issue(N), so the reference survives the flip.
+it('tags a test with each owning ticket from the hand-off table', function (): void {
+    // The #187 hand-off table. Every ticket's behaviour is proven by a real
+    // test tagged ->issue(N).
     $tickets = [159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 173, 176, 177];
     $source = '';
 
@@ -77,8 +77,23 @@ it('lists a todo naming each owning ticket from the hand-off table', function ()
     }
 
     foreach ($tickets as $ticket) {
-        expect($source)->toMatch("/issue(: |\\()$ticket\\b/");
+        expect($source)->toMatch("/->issue\\($ticket\\)/");
     }
+});
+
+it('keeps no todo rows in the integration suite', function (): void {
+    // A todo claims nothing; the bug it names is either fixed (so the test
+    // can be real) or belongs in the ticket that fixes it (#226).
+    $todos = [];
+
+    foreach (glob(__DIR__ . '/*Test.php') ?: [] as $file) {
+        if (preg_match('/->\s*todo\s*\(/', (string) file_get_contents($file)) === 1) {
+            $todos[] = basename($file);
+        }
+    }
+
+    expect($todos)->toBe([])
+        ->and(file_exists(__DIR__ . '/KnownGapsTest.php'))->toBeFalse();
 });
 
 it('documents how to run and extend the integration suite', function (): void {
@@ -90,7 +105,9 @@ it('documents how to run and extend the integration suite', function (): void {
         ->toContain('composer test:integration')
         ->toContain('MARKO_INTEGRATION_REQUIRED')
         ->toContain('setUpIntegrationTest($this)')
-        ->toContain('### Flipping a todo');
+        ->toContain('MARKO_TEST_PGSQL_HOST')
+        ->toContain('MARKO_TEST_MYSQL_HOST')
+        ->toContain('### Known gaps');
 });
 
 it('passes the script name and command ahead of the arguments to the command runner', function (): void {

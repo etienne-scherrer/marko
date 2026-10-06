@@ -77,35 +77,73 @@ Running the destructive group updates your working directory's `composer.lock` (
 
 ## Integration Tests (`integration-services` Group)
 
-Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `module.php` or bugs that only show up with a real driver. The `integration-services` group covers those. It boots a real fixture application through `Application::boot()`, with the real module discovery and `module.php` wiring, against real Postgres and Redis.
+Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `module.php` or bugs that only show up with a real driver. The `integration-services` group covers those. Every test that needs a real service belongs to this one group:
+
+- **The fixture app** (`tests/Integration/App`): boots a real application through `Application::boot()`, with the real module discovery and `module.php` wiring, against real Postgres and Redis.
+- **Driver integration tests** (`packages/database-pgsql/tests/Integration`, `packages/database-mysql/tests/Integration`): savepoints, row locks, upsert, constraint violations, concurrency errors and migrations against a real PostgreSQL or MySQL server.
+- **Live Redis tests** (`packages/pubsub-redis/tests/Integration/SharedConnectionLiveTest.php`, `packages/broadcasting-amphp/tests/Feature/RedisLiveTest.php`).
 
 ### Layout
 
 | Path | Purpose |
 |------|---------|
-| `tests/Integration/App/Fixture/` | The fixture project: the `app/integration` module (entities, repositories, seeder, jobs, async observer, scheduled task, routes), `config/*.php` and `database/migrations/` |
+| `tests/Integration/App/Fixture/` | The fixture project: the `app/integration` module (entities, repositories, seeder, jobs, observers, scheduled tasks, routes), `config/*.php` and `database/migrations/` |
 | `tests/Integration/App/Helpers.php` | Harness functions, autoloaded through `autoload-dev.files` |
 | `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
-| `tests/Integration/App/BootTest.php`, `ServicesTest.php` | Cases that pass today |
-| `tests/Integration/App/KnownGapsTest.php` | Known-broken behaviour as `->todo()` tests, one per owning ticket |
+| `tests/Integration/App/*Test.php` | Cases grouped by topic (`ServicesTest`, `TransactionsTest`, `QueueTest`, `SchedulerTest`, `RateLimitTest`, `AuthTest`, `ErrorMappingTest`, ...), each tagged `->issue(N)` with the ticket it covers |
 | `tests/Integration/App/DatabaseTestingFixture/` | A second, smaller fixture for `RefreshDatabaseTest` and `TruncateDatabaseTest`. `databaseTestingProject()` builds it once per process with its own `_dbtesting` database, because `TestDatabase` boots and migrates once and keeps its connection open |
-| `tests/Integration/compose.yml` | Postgres 17 and Redis 7 for local runs |
+| `tests/Integration/compose.yml` | Postgres 17, MySQL 8.4 and Redis 7 for local runs |
+| `tests/Integration/postgres-init/` | Creates the `marko_test` database the pgsql driver tests use |
 
-Each test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`).
+Each fixture test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`). The driver tests create and drop their own tables in `marko_test`, a separate database, because the fixture drops `marko_integration` before every case.
+
+### Environment variables
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` | Fixture app (Postgres) | unset (skip), `5432`, `marko`, `marko`, `marko_integration` |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Fixture app, pubsub-redis and broadcasting-amphp live tests | unset (skip), `6379`, none |
+| `MARKO_TEST_PGSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-pgsql` driver tests | unset (skip), `5432`, `marko_test`, `postgres`, empty |
+| `MARKO_TEST_MYSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-mysql` driver tests | unset (skip), `3306`, `marko_test`, `root`, empty |
+| `MARKO_INTEGRATION_REQUIRED` | Every suite in the group | unset: a missing or unreachable service skips. `1`: it fails |
 
 ### Running locally
 
 ```bash
-docker compose -f tests/Integration/compose.yml up -d
-DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 composer test:integration
+docker compose -f tests/Integration/compose.yml up -d --wait
+
+DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 \
+MARKO_TEST_PGSQL_HOST=127.0.0.1 MARKO_TEST_PGSQL_USERNAME=marko MARKO_TEST_PGSQL_PASSWORD=marko \
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
+composer test:integration
 ```
 
-If port 5432 or 6379 is already taken, start the services with `DB_PORT=55432 REDIS_PORT=56379 docker compose -f tests/Integration/compose.yml up -d` and export the same `DB_PORT` / `REDIS_PORT` when running the suite. Other variables, with their defaults: `DB_USERNAME` (`marko`), `DB_PASSWORD` (`marko`), `DB_DATABASE` (`marko_integration`) and `REDIS_PORT` (`6379`).
+Export only the variables for the services you need: a suite whose host variable is unset skips. To run one part of the group:
+
+```bash
+# Fixture app only
+DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml tests/Integration/App
+
+# One driver
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
+  ./vendor/bin/pest -c phpunit.xml packages/database-mysql/tests/Integration
+
+# Live Redis tests
+REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/pubsub-redis packages/broadcasting-amphp
+```
+
+If port 5432, 6379 or 3306 is already taken, start the services with `DB_PORT=55432 REDIS_PORT=56379 MYSQL_PORT=53306 docker compose -f tests/Integration/compose.yml up -d --wait` and export the same ports when running the suite (`DB_PORT`, `REDIS_PORT`, `MARKO_TEST_PGSQL_PORT=55432`, `MARKO_TEST_MYSQL_PORT=53306`).
 
 ### Skipping and required mode
 
-- Every case calls `setUpIntegrationTest($this)` in `beforeEach`, which calls `integrationServicesSkipReason()`. If `DB_HOST` or `REDIS_HOST` is unset or unreachable, the case is **skipped** with the reason and the compose command. This is why `composer test` stays green on a machine with no services.
+- Every fixture case calls `setUpIntegrationTest($this)` in `beforeEach`, which calls `integrationServicesSkipReason()`. If `DB_HOST` or `REDIS_HOST` is unset or unreachable, the case is **skipped** with the reason and the compose command. The driver tests do the same through their package's `tests/Fixtures/IntegrationDatabase::config()`, and the live Redis tests through their own skip-reason function. This is why `composer test` stays green on a machine with no services.
 - The CI **Integration** job sets `MARKO_INTEGRATION_REQUIRED=1`. In that mode the same condition **fails** the case, so the job can never pass by skipping everything.
+
+### CI
+
+The **Integration** job in `.github/workflows/ci.yml` runs `composer test:integration` against `postgres:17`, `mysql:8.4` and `redis:7` service containers, with every variable above set and `marko_test` created on the Postgres service before the run. It runs serially, because the driver tests share their databases. `tests/CiWorkflowTest.php` asserts the services and variables, so dropping one fails `composer test`.
+
+The required checks on `develop` are `Tests`, `Lint` and `Static analysis`. Whether `Integration` becomes a required check is a maintainer decision, tracked in #226.
 
 ### Adding a case
 
@@ -113,10 +151,12 @@ If port 5432 or 6379 is already taken, start the services with `DB_PORT=55432 RE
 2. Start the file with `pest()->group('integration-services');`, then add `beforeEach(fn () => setUpIntegrationTest($this));` and `afterEach(fn () => tearDownIntegrationTest($this));`. This gives the test `$this->app` (migrated) and `$this->project` (the temp project path). Pass `migrate: false` to `setUpIntegrationTest()` for a test that must start from an empty schema.
 3. Send requests with `$this->app->router->handle(integrationRequest('GET', '/path'))`. Run console commands with `runIntegrationCommand($this->app, 'queue:work', ['--once'])`. Both go through the real router and the real `CommandRunner`.
 4. Don't hand-construct services. Resolve them from `$this->app->container`.
+5. Tag the case `->issue(N)` with the ticket whose behaviour it proves. `HarnessTest` checks that every ticket in the #187 hand-off table is still referenced.
+6. Redis is shared by every run and never flushed. Use unique keys (and unique client addresses for rate limits), or a rerun inside a TTL starts from the previous run's state.
 
-### Flipping a todo
+### Known gaps
 
-When your ticket fixes a row in `KnownGapsTest.php`, replace its `->todo(...)` with a real test that asserts the behaviour in the note. Tag the test `->issue(N)`, because `HarnessTest` checks that every ticket in the #187 hand-off table is still referenced. Also remove any fixture workaround that names your ticket (search `Fixture/` for `#N`).
+Don't park a known bug as a `->todo()` row. `HarnessTest` fails on any todo in the integration suite. Write the failing test in the ticket that fixes the bug instead.
 
 ## TDD Workflow Commands
 

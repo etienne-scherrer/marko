@@ -33,9 +33,13 @@ composer phpstan
 
 # Everything the CI gate runs (tests + lint + static analysis)
 composer ci
+
+# Real-service suite: fixture app + pgsql/mysql drivers + live Redis (needs the
+# services from tests/Integration/compose.yml; see .claude/testing.md)
+composer test:integration
 ```
 
-Every PR is gated by the `CI` workflow on `Tests`, `Lint`, and `Static analysis`. A red check blocks the merge; `develop` never carries a failing test, lint error, or PHPStan error.
+Every PR is gated by the `CI` workflow on `Tests`, `Lint`, and `Static analysis`. A red check blocks the merge; `develop` never carries a failing test, lint error, or PHPStan error. The same workflow's `Integration` job runs the real-service suite against Postgres, MySQL and Redis. It is not yet a required status check (a maintainer decision, #226), but a red `Integration` run blocks the merge all the same.
 
 ## Key Conventions
 

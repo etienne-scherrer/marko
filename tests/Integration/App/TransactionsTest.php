@@ -5,13 +5,17 @@ declare(strict_types=1);
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\TransactionInterface;
 use Marko\Database\Exceptions\LockException;
+use Marko\Database\Repository\Repository;
 use Marko\Integration\Fixture\Entity\Author;
+use Marko\Integration\Fixture\Entity\Book;
 use Marko\Integration\Fixture\Repository\AuthorRepository;
+use Marko\Integration\Fixture\Repository\BookRepository;
 
 /*
- * Nested transactions, after-commit callbacks and row locks (#176) through
- * the real module wiring against real Postgres: TransactionInterface, the
- * repositories and their query builders all share one connection.
+ * Transactions through the real module wiring against real Postgres:
+ * TransactionInterface, the repositories and their query builders all share
+ * one connection (#159), so nested transactions, after-commit callbacks and
+ * row locks (#176) cover every write made through them.
  */
 
 pest()->group('integration-services');
@@ -106,3 +110,38 @@ it('locks rows through a repository query inside a container-resolved transactio
         ->and($locked?->name)->toBe('Locked')
         ->and($outside)->toThrow(LockException::class, "Cannot lock rows of 'authors' outside a transaction");
 })->issue(176);
+
+it('rolls back writes made through two repositories when a transaction spanning both fails', function (): void {
+    $container = $this->app->container;
+    $transaction = $container->get(TransactionInterface::class);
+    $authors = $container->get(AuthorRepository::class);
+    $books = $container->get(BookRepository::class);
+
+    $attempt = fn () => $transaction->transaction(function () use ($authors, $books): void {
+        $author = saveIntegrationAuthor($authors, 'Octavia E. Butler');
+
+        $book = new Book();
+        $book->authorId = (int) $author->id;
+        $book->title = 'Kindred';
+        $books->save($book);
+
+        throw new RuntimeException('Fail after both writes');
+    });
+
+    $connection = $container->get(ConnectionInterface::class);
+
+    expect($attempt)->toThrow(RuntimeException::class, 'Fail after both writes')
+        ->and($connection->query('SELECT COUNT(*) AS total FROM authors')[0]['total'])->toBe(0)
+        ->and($connection->query('SELECT COUNT(*) AS total FROM books')[0]['total'])->toBe(0)
+        ->and($transaction->transactionLevel())->toBe(0);
+})->issue(159);
+
+it('resolves TransactionInterface to the same connection the repositories use', function (): void {
+    $container = $this->app->container;
+    $repositoryConnection = new ReflectionProperty(Repository::class, 'connection');
+    $connection = $container->get(ConnectionInterface::class);
+
+    expect($container->get(TransactionInterface::class))->toBe($connection)
+        ->and($repositoryConnection->getValue($container->get(AuthorRepository::class)))->toBe($connection)
+        ->and($repositoryConnection->getValue($container->get(BookRepository::class)))->toBe($connection);
+})->issue(159);
