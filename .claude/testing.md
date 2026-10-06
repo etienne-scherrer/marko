@@ -133,7 +133,7 @@ MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
 REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/pubsub-redis packages/broadcasting-amphp
 ```
 
-The `database-mysql` driver tests also run against MariaDB. CI runs them a second time against MariaDB 11.8 on port 3307 with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally:
+The `database-mysql` driver tests also run against MariaDB. CI runs them again against MariaDB 11.8 on port 3307 and MariaDB 10.11 on port 3308, with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally (port 3308 for 10.11):
 
 ```bash
 docker compose -f tests/Integration/compose.yml --profile mariadb up -d --wait
