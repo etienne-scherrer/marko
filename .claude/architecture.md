@@ -226,6 +226,7 @@ When your code depends on `marko/log` (interface) instead of `marko/log-file` (d
 | Package | Type | Description |
 |---------|------|-------------|
 | `marko/broadcasting` | Interface | `BroadcasterInterface`, `Channel`/`PrivateChannel`, `#[BroadcastChannel]` authorizers and `ChannelRegistry` |
+| `marko/broadcasting-amphp` | Driver | Publishes through `marko/pubsub`; `broadcasting:serve` runs a native async SSE server on amphp/http-server (heartbeats, replay, signed tokens) |
 | `marko/broadcasting-mercure` | Driver | Publishes to a Mercure hub (FrankenPHP built-in hub supported); subscriber JWTs and cookie |
 | `marko/broadcasting-pusher` | Driver | Pusher HTTP API (Pusher, Soketi, Laravel Reverb) and the `/broadcasting/auth` endpoint |
 
