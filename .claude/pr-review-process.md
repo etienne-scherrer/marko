@@ -135,7 +135,7 @@ When you do include it, keep it minimal. Defaults the framework already provides
 - `"type": "marko-module"` (or `library` only if genuinely a non-module library)
 - **No hardcoded `"version"`** — Composer infers from the branch
 - Internal Marko deps use `"marko/x": "self.version"`
-- `marko/env` must be in `require` if `config/{name}.php` uses `env()`
+- `marko/config` must be in `require` if `config/{name}.php` reads environment variables through `Marko\Config\Env`. Don't require `marko/env` for that: `.env` loading is the app's choice (the skeleton requires it), and the global `env()` helper is deprecated
 - `marko/testing` in `require-dev` if tests use fakes
 - **4-space indent** matching every other package's composer.json
 - No package-local `scripts` block, no redundant dev deps for tooling that lives at the monorepo root (pest, phpstan, php-cs-fixer)
