@@ -131,14 +131,11 @@ it('counts array items for the min and between rules on an array value', functio
         ->and($minRule->passes('items', ['a'], []))->toBeFalse();
 });
 
-it(
-    'produces a value-oriented (not character-length) failure message for a numeric string failing min in numeric mode',
-    function () {
-        $rule = new Min(18, numeric: true);
-    
-        expect($rule->message('age', '5'))->toBe('The age field must be at least 18.');
-    }
-);
+it('produces a value-oriented failure message for a numeric string in numeric mode', function () {
+    $rule = new Min(18, numeric: true);
+
+    expect($rule->message('age', '5'))->toBe('The age field must be at least 18.');
+});
 
 it('measures a numeric string by length when not in numeric mode', function (): void {
     $rule = new Min(8);
