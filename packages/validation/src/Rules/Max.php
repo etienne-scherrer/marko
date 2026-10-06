@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Validation\Rules;
 
+use Marko\Core\Contracts\UploadedFileInterface;
 use Marko\Validation\Contracts\RuleInterface;
 
 readonly class Max implements RuleInterface
@@ -19,6 +20,11 @@ readonly class Max implements RuleInterface
     ): bool {
         if ($value === null || $value === '') {
             return true;
+        }
+
+        // Files are sized with max_size/min_size; message() says so.
+        if ($value instanceof UploadedFileInterface) {
+            return false;
         }
 
         if (is_array($value)) {
@@ -40,6 +46,10 @@ readonly class Max implements RuleInterface
         string $field,
         mixed $value,
     ): string {
+        if ($value instanceof UploadedFileInterface) {
+            return "The $field field is a file: use max_size:$this->maximum to limit its size in kilobytes.";
+        }
+
         if (is_array($value)) {
             return "The $field field must not have more than $this->maximum items.";
         }

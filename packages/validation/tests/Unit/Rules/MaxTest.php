@@ -4,6 +4,23 @@ declare(strict_types=1);
 
 use Marko\Validation\Contracts\RuleInterface;
 use Marko\Validation\Rules\Max;
+use Marko\Validation\Tests\Support\TestUploads;
+
+it('fails max for an uploaded file with a message pointing to max_size', function (): void {
+    $rule = new Max(2048);
+    $file = TestUploads::sized(10);
+
+    expect($rule->passes('avatar', $file, []))->toBeFalse()
+        ->and($rule->message('avatar', $file))
+        ->toBe('The avatar field is a file: use max_size:2048 to limit its size in kilobytes.');
+});
+
+it('still counts items for an array of uploaded files', function (): void {
+    $rule = new Max(2);
+
+    expect($rule->passes('photos', [TestUploads::png(), TestUploads::gif()], []))->toBeTrue()
+        ->and($rule->passes('photos', [TestUploads::png(), TestUploads::gif(), TestUploads::jpeg()], []))->toBeFalse();
+});
 
 it('implements RuleInterface', function () {
     expect(new Max(5))->toBeInstanceOf(RuleInterface::class);

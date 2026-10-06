@@ -4,6 +4,16 @@ declare(strict_types=1);
 
 use Marko\Validation\Contracts\RuleInterface;
 use Marko\Validation\Rules\Between;
+use Marko\Validation\Tests\Support\TestUploads;
+
+it('fails between for an uploaded file with a message pointing to min_size and max_size', function (): void {
+    $rule = new Between(1, 2048);
+    $file = TestUploads::sized(4096);
+
+    expect($rule->passes('avatar', $file, []))->toBeFalse()
+        ->and($rule->message('avatar', $file))
+        ->toBe('The avatar field is a file: use min_size:1|max_size:2048 to limit its size in kilobytes.');
+});
 
 it('implements RuleInterface', function () {
     expect(new Between(1, 10))->toBeInstanceOf(RuleInterface::class);
