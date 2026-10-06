@@ -792,9 +792,11 @@ Boot callbacks run after all module bindings are registered, so `$container->bin
 
 // RIGHT - same mailer class, different config per environment
 // config/mail.php
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['MAIL_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['MAIL_PORT'] ?? 1025),
+    'host' => Env::string('MAIL_HOST', 'localhost'),
+    'port' => Env::int('MAIL_PORT', 1025, min: 1, max: 65535),
 ];
 ```
 
@@ -980,9 +982,11 @@ Environment variables should **only** be referenced in config files (`config/*.p
 ```php
 // CORRECT - env var in config file only
 // config/database.php
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['DB_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['DB_PORT'] ?? 3306),
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 3306, min: 1, max: 65535),
 ];
 
 // Application code reads config, not env vars
@@ -993,6 +997,8 @@ $host = $_ENV['DB_HOST'] ?? 'localhost';
 ```
 
 This centralizes environment handling and ensures all configurable values are documented in config files.
+
+Read environment variables through `Marko\Config\Env` (`string`, `nullableString`, `int`, `nullableInt`, `float`, `bool`, `list`), never with casts, `filter_var()` or the global `env()` helper. `Env` throws `ConfigException` on a value it can't parse, naming the variable, so a typo fails the boot instead of becoming `0`, `false` or `true`. An unset or empty variable returns the default. `tests/ConfigEnvReadsTest.php` enforces this for every shipped `packages/*/config/*.php`.
 
 ### Scoped Configuration (Multi-tenant)
 

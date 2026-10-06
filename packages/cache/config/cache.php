@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'driver' => $_ENV['CACHE_DRIVER'] ?? 'file',
-    'path' => $_ENV['CACHE_PATH'] ?? 'storage/cache',
-    'default_ttl' => (int) ($_ENV['CACHE_TTL'] ?? 3600),
+    'driver' => Env::string('CACHE_DRIVER', 'file'),
+    'path' => Env::string('CACHE_PATH', 'storage/cache'),
+    'default_ttl' => Env::int('CACHE_TTL', 3600, min: 0),
 ];

@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'entry' => env('VITE_ENTRY', ''),
+    'entry' => Env::string('VITE_ENTRY', ''),
     'buildDirectory' => 'build',
     'manifestFilename' => '.vite/manifest.json',
-    'devServerUrl' => env('VITE_DEV_SERVER_URL', ''),
+    'devServerUrl' => Env::string('VITE_DEV_SERVER_URL', ''),
     'devServerStylesheets' => [],
-    'useDevServer' => env('VITE_USE_DEV_SERVER', env('APP_ENV', 'local') === 'local'),
+    'useDevServer' => Env::bool('VITE_USE_DEV_SERVER', Env::string('APP_ENV', 'local') === 'local'),
 ];

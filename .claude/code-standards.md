@@ -418,6 +418,18 @@ return $this->config->getInt('blog.posts_per_page', 10);
 ### Environment Variables in Config Files Only
 `$_ENV` should only be referenced in `config/*.php` files, never in application code.
 
+In config files, read environment variables through `Marko\Config\Env`, never with casts, `filter_var()` or the global `env()` helper. `Env` throws `ConfigException` naming the variable when a value doesn't parse, so a typo fails the boot instead of becoming `0`, `false` or `true`.
+
+```php
+// CORRECT
+'default_ttl' => Env::int('PAGE_CACHE_TTL', 3600, min: 0),
+'cookie_secure' => Env::bool('MERCURE_COOKIE_SECURE', true),
+
+// WRONG - 'abc' becomes 0, 'ture' becomes false, silently
+'default_ttl' => (int) ($_ENV['PAGE_CACHE_TTL'] ?? 3600),
+'cookie_secure' => filter_var($_ENV['MERCURE_COOKIE_SECURE'] ?? 'true', FILTER_VALIDATE_BOOL),
+```
+
 ## Latte Template Standards
 
 Templates are pure presentation. Keep them clean, minimal, and consistent.
