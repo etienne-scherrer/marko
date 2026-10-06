@@ -75,6 +75,7 @@ function discoveryCacheResponses(
         ['GET', '/health'],
         ['GET', '/visits'],
         ['GET', '/admin'],
+        ['GET', '/admin/report'],
         ['GET', '/api/status/204'],
         ['GET', '/api/status/abc'],
         ['POST', '/health'],

@@ -181,6 +181,23 @@ it('enforces #[Can] globally: 401 for a guest, 403 for a user without the abilit
         ->and($denied->body())->not->toContain('admin area');
 })->issue(167);
 
+it('returns 403 when a controller calls Gate::authorize() for a denied ability', function (): void {
+    $login = $this->app->router->handle(integrationRequest('GET', '/login'));
+    $sessionId = (string) integrationCookieValue($login, 'marko_session');
+
+    $response = $this->app->router->handle(integrationRequest(
+        'GET',
+        '/admin/report',
+        cookies: ['marko_session' => $sessionId],
+        server: ['HTTP_ACCEPT' => 'application/json'],
+    ));
+
+    expect($response->statusCode())->toBe(403)
+        ->and(json_decode($response->body(), true))->toBe(['message' => 'Forbidden.'])
+        ->and($response->body())->not->toContain('view-admin')
+        ->not->toContain('admin report');
+})->issue(222);
+
 it('answers an OPTIONS preflight through the CORS middleware', function (): void {
     $response = $this->app->router->handle(integrationRequest('OPTIONS', '/health', server: [
         'HTTP_ORIGIN' => 'https://app.example.test',
