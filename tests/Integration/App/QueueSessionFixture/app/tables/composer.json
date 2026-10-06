@@ -1,0 +1,16 @@
+{
+    "name": "app/tables",
+    "description": "Fixture module for the fresh db:migrate tests of marko/queue-database and marko/session-database",
+    "type": "marko-module",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Marko\\Integration\\QueueSession\\": "src/"
+        }
+    },
+    "extra": {
+        "marko": {
+            "module": true
+        }
+    }
+}

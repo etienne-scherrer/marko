@@ -91,6 +91,7 @@ Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `m
 | `tests/Integration/App/Helpers.php` | Harness functions, autoloaded through `autoload-dev.files` |
 | `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
 | `tests/Integration/App/*Test.php` | Cases grouped by topic (`ServicesTest`, `TransactionsTest`, `QueueTest`, `SchedulerTest`, `RateLimitTest`, `AuthTest`, `ErrorMappingTest`, ...), each tagged `->issue(N)` with the ticket it covers |
+| `tests/Integration/App/QueueSessionFixture/` | A third fixture with only marko/queue-database, marko/session-database and one database driver. `QueueSessionTablesPgSqlTest` (fixture server, its own `_tables` database) and `QueueSessionTablesMySqlTest` (`MARKO_TEST_MYSQL_*` server, its own `<database>_tables` database) run a fresh `db:migrate` against it and share their cases from `QueueSessionTables.php` |
 | `tests/Integration/App/DatabaseTestingFixture/` | A second, smaller fixture for `RefreshDatabaseTest` and `TruncateDatabaseTest`. `databaseTestingProject()` builds it once per process with its own `_dbtesting` database, because `TestDatabase` boots and migrates once and keeps its connection open |
 | `tests/Integration/compose.yml` | Postgres 17, MySQL 8.4 and Redis 7 for local runs, plus MariaDB 11.8 under the `mariadb` profile |
 | `tests/Integration/postgres-init/` | Creates the `marko_test` database the pgsql driver tests use |
@@ -133,7 +134,7 @@ MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
 REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/pubsub-redis packages/broadcasting-amphp
 ```
 
-The `database-mysql` driver tests also run against MariaDB. CI runs them again against MariaDB 11.8 on port 3307 and MariaDB 10.11 on port 3308, with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally (port 3308 for 10.11):
+The `database-mysql` driver tests also run against MariaDB, together with the other MySQL suites: `packages/admin-auth/tests/Integration/MySql`, `packages/queue-database/tests/Integration/MySqlRoundTripTest.php`, `packages/session-database/tests/Integration/MySql` and `tests/Integration/App/QueueSessionTablesMySqlTest.php`. CI runs them again against MariaDB 11.8 on port 3307 and MariaDB 10.11 on port 3308, with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally (port 3308 for 10.11):
 
 ```bash
 docker compose -f tests/Integration/compose.yml --profile mariadb up -d --wait
