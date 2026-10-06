@@ -214,16 +214,17 @@ jobs:
         run: composer test:integration
 
       # Only the MySQL suites run again against each MariaDB: the MySQL driver
-      # suite and the admin-auth MySQL repository tests. The fixture app and
-      # the other suites do not touch MySQL.
-      - name: Run MySQL driver integration suite against MariaDB 11.8
+      # suite, the admin-auth MySQL repository tests, the queue-database and
+      # session-database MySQL tests, and the fresh db:migrate of the queue and
+      # session tables. The fixture app and the other suites do not touch MySQL.
+      - name: Run MySQL integration suites against MariaDB 11.8
         env:
           MARKO_TEST_MYSQL_PORT: 3307
           MARKO_TEST_MYSQL_SERVER: mariadb
-        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql
+        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql packages/queue-database/tests/Integration/MySqlRoundTripTest.php packages/session-database/tests/Integration/MySql tests/Integration/App/QueueSessionTablesMySqlTest.php
 
-      - name: Run MySQL driver integration suite against MariaDB 10.11
+      - name: Run MySQL integration suites against MariaDB 10.11
         env:
           MARKO_TEST_MYSQL_PORT: 3308
           MARKO_TEST_MYSQL_SERVER: mariadb
-        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql
+        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql packages/queue-database/tests/Integration/MySqlRoundTripTest.php packages/session-database/tests/Integration/MySql tests/Integration/App/QueueSessionTablesMySqlTest.php

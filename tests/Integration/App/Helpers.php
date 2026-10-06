@@ -16,6 +16,8 @@ declare(strict_types=1);
 use Marko\Core\Application;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
+use Marko\Database\Config\DatabaseConfig;
+use Marko\Database\MySql\Connection\MySqlConnection;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use PHPUnit\Framework\TestCase;
@@ -529,4 +531,132 @@ function databaseTestingProject(): string
     }
 
     return $project;
+}
+
+/**
+ * Packages the queue/session tables fixture needs besides its database
+ * driver: marko/queue-database and marko/session-database with what they
+ * require. The driver (database-pgsql or database-mysql) is added per run.
+ */
+const QUEUE_SESSION_MODULES = [
+    'clock',
+    'config',
+    'core',
+    'database',
+    'encryption',
+    'encryption-openssl',
+    'queue',
+    'queue-database',
+    'routing',
+    'session',
+    'session-database',
+];
+
+/**
+ * Build the queue/session tables fixture (#337) for an empty database: the
+ * packages, the driver named by $databaseConfig['driver'], and a
+ * config/database.php written from $databaseConfig. Nothing is migrated.
+ *
+ * @param array<string, int|string> $databaseConfig
+ * @throws RuntimeException
+ */
+function buildQueueSessionProject(
+    array $databaseConfig,
+): string {
+    $project = buildIntegrationProject(
+        __DIR__ . '/QueueSessionFixture',
+        [...QUEUE_SESSION_MODULES, 'database-' . $databaseConfig['driver']],
+    );
+
+    file_put_contents(
+        "$project/config/database.php",
+        "<?php\n\ndeclare(strict_types=1);\n\nreturn " . var_export($databaseConfig, true) . ";\n",
+    );
+
+    return $project;
+}
+
+/**
+ * The queue/session tables fixture's PostgreSQL database, created empty: its
+ * own database on the fixture app's server (DB_*), so the main fixture's
+ * per-test reset never touches it.
+ *
+ * @return array<string, int|string>
+ * @throws PDOException
+ */
+function freshQueueSessionPgSqlDatabase(): array
+{
+    $env = getenv();
+    $database = integrationDatabaseName($env) . '_tables';
+    resetIntegrationDatabase($database);
+
+    return [
+        'driver' => 'pgsql',
+        'host' => $env['DB_HOST'],
+        'port' => (int) ($env['DB_PORT'] ?? 5432),
+        'database' => $database,
+        'username' => $env['DB_USERNAME'] ?? 'marko',
+        'password' => $env['DB_PASSWORD'] ?? 'marko',
+    ];
+}
+
+/**
+ * The queue/session tables fixture's MySQL or MariaDB database, created
+ * empty on the driver tests' server (MARKO_TEST_MYSQL_*). It is named after
+ * their database with a `_tables` suffix and the parallel worker's
+ * TEST_TOKEN, so it never shares tables with them.
+ *
+ * @return array<string, int|string>
+ * @throws Throwable
+ */
+function freshQueueSessionMySqlDatabase(
+    DatabaseConfig $server,
+): array {
+    $token = (string) preg_replace('/\W/', '', getenv('TEST_TOKEN') ?: '');
+    $database = $server->database . '_tables' . ($token !== '' ? "_$token" : '');
+    $connection = new MySqlConnection($server);
+
+    try {
+        $connection->execute("DROP DATABASE IF EXISTS `$database`");
+        $connection->execute("CREATE DATABASE `$database`");
+    } finally {
+        $connection->disconnect();
+    }
+
+    return [
+        'driver' => 'mysql',
+        'host' => $server->host,
+        'port' => $server->port,
+        'database' => $database,
+        'username' => $server->username,
+        'password' => $server->password,
+    ];
+}
+
+/**
+ * Boot the queue/session tables fixture for $databaseConfig, exposing it as
+ * $test->project and $test->app. Nothing is migrated.
+ *
+ * @param array<string, int|string> $databaseConfig
+ * @throws Throwable
+ */
+function setUpQueueSessionTest(
+    TestCase $test,
+    array $databaseConfig,
+): void {
+    $test->project = buildQueueSessionProject($databaseConfig);
+    $test->app = Application::boot($test->project);
+}
+
+/**
+ * Run `db:migrate` the way a developer does, in the local environment, where
+ * it generates a migration for the entity tables and applies it.
+ *
+ * @return array{exitCode: int, output: string}
+ * @throws Throwable
+ */
+function migrateQueueSessionProject(
+    Application $app,
+): array {
+    return withIntegrationAppEnv('local', fn (): array => runIntegrationCommand($app, 'db:migrate'));
 }

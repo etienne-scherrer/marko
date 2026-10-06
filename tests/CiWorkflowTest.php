@@ -108,6 +108,24 @@ it(
     },
 );
 
+it('runs the queue and session MySQL suites against both MariaDB services', function () use ($ci): void {
+    $steps = array_values(array_filter(
+        preg_split('/\n(?=      - name: )/', $ci) ?: [],
+        fn (string $step): bool => str_contains($step, 'MARKO_TEST_MYSQL_SERVER: mariadb'),
+    ));
+    $suites = [
+        'packages/queue-database/tests/Integration/MySqlRoundTripTest.php',
+        'packages/session-database/tests/Integration/MySql',
+        'tests/Integration/App/QueueSessionTablesMySqlTest.php',
+    ];
+
+    expect($steps)->toHaveCount(2)
+        ->and(array_filter(
+            $steps,
+            fn (string $step): bool => array_all($suites, fn (string $suite): bool => str_contains($step, $suite)),
+        ))->toHaveCount(2);
+})->issue(337);
+
 it('points the mysql driver integration tests at the mysql service', function () use ($ci): void {
     $job = substr($ci, (int) strpos($ci, 'name: Integration'));
 

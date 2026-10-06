@@ -55,6 +55,16 @@ it('never generates migrations when db:migrate runs in production', function ():
         ->and(integrationMigrationFiles($this->project))->toBe($before);
 })->issue(170);
 
+it('reports no drift for jobs, failed_jobs and sessions created from the documented DDL', function (): void {
+    $result = withIntegrationAppEnv('production', fn (): array => runIntegrationCommand($this->app, 'db:migrate'));
+
+    expect($result['exitCode'])->toBe(0, $result['output'])
+        ->and($result['output'])->toContain('Warning: Entity schema differs from database.')
+        ->and($result['output'])->not->toContain('"jobs"')
+        ->and($result['output'])->not->toContain('"failed_jobs"')
+        ->and($result['output'])->not->toContain('"sessions"');
+})->issue(337);
+
 it('keeps a hand-made partial index when db:migrate runs', function (): void {
     $result = withIntegrationAppEnv('local', fn (): array => runIntegrationCommand($this->app, 'db:migrate'));
     $connection = $this->app->container->get(ConnectionInterface::class);
