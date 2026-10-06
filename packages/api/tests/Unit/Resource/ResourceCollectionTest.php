@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Marko\Api\Resource\JsonResource;
 use Marko\Api\Resource\ResourceCollection;
+use Marko\Api\Value\ConditionalValue;
 use Marko\Pagination\Contracts\PaginatorInterface;
 use Marko\Routing\Http\Response;
 
@@ -22,6 +23,27 @@ class CollectionTestResource extends JsonResource
         return [
             'id' => $this->resource->id,
             'name' => $this->resource->name,
+        ];
+    }
+}
+
+class CollectionTestSecretEntity
+{
+    public function __construct(
+        public int $id,
+        public string $token,
+        public bool $isOwner,
+    ) {}
+}
+
+class CollectionTestConditionalResource extends JsonResource
+{
+    public function toArray(): array
+    {
+        return [
+            'id' => $this->resource->id,
+            'token' => $this->when($this->resource->isOwner, $this->resource->token),
+            'hash' => $this->missing(),
         ];
     }
 }
@@ -261,4 +283,73 @@ it('includes pagination metadata when paginator is provided', function (): void 
         'total' => 100,
         'total_pages' => 7,
     ]);
+});
+
+it('omits when(false) fields from every collection item in toArray', function (): void {
+    $items = [
+        new CollectionTestSecretEntity(id: 1, token: 'SECRET-1', isOwner: false),
+        new CollectionTestSecretEntity(id: 2, token: 'SECRET-2', isOwner: true),
+    ];
+
+    $collection = new ResourceCollection($items, CollectionTestConditionalResource::class);
+
+    expect($collection->toArray())->toBe([
+        ['id' => 1],
+        ['id' => 2, 'token' => 'SECRET-2'],
+    ]);
+});
+
+it('omits when(false) fields from every collection item in toResponse', function (): void {
+    $items = [
+        new CollectionTestSecretEntity(id: 1, token: 'SECRET', isOwner: false),
+    ];
+
+    $collection = new ResourceCollection($items, CollectionTestConditionalResource::class);
+
+    $body = $collection->toResponse()->body();
+
+    expect($body)->toBe('{"data":[{"id":1}]}')
+        ->and($body)->not->toContain('SECRET');
+});
+
+it('omits missing() fields from every collection item', function (): void {
+    $items = [
+        new CollectionTestSecretEntity(id: 1, token: 'SECRET', isOwner: true),
+    ];
+
+    $collection = new ResourceCollection($items, CollectionTestConditionalResource::class);
+
+    expect($collection->toArray()[0])->not->toHaveKey('hash')
+        ->and($collection->toResponse()->body())->not->toContain('hash');
+});
+
+it('filters collection items nested inside a resource', function (): void {
+    $parent = new class (null) extends JsonResource
+    {
+        public function toArray(): array
+        {
+            return [
+                'users' => new ResourceCollection(
+                    [new CollectionTestSecretEntity(id: 1, token: 'SECRET', isOwner: false)],
+                    CollectionTestConditionalResource::class,
+                ),
+            ];
+        }
+    };
+
+    expect($parent->toResponse()->body())->toBe('{"data":{"users":[{"id":1}]}}');
+});
+
+it('never exposes ConditionalValue internals in collection output', function (): void {
+    $items = [
+        new CollectionTestSecretEntity(id: 1, token: 'SECRET', isOwner: false),
+    ];
+
+    $collection = new ResourceCollection($items, CollectionTestConditionalResource::class);
+
+    foreach ($collection->toArray() as $item) {
+        foreach ($item as $value) {
+            expect($value)->not->toBeInstanceOf(ConditionalValue::class);
+        }
+    }
 });

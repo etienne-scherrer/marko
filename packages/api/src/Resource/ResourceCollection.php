@@ -26,12 +26,15 @@ class ResourceCollection implements ResourceCollectionInterface
     ) {}
 
     /**
+     * Resolve every item through its resource's filtered output, so when() and
+     * missing() fields are honoured exactly as they are for a single resource.
+     *
      * @return array<int|string, mixed>
      */
     public function toArray(): array
     {
         return array_map(
-            fn (mixed $item): array => new $this->resourceClass($item)->toArray(),
+            fn (mixed $item): array => new $this->resourceClass($item)->resolve(),
             $this->items,
         );
     }
