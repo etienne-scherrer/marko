@@ -8,8 +8,8 @@ use Marko\Core\Attributes\Observer;
 use Marko\Integration\Fixture\Event\BookPublished;
 
 /**
- * Declared async: dispatching BookPublished should push a job to the queue
- * rather than write the marker during the dispatch call (#163).
+ * Declared async: dispatching BookPublished pushes an AsyncObserverJob to the
+ * queue, and the marker is only written when a worker runs that job.
  */
 #[Observer(event: BookPublished::class, async: true)]
 readonly class RecordBookPublished
