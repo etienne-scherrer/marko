@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Database\Tests\Feature;
 
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Exceptions\SeederException;
@@ -69,6 +70,17 @@ function createTrackingConnection(
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -133,6 +145,17 @@ function createOrderTrackingConnection(
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -194,6 +217,17 @@ function createRunTrackingConnection(
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }
@@ -265,7 +299,7 @@ describe('Seeder Execution', function (): void {
             ),
         ];
 
-        $runner = new SeederRunner($seeders, isProduction: false);
+        $runner = new SeederRunner($seeders, appEnvironment: new AppEnvironment(['APP_ENV' => 'local']));
         $runner->runAll($definitions);
 
         expect($insertedData)
@@ -295,7 +329,7 @@ describe('Seeder Execution', function (): void {
             new SeederDefinition(seederClass: PostSeeder::class, name: 'posts', order: 20),
         ];
 
-        $runner = new SeederRunner($seeders, isProduction: false);
+        $runner = new SeederRunner($seeders, appEnvironment: new AppEnvironment(['APP_ENV' => 'local']));
         $runner->runAll($definitions);
 
         // Users (order 10) should run first
@@ -324,7 +358,7 @@ describe('Seeder Execution', function (): void {
             new SeederDefinition(seederClass: PostSeeder::class, name: 'posts', order: 20),
         ];
 
-        $runner = new SeederRunner($seeders, isProduction: false);
+        $runner = new SeederRunner($seeders, appEnvironment: new AppEnvironment(['APP_ENV' => 'local']));
         $runner->runByName('posts', $definitions);
 
         // Only posts seeder should have run
@@ -344,7 +378,7 @@ describe('Seeder Execution', function (): void {
             new SeederDefinition(seederClass: UserSeeder::class, name: 'users', order: 1),
         ];
 
-        $runner = new SeederRunner($seeders, isProduction: true);
+        $runner = new SeederRunner($seeders, appEnvironment: new AppEnvironment(['APP_ENV' => 'production']));
 
         expect(fn () => $runner->runAll($definitions))
             ->toThrow(SeederException::class, 'production');
@@ -357,7 +391,7 @@ describe('Seeder Execution', function (): void {
             new SeederDefinition(seederClass: UserSeeder::class, name: 'users', order: 1),
         ];
 
-        $runner = new SeederRunner($seeders, isProduction: false);
+        $runner = new SeederRunner($seeders, appEnvironment: new AppEnvironment(['APP_ENV' => 'local']));
 
         expect(fn () => $runner->runByName('nonexistent', $definitions))
             ->toThrow(SeederException::class, 'not found');

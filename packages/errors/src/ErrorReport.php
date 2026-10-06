@@ -28,6 +28,7 @@ readonly class ErrorReport
     public static function fromThrowable(
         Throwable $throwable,
         Severity $severity,
+        DateTimeImmutable $timestamp,
     ): self {
         return new self(
             id: bin2hex(random_bytes(16)),
@@ -38,7 +39,7 @@ readonly class ErrorReport
             file: $throwable->getFile(),
             line: $throwable->getLine(),
             severity: $severity,
-            timestamp: new DateTimeImmutable(),
+            timestamp: $timestamp,
             context: $throwable instanceof MarkoException ? $throwable->getContext() : '',
             suggestion: $throwable instanceof MarkoException ? $throwable->getSuggestion() : '',
             previous: $throwable->getPrevious(),

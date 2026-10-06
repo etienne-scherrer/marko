@@ -11,8 +11,10 @@ use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
 use Marko\Database\ReadWrite\Connection\ReadWriteConnection;
 
-function makePgSqlTestConnection(array &$queryCalls = [], array &$executeCalls = []): ConnectionInterface&TransactionInterface
-{
+function makePgSqlTestConnection(
+    array &$queryCalls = [],
+    array &$executeCalls = [],
+): ConnectionInterface&TransactionInterface {
     return new class ($queryCalls, $executeCalls) implements ConnectionInterface, TransactionInterface
     {
         public function __construct(
@@ -47,8 +49,9 @@ function makePgSqlTestConnection(array &$queryCalls = [], array &$executeCalls =
             return 1;
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -62,6 +65,17 @@ function makePgSqlTestConnection(array &$queryCalls = [], array &$executeCalls =
             return 'pgsql';
         }
 
+        public function supportsReturning(): bool
+        {
+            return true;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
+
         public function beginTransaction(): void {}
 
         public function commit(): void {}
@@ -73,10 +87,22 @@ function makePgSqlTestConnection(array &$queryCalls = [], array &$executeCalls =
             return false;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
             return $callback();
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 }
 
@@ -143,13 +169,15 @@ function makePgSqlConfigRepository(): ConfigRepositoryInterface
             return [];
         }
 
-        public function all(?string $scope = null): array
-        {
+        public function all(
+            ?string $scope = null,
+        ): array {
             return [];
         }
 
-        public function withScope(string $scope): ConfigRepositoryInterface
-        {
+        public function withScope(
+            string $scope,
+        ): ConfigRepositoryInterface {
             return $this;
         }
     };
@@ -177,8 +205,9 @@ function makePgSqlSpyFactory(): ConnectionFactoryInterface
 
         private int $callIndex = 0;
 
-        public function make(DatabaseConfig $config): ConnectionInterface
-        {
+        public function make(
+            DatabaseConfig $config,
+        ): ConnectionInterface {
             $index = $this->callIndex++;
 
             return $index === 0 ? $this->writeConnection : $this->replicaConnection;
@@ -186,8 +215,10 @@ function makePgSqlSpyFactory(): ConnectionFactoryInterface
     };
 }
 
-function makePgSqlContainer(ConfigRepositoryInterface $config, ConnectionFactoryInterface $factory): ContainerInterface
-{
+function makePgSqlContainer(
+    ConfigRepositoryInterface $config,
+    ConnectionFactoryInterface $factory,
+): ContainerInterface {
     return new class ($config, $factory) implements ContainerInterface
     {
         /** @var array<string, object> */
@@ -198,8 +229,9 @@ function makePgSqlContainer(ConfigRepositoryInterface $config, ConnectionFactory
             private ConnectionFactoryInterface $factory,
         ) {}
 
-        public function get(string $id): mixed
-        {
+        public function get(
+            string $id,
+        ): mixed {
             return match ($id) {
                 ConfigRepositoryInterface::class => $this->config,
                 ConnectionFactoryInterface::class => $this->factory,
@@ -207,8 +239,9 @@ function makePgSqlContainer(ConfigRepositoryInterface $config, ConnectionFactory
             };
         }
 
-        public function has(string $id): bool
-        {
+        public function has(
+            string $id,
+        ): bool {
             return true;
         }
 
@@ -221,23 +254,26 @@ function makePgSqlContainer(ConfigRepositoryInterface $config, ConnectionFactory
             $this->registered[$id] = $instance;
         }
 
-        public function call(Closure $callable): mixed
-        {
+        public function call(
+            Closure $callable,
+        ): mixed {
             return $callable($this);
         }
 
         /**
          * @return array<string, object>
          */
-        public function resolvedInstances(?string $interface = null): array
-        {
+        public function resolvedInstances(
+            ?string $interface = null,
+        ): array {
             return [];
         }
     };
 }
 
-function bootPgSqlModule(ContainerInterface $container): void
-{
+function bootPgSqlModule(
+    ContainerInterface $container,
+): void {
     $module = require dirname(__DIR__, 2) . '/module.php';
     ($module['boot'])($container);
 }
@@ -266,8 +302,9 @@ describe('pgsql wiring integration', function (): void {
                 private ConnectionInterface&TransactionInterface $replicaConnection,
             ) {}
 
-            public function make(DatabaseConfig $config): ConnectionInterface
-            {
+            public function make(
+                DatabaseConfig $config,
+            ): ConnectionInterface {
                 $index = $this->callIndex++;
 
                 return $index === 0 ? makePgSqlTestConnection() : $this->replicaConnection;
@@ -297,8 +334,9 @@ describe('pgsql wiring integration', function (): void {
                 private ConnectionInterface&TransactionInterface $writeConnection,
             ) {}
 
-            public function make(DatabaseConfig $config): ConnectionInterface
-            {
+            public function make(
+                DatabaseConfig $config,
+            ): ConnectionInterface {
                 $index = $this->callIndex++;
 
                 return $index === 0 ? $this->writeConnection : makePgSqlTestConnection();
@@ -331,8 +369,9 @@ describe('pgsql wiring integration', function (): void {
                 private ConnectionInterface&TransactionInterface $replicaConnection,
             ) {}
 
-            public function make(DatabaseConfig $config): ConnectionInterface
-            {
+            public function make(
+                DatabaseConfig $config,
+            ): ConnectionInterface {
                 $index = $this->callIndex++;
 
                 return $index === 0 ? $this->writeConnection : $this->replicaConnection;

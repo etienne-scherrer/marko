@@ -13,6 +13,8 @@ use Marko\Core\Plugin\PluginInterceptor;
 use Marko\Core\Plugin\PluginRegistry;
 use Marko\TestFixture\Exceptions\NoDriverException;
 use Marko\TestFixture\SomeInterface;
+use Marko\TestFixtureAware\Exceptions\NoDriverException as AwareNoDriverException;
+use Marko\TestFixtureAware\SomeInterface as AwareSomeInterface;
 use Marko\TestFixtureNoDriver\SomeInterface as NoDriverSomeInterface;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\ContainerInterface as PsrContainerInterface;
@@ -20,6 +22,8 @@ use Psr\Container\ContainerInterface as PsrContainerInterface;
 require_once __DIR__ . '/Fixtures/TestFixtureInterface.php';
 require_once __DIR__ . '/Fixtures/TestFixtureNoDriverException.php';
 require_once __DIR__ . '/Fixtures/TestFixtureNoDriverInterface.php';
+require_once __DIR__ . '/Fixtures/TestFixtureAwareInterface.php';
+require_once __DIR__ . '/Fixtures/TestFixtureAwareNoDriverException.php';
 
 // Test fixtures - classes used for testing
 class SimpleClass {}
@@ -251,6 +255,13 @@ it('returns false from has() for non-resolvable interfaces without binding', fun
         ->and($container->has('NonExistentClass'))->toBeFalse();
 });
 
+it('reports instances registered via instance() from has()', function (): void {
+    $container = new Container();
+    $container->instance(UnboundInterface::class, new class () implements UnboundInterface {});
+
+    expect($container->has(UnboundInterface::class))->toBeTrue();
+});
+
 it('resolves closure bindings by calling the closure with container', function (): void {
     $container = new Container();
     $container->bind(UnboundInterface::class, fn (Container $c) => new class () implements UnboundInterface {});
@@ -379,6 +390,20 @@ it('throws NoDriverException when interface package has one and no binding exist
 
     expect(fn () => $container->get(SomeInterface::class))
         ->toThrow(NoDriverException::class);
+});
+
+it('still calls zero-argument noDriverInstalled factories', function (): void {
+    $container = new Container();
+
+    expect(fn () => $container->get(SomeInterface::class))
+        ->toThrow(NoDriverException::class, 'No driver installed for TestFixture');
+});
+
+it('passes the requested interface to noDriverInstalled factories that accept a parameter', function (): void {
+    $container = new Container();
+
+    expect(fn () => $container->get(AwareSomeInterface::class))
+        ->toThrow(AwareNoDriverException::class, 'Unresolved interface: ' . AwareSomeInterface::class);
 });
 
 it('throws generic BindingException when no NoDriverException class exists for the package', function (): void {

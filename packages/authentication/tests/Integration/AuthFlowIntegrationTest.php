@@ -13,9 +13,10 @@ use Marko\Authentication\Event\FailedLoginEvent;
 use Marko\Authentication\Event\LoginEvent;
 use Marko\Authentication\Event\LogoutEvent;
 use Marko\Authentication\Guard\SessionGuard;
-use Marko\Authentication\Guard\TokenGuard;
+use Marko\Authentication\Tests\Fixtures\StatelessFakeGuard;
 use Marko\Authentication\Token\RememberTokenManager;
 use Marko\Testing\Fake\FakeAuthenticatable;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Marko\Testing\Fake\FakeCookieJar;
 use Marko\Testing\Fake\FakeEventDispatcher;
@@ -28,6 +29,7 @@ test('complete login flow works', function (): void {
     $session->start();
 
     $configRepo = new FakeConfigRepository([
+        'authentication.remember.cookie.prefix' => 'remember_',
         'authentication.default.guard' => 'web',
         'authentication.guards' => [
             'web' => ['driver' => 'session', 'provider' => 'users'],
@@ -41,6 +43,10 @@ test('complete login flow works', function (): void {
         config: $authConfig,
         session: $session,
         provider: $provider,
+        eventDispatcher: new FakeEventDispatcher(),
+        cookieJar: new FakeCookieJar(),
+        rememberTokenManager: new RememberTokenManager(new FakeClock()),
+        guardDriverRegistry: StatelessFakeGuard::tokenDriverRegistry(),
     );
 
     // Initial state - not authenticated
@@ -65,6 +71,7 @@ test('complete logout flow works', function (): void {
     $session->start();
 
     $configRepo = new FakeConfigRepository([
+        'authentication.remember.cookie.prefix' => 'remember_',
         'authentication.default.guard' => 'web',
         'authentication.guards' => [
             'web' => ['driver' => 'session', 'provider' => 'users'],
@@ -78,6 +85,10 @@ test('complete logout flow works', function (): void {
         config: $authConfig,
         session: $session,
         provider: $provider,
+        eventDispatcher: new FakeEventDispatcher(),
+        cookieJar: new FakeCookieJar(),
+        rememberTokenManager: new RememberTokenManager(new FakeClock()),
+        guardDriverRegistry: StatelessFakeGuard::tokenDriverRegistry(),
     );
 
     // Login first
@@ -98,7 +109,7 @@ test('remember me creates and uses token', function (): void {
     $session = new FakeSession();
     $session->start();
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
     $provider = new FakeUserProvider([42 => $user]);
 
     $guard = new SessionGuard(
@@ -137,6 +148,7 @@ test('guard switching works correctly', function (): void {
     $session->start();
 
     $configRepo = new FakeConfigRepository([
+        'authentication.remember.cookie.prefix' => 'remember_',
         'authentication.default.guard' => 'web',
         'authentication.guards' => [
             'web' => ['driver' => 'session', 'provider' => 'users'],
@@ -152,6 +164,10 @@ test('guard switching works correctly', function (): void {
         config: $authConfig,
         session: $session,
         provider: $provider,
+        eventDispatcher: new FakeEventDispatcher(),
+        cookieJar: new FakeCookieJar(),
+        rememberTokenManager: new RememberTokenManager(new FakeClock()),
+        guardDriverRegistry: StatelessFakeGuard::tokenDriverRegistry(),
     );
 
     // Get different guards
@@ -161,7 +177,7 @@ test('guard switching works correctly', function (): void {
 
     // Verify correct guard types
     expect($webGuard)->toBeInstanceOf(SessionGuard::class)
-        ->and($apiGuard)->toBeInstanceOf(TokenGuard::class)
+        ->and($apiGuard)->toBeInstanceOf(StatelessFakeGuard::class)
         ->and($adminGuard)->toBeInstanceOf(SessionGuard::class)
         ->and($webGuard->getName())->toBe('web')
         ->and($apiGuard->getName())->toBe('api')
@@ -207,6 +223,7 @@ test('module bindings resolve correctly', function (): void {
 
 test('config loading works', function (): void {
     $configRepo = new FakeConfigRepository([
+        'authentication.remember.cookie.prefix' => 'remember_',
         'authentication.default.guard' => 'api',
         'authentication.default.provider' => 'customers',
         'authentication.guards' => [

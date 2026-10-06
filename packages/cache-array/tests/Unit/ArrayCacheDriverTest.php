@@ -7,6 +7,7 @@ use Marko\Cache\Contracts\CacheInterface;
 use Marko\Cache\Contracts\CacheItemInterface;
 use Marko\Cache\Exceptions\InvalidKeyException;
 use Marko\Cache\Memory\Driver\ArrayCacheDriver;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 function createArrayCacheTestConfig(
@@ -21,7 +22,8 @@ function createArrayCacheTestConfig(
 
 beforeEach(function (): void {
     $this->config = createArrayCacheTestConfig();
-    $this->driver = new ArrayCacheDriver($this->config);
+    $this->clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $this->driver = new ArrayCacheDriver($this->config, $this->clock);
 });
 
 it('implements CacheInterface', function (): void {
@@ -230,8 +232,8 @@ it('stores same object reference', function (): void {
 });
 
 it('is isolated per instance', function (): void {
-    $driver1 = new ArrayCacheDriver($this->config);
-    $driver2 = new ArrayCacheDriver($this->config);
+    $driver1 = new ArrayCacheDriver($this->config, $this->clock);
+    $driver2 = new ArrayCacheDriver($this->config, $this->clock);
 
     $driver1->set('key', 'value1');
 
@@ -246,4 +248,80 @@ it('returns the incremented value on a subsequent increment (array driver)', fun
     $this->driver->increment('counter', 60);
 
     expect($this->driver->increment('counter', 60))->toBe(2);
+});
+
+it('returns an int from get() after increment() (array driver)', function (): void {
+    $this->driver->increment('counter', 60);
+    $this->driver->increment('counter', 60);
+
+    expect($this->driver->get('counter'))->toBe(2)
+        ->and($this->driver->getItem('counter')->get())->toBe(2);
+});
+
+it('keeps an entry until its ttl has elapsed on the clock', function (): void {
+    $this->driver->set('key', 'value', 60);
+
+    $this->clock->travel('+60 seconds');
+
+    expect($this->driver->get('key'))->toBe('value')
+        ->and($this->driver->has('key'))->toBeTrue();
+});
+
+it('expires an entry one second after its ttl on the clock', function (): void {
+    $this->driver->set('key', 'value', 60);
+
+    $this->clock->travel('+61 seconds');
+
+    expect($this->driver->has('key'))->toBeFalse()
+        ->and($this->driver->get('key', 'default'))->toBe('default')
+        ->and($this->driver->getItem('key')->isHit())->toBeFalse();
+});
+
+it('expires an entry stored with the default ttl relative to the clock', function (): void {
+    $driver = new ArrayCacheDriver(createArrayCacheTestConfig(defaultTtl: 30), $this->clock);
+    $driver->set('key', 'value');
+
+    $this->clock->travel('+30 seconds');
+    expect($driver->has('key'))->toBeTrue();
+
+    $this->clock->travel('+1 second');
+    expect($driver->has('key'))->toBeFalse();
+});
+
+it('never expires an entry with zero ttl however far the clock moves', function (): void {
+    $this->driver->set('key', 'value', 0);
+
+    $this->clock->travel('+10 years');
+
+    expect($this->driver->get('key'))->toBe('value');
+});
+
+it('reports the item expiry relative to the clock', function (): void {
+    $this->driver->set('key', 'value', 90);
+
+    $expiresAt = $this->driver->getItem('key')->expiresAt();
+
+    expect($expiresAt)->not->toBeNull()
+        ->and($expiresAt->getTimestamp())->toBe($this->clock->now()->getTimestamp() + 90);
+});
+
+it('restarts an expired counter relative to the clock on increment', function (): void {
+    $this->driver->increment('counter', 60);
+    $this->driver->increment('counter', 60);
+
+    $this->clock->travel('+61 seconds');
+
+    expect($this->driver->increment('counter', 60))->toBe(1)
+        ->and($this->driver->getItem('counter')->expiresAt()->getTimestamp())
+        ->toBe($this->clock->now()->getTimestamp() + 60);
+});
+
+it('keeps counting within the window without moving the expiry', function (): void {
+    $this->driver->increment('counter', 60);
+    $expiresAt = $this->driver->getItem('counter')->expiresAt()->getTimestamp();
+
+    $this->clock->travel('+59 seconds');
+
+    expect($this->driver->increment('counter', 60))->toBe(2)
+        ->and($this->driver->getItem('counter')->expiresAt()->getTimestamp())->toBe($expiresAt);
 });

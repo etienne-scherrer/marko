@@ -5,13 +5,29 @@ declare(strict_types=1);
 namespace Marko\Session\Database\Handler;
 
 use Marko\Database\Connection\ConnectionInterface;
+use Marko\Session\Config\SessionConfig;
 use Marko\Session\Contracts\SessionHandlerInterface;
+use Psr\Clock\ClockInterface;
 
 readonly class DatabaseSessionHandler implements SessionHandlerInterface
 {
+    private const int SECONDS_PER_MINUTE = 60;
+
+    private const string TABLE = 'sessions';
+
     public function __construct(
         private ConnectionInterface $connection,
+        private SessionConfig $config,
+        private ClockInterface $clock,
     ) {}
+
+    /**
+     * The sessions table name quoted for the connection's SQL dialect.
+     */
+    private function table(): string
+    {
+        return $this->connection->quoteIdentifier(self::TABLE);
+    }
 
     public function open(
         string $path,
@@ -29,7 +45,7 @@ readonly class DatabaseSessionHandler implements SessionHandlerInterface
         string $id,
     ): string|false {
         $results = $this->connection->query(
-            'SELECT payload FROM sessions WHERE id = ?',
+            "SELECT payload FROM {$this->table()} WHERE id = ?",
             [$id],
         );
 
@@ -44,15 +60,17 @@ readonly class DatabaseSessionHandler implements SessionHandlerInterface
         string $id,
         string $data,
     ): bool {
+        $now = $this->clock->now()->getTimestamp();
+
         if ($this->connection->driverName() === 'mysql') {
             $this->connection->execute(
-                'INSERT INTO sessions (id, payload, last_activity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), last_activity = VALUES(last_activity)',
-                [$id, $data, time()],
+                "INSERT INTO {$this->table()} (id, payload, last_activity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), last_activity = VALUES(last_activity)",
+                [$id, $data, $now],
             );
         } else {
             $this->connection->execute(
-                'INSERT INTO sessions (id, payload, last_activity) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, last_activity = excluded.last_activity',
-                [$id, $data, time()],
+                "INSERT INTO {$this->table()} (id, payload, last_activity) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, last_activity = excluded.last_activity",
+                [$id, $data, $now],
             );
         }
 
@@ -63,7 +81,7 @@ readonly class DatabaseSessionHandler implements SessionHandlerInterface
         string $id,
     ): bool {
         $this->connection->execute(
-            'DELETE FROM sessions WHERE id = ?',
+            "DELETE FROM {$this->table()} WHERE id = ?",
             [$id],
         );
 
@@ -73,11 +91,43 @@ readonly class DatabaseSessionHandler implements SessionHandlerInterface
     public function gc(
         int $max_lifetime,
     ): int|false {
-        $expireTime = time() - $max_lifetime;
+        $expireTime = $this->clock->now()->getTimestamp() - $max_lifetime;
 
         return $this->connection->execute(
-            'DELETE FROM sessions WHERE last_activity < ?',
+            "DELETE FROM {$this->table()} WHERE last_activity < ?",
             [$expireTime],
         );
+    }
+
+    /**
+     * A session is known when its row exists and its last activity falls
+     * within the configured lifetime, measured with the injected clock.
+     * Expired rows are left for gc() to delete.
+     */
+    public function validateId(
+        string $id,
+    ): bool {
+        $activeSince = $this->clock->now()->getTimestamp() - $this->config->lifetime() * self::SECONDS_PER_MINUTE;
+
+        return $this->connection->query(
+            "SELECT 1 FROM {$this->table()} WHERE id = ? AND last_activity >= ?",
+            [$id, $activeSince],
+        ) !== [];
+    }
+
+    /**
+     * Slide the expiry of an existing session forward without rewriting its
+     * payload. Never inserts: an id with no row stays without one.
+     */
+    public function updateTimestamp(
+        string $id,
+        string $data,
+    ): bool {
+        $this->connection->execute(
+            "UPDATE {$this->table()} SET last_activity = ? WHERE id = ?",
+            [$this->clock->now()->getTimestamp(), $id],
+        );
+
+        return true;
     }
 }

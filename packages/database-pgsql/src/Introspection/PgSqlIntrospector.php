@@ -5,16 +5,31 @@ declare(strict_types=1);
 namespace Marko\Database\PgSql\Introspection;
 
 use Marko\Database\Connection\ConnectionInterface;
+use Marko\Database\Connection\TransactionInterface;
+use Marko\Database\Exceptions\ExpressionDefaultProbeException;
+use Marko\Database\Exceptions\MigrationException;
+use Marko\Database\Exceptions\QueryException;
+use Marko\Database\Introspection\ExpressionDefaultMatcherInterface;
 use Marko\Database\Introspection\IntrospectorInterface;
+use Marko\Database\PgSql\Sql\PgSqlIdentifier;
 use Marko\Database\Schema\Column;
+use Marko\Database\Schema\Expression;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Index;
 use Marko\Database\Schema\IndexType;
+use Marko\Database\Schema\Literal;
 use Marko\Database\Schema\Table;
 
-readonly class PgSqlIntrospector implements IntrospectorInterface
+readonly class PgSqlIntrospector implements IntrospectorInterface, ExpressionDefaultMatcherInterface
 {
     private const string DEFAULT_SCHEMA = 'public';
+
+    /**
+     * The temporary table and column matchesStoredDefault() declares an expression default on.
+     */
+    private const string DEFAULT_PROBE_TABLE = 'marko_default_probe';
+
+    private const string DEFAULT_PROBE_COLUMN = 'probe';
 
     /**
      * PostgreSQL to normalized type mapping.
@@ -164,6 +179,114 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
         return $columns;
     }
 
+    /**
+     * Whether the column would report the default it has now if it were declared with $expression.
+     *
+     * Inside a transaction that is always rolled back, it creates a temporary table with one column of the real
+     * column's type and the expression as its default, then compares the default PostgreSQL stored for it with
+     * the real column's. Both are deparsed by pg_get_expr(), as information_schema.columns.column_default
+     * reports them, so `now() + interval '1 day'` matches a stored `(now() + '1 day'::interval)`.
+     *
+     * @throws ExpressionDefaultProbeException When PostgreSQL rejects the expression, or the user may not create a temporary table
+     */
+    public function matchesStoredDefault(
+        string $table,
+        string $column,
+        Expression $expression,
+    ): bool {
+        $relation = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+        $stored = $this->rawColumnDefault($relation, $column);
+
+        if ($stored === null || $stored['column_default'] === null) {
+            return false;
+        }
+
+        $transaction = $this->connection instanceof TransactionInterface ? $this->connection : null;
+        $transaction?->beginTransaction();
+
+        try {
+            $this->createDefaultProbe($table, $column, $stored['column_type'], $expression);
+            $probe = $this->rawColumnDefault('pg_temp.' . self::DEFAULT_PROBE_TABLE, self::DEFAULT_PROBE_COLUMN);
+        } finally {
+            if ($transaction !== null) {
+                $transaction->rollback();
+            } else {
+                $this->connection->execute(
+                    'DROP TABLE IF EXISTS pg_temp.' . $this->quoteIdentifier(self::DEFAULT_PROBE_TABLE),
+                );
+            }
+        }
+
+        return $probe !== null && $probe['column_default'] === $stored['column_default'];
+    }
+
+    /**
+     * The probe table holding the expression whose stored form is compared, a temporary table that only the
+     * current session sees.
+     *
+     * @throws ExpressionDefaultProbeException When PostgreSQL rejects the probe table
+     */
+    private function createDefaultProbe(
+        string $table,
+        string $column,
+        string $columnType,
+        Expression $expression,
+    ): void {
+        $sql = sprintf(
+            'CREATE TEMP TABLE %s (%s %s DEFAULT %s)',
+            $this->quoteIdentifier(self::DEFAULT_PROBE_TABLE),
+            $this->quoteIdentifier(self::DEFAULT_PROBE_COLUMN),
+            $columnType,
+            $expression->sql,
+        );
+
+        try {
+            $this->connection->execute($sql);
+        } catch (QueryException $e) {
+            throw ExpressionDefaultProbeException::rejected($table, $column, $expression->sql, $e->getMessage());
+        }
+    }
+
+    /**
+     * A column's type as PostgreSQL spells it (`character varying(255)`) and its default as
+     * information_schema.columns reports it, with every cast; null when the relation has no such column.
+     *
+     * @param string $relation The table, schema-qualified and quoted (`"public"."events"`, `pg_temp.probe`)
+     * @return array{column_type: string, column_default: string|null}|null
+     */
+    private function rawColumnDefault(
+        string $relation,
+        string $column,
+    ): ?array {
+        $sql = <<<'SQL'
+            SELECT
+                format_type(a.atttypid, a.atttypmod) AS column_type,
+                pg_get_expr(d.adbin, d.adrelid) AS column_default
+            FROM pg_attribute a
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE a.attrelid = CAST(? AS regclass)
+              AND a.attname = ?
+              AND NOT a.attisdropped
+            SQL;
+
+        $row = $this->connection->query($sql, [$relation, $column])[0] ?? null;
+
+        if ($row === null) {
+            return null;
+        }
+
+        return [
+            'column_type' => (string) $row['column_type'],
+            'column_default' => $row['column_default'] === null ? null : (string) $row['column_default'],
+        ];
+    }
+
+    private function quoteIdentifier(
+        string $identifier,
+    ): string {
+        return PgSqlIdentifier::quote($identifier);
+    }
+
     public function getIndexes(
         string $table,
     ): array {
@@ -171,12 +294,24 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
         // Primary keys are tracked as column flags, not as Index objects.
         $pkIndexNames = $this->getPrimaryKeyIndexNames($table);
 
+        // is_constraint: the index backs a UNIQUE constraint (inline UNIQUE), which only DROP CONSTRAINT removes
         $sql = <<<'SQL'
-            SELECT indexname, indexdef
-            FROM pg_indexes
-            WHERE tablename = ?
-              AND schemaname = ?
-            ORDER BY indexname
+            SELECT
+                i.indexname,
+                i.indexdef,
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint con
+                    JOIN pg_class ic ON ic.oid = con.conindid
+                    JOIN pg_namespace n ON n.oid = ic.relnamespace
+                    WHERE con.contype = 'u'
+                      AND ic.relname = i.indexname
+                      AND n.nspname = i.schemaname
+                ) AS is_constraint
+            FROM pg_indexes i
+            WHERE i.tablename = ?
+              AND i.schemaname = ?
+            ORDER BY i.indexname
             SQL;
 
         $rows = $this->connection->query($sql, [$table, $this->schema]);
@@ -199,6 +334,8 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
                 name: $name,
                 columns: $columns,
                 type: $isUnique ? IndexType::Unique : IndexType::Btree,
+                where: $this->parseIndexPredicate($indexDef),
+                constraint: in_array($row['is_constraint'] ?? false, [true, 't', 'true', '1', 1], true),
             );
         }
 
@@ -365,20 +502,34 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
         return str_contains($default, 'nextval(') && str_contains($default, '_seq');
     }
 
+    /**
+     * The default the column declares: a string, bool, int or float for a literal, an Expression for anything
+     * else (`gen_random_uuid()`, `CURRENT_TIMESTAMP`), and a Literal for a string that would otherwise read as
+     * an expression shortcut, so a down migration restores it quoted.
+     *
+     * @throws MigrationException Only for an empty expression, which is returned as null before that
+     */
     private function parseDefault(
         ?string $default,
         string $type,
     ): mixed {
-        if ($default === null) {
+        if ($default === null || trim($default) === '') {
             return null;
         }
 
         // Remove type cast suffix like ::character varying, ::integer, etc.
-        $default = preg_replace('/::[\w\s]+$/', '', $default);
+        $default = (string) preg_replace('/::[\w\s]+$/', '', $default);
 
-        // Handle string defaults (wrapped in quotes)
-        if (preg_match("/^'(.*)'/", $default, $matches)) {
-            return $matches[1];
+        // An explicit DEFAULT NULL is no default
+        if (strtoupper($default) === 'NULL') {
+            return null;
+        }
+
+        // A string literal is the whole default between single quotes, with quotes inside it doubled
+        if (preg_match("/^'((?:[^']|'')*)'$/", $default, $matches)) {
+            $value = str_replace("''", "'", $matches[1]);
+
+            return Expression::isShortcut($value) ? new Literal($value) : $value;
         }
 
         // Handle boolean defaults
@@ -404,8 +555,8 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
             }
         }
 
-        // Return as-is for expressions like CURRENT_TIMESTAMP, NOW(), etc.
-        return $default;
+        // Everything else is an expression, such as CURRENT_TIMESTAMP or gen_random_uuid()
+        return new Expression($default);
     }
 
     /**
@@ -413,6 +564,52 @@ readonly class PgSqlIntrospector implements IntrospectorInterface
      *
      * @return array<string>
      */
+    /**
+     * Extract the predicate of a partial index from its definition, without the
+     * outer parentheses PostgreSQL adds, or null for a full index.
+     */
+    private function parseIndexPredicate(
+        string $indexDef,
+    ): ?string {
+        if (!preg_match('/\)\s+WHERE\s+(.+)$/is', $indexDef, $matches)) {
+            return null;
+        }
+
+        $predicate = trim($matches[1]);
+
+        return $this->isWrappedInOneParenthesisPair($predicate) ? substr($predicate, 1, -1) : $predicate;
+    }
+
+    /**
+     * Whether the opening parenthesis at position 0 closes at the last character.
+     */
+    private function isWrappedInOneParenthesisPair(
+        string $expression,
+    ): bool {
+        if (!str_starts_with($expression, '(')) {
+            return false;
+        }
+
+        $depth = 0;
+        $length = strlen($expression);
+
+        for ($position = 0; $position < $length; $position++) {
+            $character = $expression[$position];
+
+            if ($character === '(') {
+                $depth++;
+            } elseif ($character === ')') {
+                $depth--;
+
+                if ($depth === 0) {
+                    return $position === $length - 1;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private function parseIndexColumns(
         string $indexDef,
     ): array {

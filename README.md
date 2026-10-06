@@ -292,6 +292,10 @@ Marko ships as composable packages — require only what you need. Every package
 
 | Package | Description |
 |---------|-------------|
+| [broadcasting](packages/broadcasting/README.md) | Realtime broadcasting contracts and channel authorization |
+| [broadcasting-amphp](packages/broadcasting-amphp/README.md) | Self-hosted async SSE broadcasting server on amphp |
+| [broadcasting-mercure](packages/broadcasting-mercure/README.md) | Mercure hub broadcasting driver |
+| [broadcasting-pusher](packages/broadcasting-pusher/README.md) | Pusher-protocol broadcasting driver (Pusher, Soketi, Reverb) |
 | [pubsub](packages/pubsub/README.md) | Pub/Sub contracts |
 | [pubsub-pgsql](packages/pubsub-pgsql/README.md) | PostgreSQL LISTEN/NOTIFY driver |
 | [pubsub-redis](packages/pubsub-redis/README.md) | Redis Pub/Sub driver |
@@ -326,6 +330,7 @@ Marko ships as composable packages — require only what you need. Every package
 | Package | Description |
 |---------|-------------|
 | [api](packages/api/README.md) | REST API foundation |
+| [clock](packages/clock/README.md) | PSR-20 system clock |
 | [validation](packages/validation/README.md) | Input validation |
 | [pagination](packages/pagination/README.md) | Query result pagination |
 | [notification](packages/notification/README.md) | Notification contracts |

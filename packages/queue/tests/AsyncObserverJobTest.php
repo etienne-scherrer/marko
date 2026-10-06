@@ -115,6 +115,47 @@ describe('AsyncObserverJob', function (): void {
             ->and($capture->event->userId)->toBe(42);
     });
 
+    it(
+        'releases the container and envelope from AsyncObserverJob when releaseContainer is called',
+        function (): void {
+            $observer = new readonly class ()
+            {
+                public function handle(
+                    object $event,
+                ): never {
+                    throw new RuntimeException('observer failed');
+                }
+            };
+            $envelope = createAsyncObserverJobEnvelope();
+            $job = new AsyncObserverJob(
+                observerClass: $observer::class,
+                eventData: $envelope->wrap(serialize(new stdClass())),
+            );
+            // The stub container is an anonymous class, which serialize() refuses.
+            $job->setContainer(createStubContainer($observer));
+            $job->setJobEnvelope($envelope);
+
+            expect(fn () => $job->handle())->toThrow(RuntimeException::class, 'observer failed');
+
+            $job->releaseContainer();
+
+            expect(AsyncObserverJob::unserialize($job->serialize()))->toBeInstanceOf(AsyncObserverJob::class)
+                ->and(fn () => $job->handle())->toThrow(RuntimeException::class, 'without a container');
+        },
+    );
+
+    it('allows releaseContainer to be called before anything was injected', function (): void {
+        $job = new AsyncObserverJob(
+            observerClass: 'App\Observers\TestObserver',
+            eventData: serialize(new stdClass()),
+        );
+
+        $job->releaseContainer();
+        $job->releaseContainer();
+
+        expect(AsyncObserverJob::unserialize($job->serialize()))->toBeInstanceOf(AsyncObserverJob::class);
+    });
+
     it('serializes and unserializes correctly', function (): void {
         $job = new AsyncObserverJob(
             observerClass: 'App\Observers\TestObserver',

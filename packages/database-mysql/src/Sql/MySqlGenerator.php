@@ -7,10 +7,13 @@ namespace Marko\Database\MySql\Sql;
 use Marko\Database\Diff\SchemaDiff;
 use Marko\Database\Diff\SqlGeneratorInterface;
 use Marko\Database\Diff\TableDiff;
+use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Schema\Column;
+use Marko\Database\Schema\Expression;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Index;
 use Marko\Database\Schema\IndexType;
+use Marko\Database\Schema\Literal;
 use Marko\Database\Schema\Table;
 
 /**
@@ -51,16 +54,58 @@ class MySqlGenerator implements SqlGeneratorInterface
     ];
 
     /**
-     * SQL expression keywords that should not be quoted.
-     *
-     * @var array<string>
+     * Expression defaults MySQL accepts without parentheses: CURRENT_TIMESTAMP and its synonyms, with or
+     * without a precision. Every other expression default must be parenthesized (MySQL 8.0.13+).
      */
-    private const array SQL_EXPRESSIONS = [
-        'CURRENT_TIMESTAMP',
-        'CURRENT_DATE',
-        'CURRENT_TIME',
-        'NOW()',
-        'NULL',
+    private const string BARE_EXPRESSION_PATTERN =
+        '/^(?:(?:CURRENT_TIMESTAMP|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?|NOW\(\d*\))$/i';
+
+    /**
+     * Native base types whose length is part of the type, so a different length is a different type.
+     *
+     * @var list<string>
+     */
+    private const array LENGTH_TYPES = ['char', 'varchar', 'binary', 'varbinary'];
+
+    /**
+     * Native base types that carry a character set and collation.
+     *
+     * @var list<string>
+     */
+    private const array COLLATED_TYPES = [
+        'char',
+        'varchar',
+        'tinytext',
+        'text',
+        'mediumtext',
+        'longtext',
+        'enum',
+        'set',
+    ];
+
+    /**
+     * Native base types that accept ON UPDATE CURRENT_TIMESTAMP.
+     *
+     * @var list<string>
+     */
+    private const array ON_UPDATE_TYPES = ['timestamp', 'datetime'];
+
+    /**
+     * Native base types that cannot hold a literal DEFAULT.
+     *
+     * @var list<string>
+     */
+    private const array NO_LITERAL_DEFAULT_TYPES = [
+        'tinytext',
+        'text',
+        'mediumtext',
+        'longtext',
+        'tinyblob',
+        'blob',
+        'mediumblob',
+        'longblob',
+        'json',
+        'geometry',
     ];
 
     public function generateUp(
@@ -151,10 +196,17 @@ class MySqlGenerator implements SqlGeneratorInterface
         return sprintf('DROP TABLE %s', $this->quote($tableName));
     }
 
+    /**
+     * A primary key column is added together with its key (see generateAddKeyColumns()).
+     */
     public function generateAddColumn(
         string $table,
         Column $column,
     ): string {
+        if ($column->primaryKey) {
+            return $this->generateAddKeyColumns($table, [$column]);
+        }
+
         return sprintf(
             'ALTER TABLE %s ADD COLUMN %s',
             $this->quote($table),
@@ -173,6 +225,10 @@ class MySqlGenerator implements SqlGeneratorInterface
         );
     }
 
+    /**
+     * MODIFY COLUMN restates the full definition of $column. Migrations generated from a diff pass the
+     * resolved target (see generateColumnModifications()), so nothing the diff accepted is lost.
+     */
     public function generateModifyColumn(
         string $table,
         Column $column,
@@ -181,7 +237,7 @@ class MySqlGenerator implements SqlGeneratorInterface
         return sprintf(
             'ALTER TABLE %s MODIFY COLUMN %s',
             $this->quote($table),
-            $this->buildColumnDefinition($column),
+            $this->buildColumnDefinition($column, inlineUnique: false),
         );
     }
 
@@ -189,6 +245,8 @@ class MySqlGenerator implements SqlGeneratorInterface
         string $table,
         Index $index,
     ): string {
+        $this->assertNotPartial($index);
+
         $indexType = match ($index->type) {
             IndexType::Unique => 'UNIQUE INDEX',
             IndexType::Fulltext => 'FULLTEXT INDEX',
@@ -256,12 +314,12 @@ class MySqlGenerator implements SqlGeneratorInterface
     }
 
     /**
-     * Quote an identifier with backticks.
+     * Quote an identifier through the driver's one quoting rule, MySqlIdentifier.
      */
     private function quote(
         string $identifier,
     ): string {
-        return '`' . $identifier . '`';
+        return MySqlIdentifier::quote($identifier);
     }
 
     /**
@@ -269,12 +327,17 @@ class MySqlGenerator implements SqlGeneratorInterface
      */
     private function buildColumnDefinition(
         Column $column,
+        bool $inlineUnique = true,
     ): string {
         $parts = [$this->quote($column->name)];
 
-        // Get MySQL type
-        $mysqlType = $this->mapType($column->type, $column->length);
+        // The native type the database reported wins: it holds what Column cannot (precision, UNSIGNED, ...)
+        $mysqlType = $column->nativeType ?? $this->mapType($column->type, $column->length);
         $parts[] = $mysqlType;
+
+        if ($column->collation !== null && $this->baseTypeIn($mysqlType, self::COLLATED_TYPES)) {
+            $parts[] = 'COLLATE ' . $column->collation;
+        }
 
         // NULL/NOT NULL - PRIMARY KEY and AUTO_INCREMENT columns must be NOT NULL
         $forceNotNull = $column->primaryKey || $column->autoIncrement;
@@ -290,12 +353,125 @@ class MySqlGenerator implements SqlGeneratorInterface
             $parts[] = 'DEFAULT ' . $this->formatDefault($column->default);
         }
 
-        // UNIQUE constraint (inline)
-        if ($column->unique && !$column->primaryKey) {
+        if ($column->onUpdateExpression !== null && $this->baseTypeIn($mysqlType, self::ON_UPDATE_TYPES)) {
+            $parts[] = 'ON UPDATE ' . $column->onUpdateExpression;
+        }
+
+        // UNIQUE constraint (inline). Never restated by MODIFY COLUMN, where it would add a second unique
+        // index to a column that has one; the index diff owns uniqueness there.
+        if ($inlineUnique && $column->unique && !$column->primaryKey) {
             $parts[] = 'UNIQUE';
         }
 
         return implode(' ', $parts);
+    }
+
+    /**
+     * The base of a MySQL type, lowercased: `decimal` for `DECIMAL(12,4) UNSIGNED`.
+     */
+    private function baseType(
+        string $type,
+    ): string {
+        preg_match('/^[a-z]+/i', $type, $matches);
+
+        return strtolower($matches[0] ?? $type);
+    }
+
+    /**
+     * @param list<string> $baseTypes
+     */
+    private function baseTypeIn(
+        string $type,
+        array $baseTypes,
+    ): bool {
+        return in_array($this->baseType($type), $baseTypes, true);
+    }
+
+    /**
+     * The column an up migration moves $column to, given $previous (the database's definition).
+     *
+     * Column::resolveAgainst() applies the diff's tolerances (an undeclared length or default keeps the
+     * database's) and carries the native metadata over. This keeps that metadata only where it still fits:
+     * the native type while the entity does not redefine the type, the collation while the type is a
+     * string type, and ON UPDATE while it is a timestamp or datetime.
+     */
+    private function targetColumn(
+        Column $column,
+        Column $previous,
+    ): Column {
+        $resolved = $column->resolveAgainst($previous);
+
+        // A length is only part of the type for the length-bearing types (MySQL reports 65535 for TEXT)
+        $previousIsSized = $previous->nativeType !== null
+            ? $this->baseTypeIn($previous->nativeType, self::LENGTH_TYPES)
+            : $this->baseTypeIn($this->mapType($previous->type, $previous->length), self::LENGTH_TYPES);
+        $length = $column->length ?? ($previousIsSized ? $previous->length : null);
+
+        $nativeType = $this->nativeTypeApplies($resolved, $length) ? $resolved->nativeType : null;
+        $type = $nativeType ?? $this->mapType($resolved->type, $length);
+
+        // A kept literal default goes when the entity changes the column to a type that cannot hold it
+        // (VARCHAR to TEXT); the down migration restores it with the previous type. An expression default
+        // fits any type (MySQL 8.0.13+), so it stays.
+        $keptDefaultFits = $column->default !== null
+            || $this->isExpressionDefault($resolved->default)
+            || !$this->baseTypeIn($type, self::NO_LITERAL_DEFAULT_TYPES);
+
+        return new Column(
+            name: $resolved->name,
+            type: $resolved->type,
+            length: $length,
+            nullable: $resolved->nullable,
+            default: $keptDefaultFits ? $resolved->default : null,
+            unique: $resolved->unique,
+            primaryKey: $resolved->primaryKey,
+            autoIncrement: $resolved->autoIncrement,
+            references: $resolved->references,
+            onDelete: $resolved->onDelete,
+            onUpdate: $resolved->onUpdate,
+            nativeType: $nativeType,
+            collation: $this->baseTypeIn($type, self::COLLATED_TYPES) ? $resolved->collation : null,
+            onUpdateExpression: $this->baseTypeIn($type, self::ON_UPDATE_TYPES) ? $resolved->onUpdateExpression : null,
+        );
+    }
+
+    /**
+     * Whether the native type carried over from the database still describes $column: the entity names
+     * the same base type (`decimal` for `decimal(12,4) unsigned`, `enum` for `enum('a','b')`) and, for
+     * char/varchar/binary/varbinary, the same length.
+     */
+    private function nativeTypeApplies(
+        Column $column,
+        ?int $length,
+    ): bool {
+        if ($column->nativeType === null) {
+            return false;
+        }
+
+        $nativeBase = $this->normalizeBaseType($this->baseType($column->nativeType));
+        $sameBase = in_array($nativeBase, [
+            $this->normalizeBaseType($this->baseType($this->mapType($column->type, $length))),
+            $this->normalizeBaseType(strtolower($column->type)),
+        ], true);
+
+        if (!$sameBase) {
+            return false;
+        }
+
+        if (!in_array($nativeBase, self::LENGTH_TYPES, true) || $length === null) {
+            return true;
+        }
+
+        return preg_match('/\((\d+)\)/', $column->nativeType, $matches) === 1 && (int) $matches[1] === $length;
+    }
+
+    /**
+     * `datetime` and `timestamp` are the same type to the diff (Column::equals()), so they are here too.
+     */
+    private function normalizeBaseType(
+        string $baseType,
+    ): string {
+        return $baseType === 'datetime' ? 'timestamp' : $baseType;
     }
 
     /**
@@ -319,14 +495,27 @@ class MySqlGenerator implements SqlGeneratorInterface
     }
 
     /**
-     * Format a default value for SQL.
+     * Format a default value for SQL: an Expression (or a shortcut string such as `UUID()`) as an expression
+     * default, a Literal or any other string quoted.
      */
     private function formatDefault(
         mixed $default,
     ): string {
-        // Check if it's a SQL expression
-        if (is_string($default) && $this->isSqlExpression($default)) {
-            return $default;
+        if ($default instanceof Expression) {
+            return $this->formatExpression($default->sql);
+        }
+
+        if ($default instanceof Literal) {
+            return "'" . addslashes($default->value) . "'";
+        }
+
+        if (is_string($default) && Expression::isShortcut($default)) {
+            return $this->formatExpression($default);
+        }
+
+        // Kept from the original keyword list: a string 'NULL' is no default rather than the text NULL
+        if (is_string($default) && strtoupper($default) === 'NULL') {
+            return 'NULL';
         }
 
         // Boolean values
@@ -352,18 +541,67 @@ class MySqlGenerator implements SqlGeneratorInterface
         return (string) $default;
     }
 
-    /**
-     * Check if a string is a SQL expression.
-     */
-    private function isSqlExpression(
-        string $value,
+    private function isExpressionDefault(
+        mixed $default,
     ): bool {
-        $upperValue = strtoupper($value);
+        return $default instanceof Expression || (is_string($default) && Expression::isShortcut($default));
+    }
 
-        return array_any(
-            self::SQL_EXPRESSIONS,
-            fn ($expression) => $upperValue === $expression || str_starts_with($upperValue, $expression),
-        );
+    /**
+     * An expression default as MySQL 8.0.13+ accepts it: the CURRENT_TIMESTAMP family as written, anything
+     * else in parentheses (unless it already is).
+     */
+    private function formatExpression(
+        string $sql,
+    ): string {
+        $sql = trim($sql);
+
+        if (preg_match(self::BARE_EXPRESSION_PATTERN, $sql) === 1 || $this->isParenthesized($sql)) {
+            return $sql;
+        }
+
+        return "($sql)";
+    }
+
+    /**
+     * Whether the first character opens a parenthesis that the last character closes.
+     */
+    private function isParenthesized(
+        string $sql,
+    ): bool {
+        if (!str_starts_with($sql, '(') || !str_ends_with($sql, ')')) {
+            return false;
+        }
+
+        $depth = 0;
+        $lastIndex = strlen($sql) - 1;
+
+        for ($index = 0; $index <= $lastIndex; $index++) {
+            $depth += match ($sql[$index]) {
+                '(' => 1,
+                ')' => -1,
+                default => 0,
+            };
+
+            if ($depth === 0 && $index < $lastIndex) {
+                return false;
+            }
+        }
+
+        return $depth === 0;
+    }
+
+    /**
+     * MySQL has no partial indexes; refuse loudly rather than silently creating a full index.
+     *
+     * @throws MigrationException
+     */
+    private function assertNotPartial(
+        Index $index,
+    ): void {
+        if ($index->where !== null) {
+            throw MigrationException::partialIndexNotSupported($index->name, 'MySQL');
+        }
     }
 
     /**
@@ -372,6 +610,8 @@ class MySqlGenerator implements SqlGeneratorInterface
     private function buildIndexDefinition(
         Index $index,
     ): string {
+        $this->assertNotPartial($index);
+
         $indexType = match ($index->type) {
             IndexType::Unique => 'UNIQUE INDEX',
             IndexType::Fulltext => 'FULLTEXT INDEX',
@@ -424,11 +664,20 @@ class MySqlGenerator implements SqlGeneratorInterface
     private function generateTableAlterations(
         TableDiff $tableDiff,
     ): array {
+        $tableDiff->assertSupportedPrimaryKeyChange('MySQL');
+
         $statements = [];
 
         // Drop foreign keys first (to allow column drops)
         foreach ($tableDiff->foreignKeysToDrop as $foreignKey) {
             $statements[] = $this->generateDropForeignKey($tableDiff->tableName, $foreignKey->name);
+        }
+
+        $replacementIndexes = $this->replacementIndexes($tableDiff);
+
+        // A replacement index goes in before the index it replaces, which a foreign key may still need
+        foreach ($replacementIndexes as $index) {
+            $statements[] = $this->generateAddIndex($tableDiff->tableName, $index);
         }
 
         // Drop indexes
@@ -441,21 +690,17 @@ class MySqlGenerator implements SqlGeneratorInterface
             $statements[] = $this->generateDropColumn($tableDiff->tableName, $column->name);
         }
 
-        // Add columns
-        foreach ($tableDiff->columnsToAdd as $column) {
-            $statements[] = $this->generateAddColumn($tableDiff->tableName, $column);
-        }
+        // Add columns, primary key columns together with their key
+        $statements = [...$statements, ...$this->addColumnStatements($tableDiff->tableName, $tableDiff->columnsToAdd)];
 
         // Modify columns
-        foreach ($tableDiff->columnsToModify as $columnName => $column) {
-            // For modify, we need the old column - create a placeholder
-            $oldColumn = new Column(name: $columnName, type: 'string');
-            $statements[] = $this->generateModifyColumn($tableDiff->tableName, $column, $oldColumn);
-        }
+        $statements = [...$statements, ...$this->generateColumnModifications($tableDiff, reverse: false)];
 
         // Add indexes
         foreach ($tableDiff->indexesToAdd as $index) {
-            $statements[] = $this->generateAddIndex($tableDiff->tableName, $index);
+            if (!in_array($index, $replacementIndexes, true)) {
+                $statements[] = $this->generateAddIndex($tableDiff->tableName, $index);
+            }
         }
 
         // Add foreign keys last
@@ -481,9 +726,13 @@ class MySqlGenerator implements SqlGeneratorInterface
             $statements[] = $this->generateDropForeignKey($tableDiff->tableName, $foreignKey->name);
         }
 
-        // Reverse: drop indexes that were added
+        $replacementIndexes = $this->replacementIndexes($tableDiff);
+
+        // Reverse: drop indexes that were added (a replacement only once the index it replaced is back)
         foreach ($tableDiff->indexesToAdd as $index) {
-            $statements[] = $this->generateDropIndex($tableDiff->tableName, $index->name);
+            if (!in_array($index, $replacementIndexes, true)) {
+                $statements[] = $this->generateDropIndex($tableDiff->tableName, $index->name);
+            }
         }
 
         // Reverse: drop columns that were added
@@ -491,19 +740,137 @@ class MySqlGenerator implements SqlGeneratorInterface
             $statements[] = $this->generateDropColumn($tableDiff->tableName, $column->name);
         }
 
-        // Reverse: add columns that were dropped
-        foreach ($tableDiff->columnsToDrop as $column) {
-            $statements[] = $this->generateAddColumn($tableDiff->tableName, $column);
-        }
+        // Reverse: add columns that were dropped, primary key columns together with their key
+        $statements = [...$statements, ...$this->addColumnStatements(
+            $tableDiff->tableName,
+            $tableDiff->columnsToDrop,
+        )];
+
+        // Reverse: restore modified columns to their previous definition
+        $statements = [...$statements, ...$this->generateColumnModifications($tableDiff, reverse: true)];
 
         // Reverse: add indexes that were dropped
         foreach ($tableDiff->indexesToDrop as $index) {
             $statements[] = $this->generateAddIndex($tableDiff->tableName, $index);
         }
 
+        foreach ($replacementIndexes as $index) {
+            $statements[] = $this->generateDropIndex($tableDiff->tableName, $index->name);
+        }
+
         // Reverse: add foreign keys that were dropped
         foreach ($tableDiff->foreignKeysToDrop as $foreignKey) {
             $statements[] = $this->generateAddForeignKey($tableDiff->tableName, $foreignKey);
+        }
+
+        return $statements;
+    }
+
+    /**
+     * ADD COLUMN statements for $columns. The primary key columns and their ADD PRIMARY KEY share one ALTER
+     * TABLE, at the position of the first of them: MySQL refuses an AUTO_INCREMENT column that is not a key
+     * (error 1075), and one statement never leaves a key column behind without its key.
+     *
+     * @param array<Column> $columns
+     * @return list<string>
+     */
+    private function addColumnStatements(
+        string $table,
+        array $columns,
+    ): array {
+        $statements = [];
+        $keyColumns = array_values(array_filter($columns, static fn (Column $column): bool => $column->primaryKey));
+
+        foreach ($columns as $column) {
+            if (!$column->primaryKey) {
+                $statements[] = $this->generateAddColumn($table, $column);
+            } elseif ($column === $keyColumns[0]) {
+                $statements[] = $this->generateAddKeyColumns($table, $keyColumns);
+            }
+        }
+
+        return $statements;
+    }
+
+    /**
+     * One ALTER TABLE adding the primary key columns and the key over them.
+     *
+     * @param non-empty-list<Column> $keyColumns
+     */
+    private function generateAddKeyColumns(
+        string $table,
+        array $keyColumns,
+    ): string {
+        $additions = array_map(
+            fn (Column $column): string => 'ADD COLUMN ' . $this->buildColumnDefinition($column),
+            $keyColumns,
+        );
+        $keyNames = array_map(fn (Column $column): string => $this->quote($column->name), $keyColumns);
+        $additions[] = 'ADD PRIMARY KEY (' . implode(', ', $keyNames) . ')';
+
+        return sprintf('ALTER TABLE %s %s', $this->quote($table), implode(', ', $additions));
+    }
+
+    /**
+     * The added indexes that replace a dropped index on the same columns, such as the plain index the diff adds
+     * when a foreign key column stops being unique. InnoDB refuses to drop the last index a foreign key uses, so
+     * these are created before the drop (and, in down, dropped after the original is restored).
+     *
+     * @return list<Index>
+     */
+    private function replacementIndexes(
+        TableDiff $tableDiff,
+    ): array {
+        $addedColumnNames = array_map(static fn (Column $column): string => $column->name, $tableDiff->columnsToAdd);
+
+        return array_values(array_filter(
+            $tableDiff->indexesToAdd,
+            static fn (Index $index): bool => array_any(
+                $tableDiff->indexesToDrop,
+                static fn (Index $dropped): bool => $dropped->columns === $index->columns,
+            ) && array_intersect($index->columns, $addedColumnNames) === [],
+        ));
+    }
+
+    /**
+     * MODIFY COLUMN statements that apply (or, in reverse, undo) every modified column of a table diff.
+     *
+     * The up statement moves each column to its target (see targetColumn()); the down statement restates
+     * the database's previous definition, native type, collation and ON UPDATE included. A column whose
+     * target renders the same as its previous definition gets no statement in either direction.
+     *
+     * @return list<string>
+     * @throws MigrationException When the diff holds no previous definition for a modified column, or a
+     *                            modified column's primary key changes
+     */
+    private function generateColumnModifications(
+        TableDiff $tableDiff,
+        bool $reverse,
+    ): array {
+        $statements = [];
+
+        foreach ($tableDiff->columnsToModify as $columnName => $column) {
+            $previous = $tableDiff->previousColumn($columnName);
+            $target = $this->targetColumn($column, $previous);
+
+            // MODIFY COLUMN cannot add or remove a primary key, so the change would never apply
+            if ($target->primaryKey !== $previous->primaryKey) {
+                throw MigrationException::columnChangeNotSupported(
+                    $tableDiff->tableName,
+                    $target->name,
+                    'MySQL',
+                    'primary key',
+                );
+            }
+
+            if ($this->buildColumnDefinition($target, inlineUnique: false)
+                === $this->buildColumnDefinition($previous, inlineUnique: false)) {
+                continue;
+            }
+
+            $statements[] = $reverse
+                ? $this->generateModifyColumn($tableDiff->tableName, $previous, $target)
+                : $this->generateModifyColumn($tableDiff->tableName, $target, $previous);
         }
 
         return $statements;

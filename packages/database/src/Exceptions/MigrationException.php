@@ -22,6 +22,108 @@ class MigrationException extends MarkoException
         );
     }
 
+    public static function partialIndexNotSupported(
+        string $indexName,
+        string $driver,
+    ): self {
+        return new self(
+            message: "Index '$indexName' declares a WHERE predicate, but $driver does not support partial indexes",
+            context: "While generating SQL for index '$indexName'",
+            suggestion: "Remove 'where' from the #[Index] attribute, or create the index by hand in a migration and "
+                . 'list its name in #[Table(unmanagedIndexes: [...])] so db:migrate leaves it alone.',
+        );
+    }
+
+    public static function missingPreviousColumn(
+        string $table,
+        string $column,
+    ): self {
+        return new self(
+            message: "Column '$table.$column' is modified, but the diff holds no previous definition for it",
+            context: "While generating SQL to modify column '$table.$column'",
+            suggestion: 'Build the TableDiff with columnsToModifyFrom holding the database\'s current definition of '
+                . 'every column in columnsToModify (DiffCalculator does this for you).',
+        );
+    }
+
+    public static function emptyDefaultExpression(): self
+    {
+        return new self(
+            message: 'A default expression cannot be empty',
+            context: 'While creating a column default Expression',
+            suggestion: "Pass the SQL of the default, such as new Expression('gen_random_uuid()'), or remove the "
+                . 'default.',
+        );
+    }
+
+    public static function nothingToModify(
+        string $table,
+        string $column,
+        string $driver,
+    ): self {
+        return new self(
+            message: "Column '$table.$column' has no type, nullability or default change for $driver to apply",
+            context: "While generating SQL to modify column '$table.$column'",
+            suggestion: 'Only call generateModifyColumn() when the type, nullability or default differs. A uniqueness '
+                . 'change is applied through the index diff.',
+        );
+    }
+
+    /**
+     * @param list<string> $changes The changes the diff reported, such as `Modify column: title`
+     */
+    public static function emptyAlterMigration(
+        string $table,
+        array $changes,
+    ): self {
+        $changeList = implode('; ', $changes);
+
+        return new self(
+            message: "The schema diff reports changes to table '$table' ($changeList), but the SQL generator "
+                . 'produced no statements for them',
+            context: "While generating the alter migration for table '$table'",
+            suggestion: 'The diff and the SQL generator disagree about this table, so no migration was written. Compare '
+                . "the entity definition with the database's table definition and report the mismatch; until it is "
+                . 'fixed, write any real change to this table by hand in a migration.',
+        );
+    }
+
+    public static function columnChangeNotSupported(
+        string $table,
+        string $column,
+        string $driver,
+        string $change,
+    ): self {
+        return new self(
+            message: "Cannot change the $change of column '$table.$column' in place on $driver",
+            context: "While generating SQL to modify column '$table.$column'",
+            suggestion: 'Write this change by hand in a migration (for example, add a new column, copy the data and '
+                . 'drop the old one), then run db:migrate again.',
+        );
+    }
+
+    /**
+     * @param list<string> $existingColumns The columns of the table's current primary key
+     * @param list<string> $newColumns The added columns the entity declares as primary key
+     */
+    public static function primaryKeyAlreadyExists(
+        string $table,
+        array $existingColumns,
+        array $newColumns,
+    ): self {
+        $quote = static fn (array $columns): string => "'" . implode("', '", $columns) . "'";
+        $noun = count($newColumns) === 1 ? 'column' : 'columns';
+
+        return new self(
+            message: "Cannot add primary key $noun {$quote($newColumns)} to table '$table', which already has a primary "
+                . "key on {$quote($existingColumns)}",
+            context: "While generating SQL to add columns to table '$table'",
+            suggestion: 'A table has one primary key, and the diff does not replace it. Write this change by hand in a '
+                . 'migration (drop the current primary key, add the new columns and their key), then run db:migrate '
+                . 'again.',
+        );
+    }
+
     public static function migrationNotFound(
         string $migrationName,
     ): self {

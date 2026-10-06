@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Database\Seed;
 
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Database\Connection\TransactionInterface;
 use Marko\Database\Exceptions\SeederException;
 
@@ -14,12 +15,12 @@ readonly class SeederRunner
 {
     /**
      * @param array<string, SeederInterface> $seeders Map of class names to seeder instances
-     * @param bool $isProduction Whether we're running in production environment
+     * @param AppEnvironment $appEnvironment Decides where seeders may run (see assertEnvironmentAllows())
      * @param TransactionInterface|null $transaction Optional transaction manager for atomic seeding
      */
     public function __construct(
         private array $seeders,
-        private bool $isProduction = false,
+        private AppEnvironment $appEnvironment,
         private ?TransactionInterface $transaction = null,
     ) {}
 
@@ -30,14 +31,14 @@ readonly class SeederRunner
      * If a seeder fails, its changes are rolled back but previously successful seeders remain.
      *
      * @param array<SeederDefinition> $definitions
-     * @throws SeederException If running in production environment
+     * @param bool $force Allow an environment that is neither development nor testing (never production)
+     * @throws SeederException If the environment does not allow seeding
      */
     public function runAll(
         array $definitions,
+        bool $force = false,
     ): void {
-        if ($this->isProduction) {
-            throw SeederException::blockedInProduction();
-        }
+        $this->assertEnvironmentAllows($force);
 
         // Sort by order
         usort($definitions, fn (SeederDefinition $a, SeederDefinition $b) => $a->order <=> $b->order);
@@ -60,15 +61,15 @@ readonly class SeederRunner
      * If the seeder fails, all its changes are rolled back.
      *
      * @param array<SeederDefinition> $definitions
-     * @throws SeederException If seeder not found or running in production
+     * @param bool $force Allow an environment that is neither development nor testing (never production)
+     * @throws SeederException If seeder not found or the environment does not allow seeding
      */
     public function runByName(
         string $name,
         array $definitions,
+        bool $force = false,
     ): void {
-        if ($this->isProduction) {
-            throw SeederException::blockedInProduction();
-        }
+        $this->assertEnvironmentAllows($force);
 
         foreach ($definitions as $definition) {
             if ($definition->name !== $name) {
@@ -87,6 +88,26 @@ readonly class SeederRunner
         }
 
         throw SeederException::seederNotFound($name);
+    }
+
+    /**
+     * Seeders run freely in development and testing, never in production, and anywhere else
+     * (staging, qa, ...) only when forced, the same policy db:seed applies.
+     *
+     * @throws SeederException
+     */
+    private function assertEnvironmentAllows(
+        bool $force,
+    ): void {
+        if ($this->appEnvironment->isProduction()) {
+            throw SeederException::blockedInProduction();
+        }
+
+        if ($this->appEnvironment->isDevelopment() || $this->appEnvironment->isTesting() || $force) {
+            return;
+        }
+
+        throw SeederException::requiresForce($this->appEnvironment->name());
     }
 
     /**

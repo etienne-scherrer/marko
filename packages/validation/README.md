@@ -13,10 +13,12 @@ composer require marko/validation
 ```php
 use Marko\Validation\Contracts\ValidatorInterface;
 
-$errors = $this->validator->validate($input, [
+$errors = $this->validator->validate([...$request->input(), ...$request->files()], [
     'name' => 'required|string|max:100',
     'email' => 'required|email',
     'age' => 'nullable|integer|min:18',
+    'avatar' => 'nullable|file|image|max_size:2048',
+    'photos.*' => 'image|max_size:2048', // every file of a photos[] upload
 ]);
 
 if ($errors->isNotEmpty()) {

@@ -31,6 +31,15 @@ class CommandRunner
             throw CommandException::commandNotFound($commandName);
         }
 
+        if ($definition->flags !== []) {
+            $input = $input->withFlags($definition->flags);
+        }
+
+        // The running command's Input and Output are injectable, so console services such as
+        // the confirmation prompter read the same options and write to the same stream.
+        $this->container->instance(Input::class, $input);
+        $this->container->instance(Output::class, $output);
+
         /** @var CommandInterface $command */
         $command = $this->container->get($definition->commandClass);
 

@@ -15,6 +15,18 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    services:
+      # Redis integration suites (packages/cache-redis, packages/ratelimiter)
+      # skip without a server; this keeps them running on every build.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -80,3 +92,140 @@ jobs:
 
       - name: PHPStan
         run: composer phpstan
+
+  # Runs the integration-services group against real services: the fixture app
+  # in tests/Integration/App (Postgres and Redis), the database-pgsql and
+  # database-mysql driver integration tests (MARKO_TEST_PGSQL_* and
+  # MARKO_TEST_MYSQL_*) and the live Redis tests of pubsub-redis and
+  # broadcasting-amphp. The database-mysql driver tests then run a second time
+  # against MariaDB. MARKO_INTEGRATION_REQUIRED turns "service unreachable
+  # or not configured" into a failure, so this job can never pass by skipping.
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: marko
+          POSTGRES_PASSWORD: marko
+          POSTGRES_DB: marko_integration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marko -d marko_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: marko
+          MYSQL_DATABASE: marko_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmarko"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # MariaDB-only paths (1020 snapshot conflicts, 4025 check failures, JSON
+      # stored as LONGTEXT) run only against MariaDB. 11.8 is the first LTS
+      # with innodb_snapshot_isolation=ON by default.
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MARIADB_ROOT_PASSWORD: marko
+          MARIADB_DATABASE: marko_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # The oldest MariaDB LTS still supported. The MySQL driver suite runs
+      # against it too, so the documented floor is tested.
+      mariadb-10-11:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: marko
+          MARIADB_DATABASE: marko_test
+        ports:
+          - 3308:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_USERNAME: marko
+      DB_PASSWORD: marko
+      DB_DATABASE: marko_integration
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      # The pgsql driver tests use their own database on the same server: the
+      # fixture suite drops marko_integration before every case.
+      MARKO_TEST_PGSQL_HOST: 127.0.0.1
+      MARKO_TEST_PGSQL_PORT: 5432
+      MARKO_TEST_PGSQL_DATABASE: marko_test
+      MARKO_TEST_PGSQL_USERNAME: marko
+      MARKO_TEST_PGSQL_PASSWORD: marko
+      MARKO_TEST_MYSQL_HOST: 127.0.0.1
+      MARKO_TEST_MYSQL_PORT: 3306
+      MARKO_TEST_MYSQL_DATABASE: marko_test
+      MARKO_TEST_MYSQL_USERNAME: root
+      MARKO_TEST_MYSQL_PASSWORD: marko
+      # Fails a run that reached the other server (see ServerIdentityTest)
+      MARKO_TEST_MYSQL_SERVER: mysql
+      MARKO_INTEGRATION_REQUIRED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: sockets, pdo_pgsql, pdo_mysql
+          coverage: none
+          ini-values: memory_limit=2G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # Service containers cannot mount tests/Integration/postgres-init, so the
+      # database the local compose file creates on startup is created here.
+      - name: Create the pgsql driver test database
+        run: docker exec ${{ job.services.postgres.id }} createdb -U marko marko_test
+
+      - name: Run integration suite
+        run: composer test:integration
+
+      # Only the MySQL suites run again against each MariaDB: the MySQL driver
+      # suite, the admin-auth MySQL repository tests, the queue-database and
+      # session-database MySQL tests, the search driver's reserved-word tests,
+      # and the fresh db:migrate of the queue and session tables. The fixture
+      # app and the other suites do not touch MySQL.
+      - name: Run MySQL integration suites against MariaDB 11.8
+        env:
+          MARKO_TEST_MYSQL_PORT: 3307
+          MARKO_TEST_MYSQL_SERVER: mariadb
+        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql packages/queue-database/tests/Integration/MySqlRoundTripTest.php packages/session-database/tests/Integration/MySql packages/search/tests/Integration/MySql tests/Integration/App/QueueSessionTablesMySqlTest.php
+
+      - name: Run MySQL integration suites against MariaDB 10.11
+        env:
+          MARKO_TEST_MYSQL_PORT: 3308
+          MARKO_TEST_MYSQL_SERVER: mariadb
+        run: php -d memory_limit=2G vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration packages/admin-auth/tests/Integration/MySql packages/queue-database/tests/Integration/MySqlRoundTripTest.php packages/session-database/tests/Integration/MySql packages/search/tests/Integration/MySql tests/Integration/App/QueueSessionTablesMySqlTest.php

@@ -172,5 +172,16 @@ function createFakeConnection(): ConnectionInterface
         {
             return 'mysql';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }

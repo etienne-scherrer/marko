@@ -5,6 +5,8 @@ declare(strict_types=1);
 use Marko\Core\Container\ContainerInterface;
 use Marko\Encryption\Config\EncryptionConfig;
 use Marko\Queue\AsyncObserverJob;
+use Marko\Queue\ContainerAwareJobInterface;
+use Marko\Queue\Exceptions\QueueException;
 use Marko\Queue\FailedJob;
 use Marko\Queue\FailedJobRepositoryInterface;
 use Marko\Queue\Job;
@@ -14,6 +16,7 @@ use Marko\Queue\QueueConfig;
 use Marko\Queue\QueueInterface;
 use Marko\Queue\Worker;
 use Marko\Queue\WorkerInterface;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 function createWorkerTestEnvelope(
@@ -160,7 +163,7 @@ function createTestFailedJobRepository(): FailedJobRepositoryInterface
 
 class FailingTestJob extends Job
 {
-    public protected(set) int $maxAttempts = 2;
+    public protected(set) ?int $maxAttempts = 2;
 
     public function handle(): void
     {
@@ -330,6 +333,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         expect($worker)->toBeInstanceOf(WorkerInterface::class);
@@ -343,7 +347,7 @@ describe('Worker', function (): void {
     test('handles job failures with retry', function (): void {
         $job = new class () extends Job
         {
-            public protected(set) int $maxAttempts = 3;
+            public protected(set) ?int $maxAttempts = 3;
 
             public function handle(): void
             {
@@ -429,6 +433,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         $worker->work(once: true);
@@ -522,6 +527,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         $worker->work(once: true);
@@ -556,6 +562,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
         StopTestHelper::$worker = $worker;
 
@@ -646,6 +653,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         // With once=true, worker should process exactly one job and return
@@ -722,6 +730,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         // With once=true and no jobs, worker should return immediately
@@ -740,7 +749,7 @@ describe('Worker', function (): void {
 
         $job = new class () extends Job
         {
-            public protected(set) int $maxAttempts = 5;
+            public protected(set) ?int $maxAttempts = 5;
 
             public function handle(): void
             {
@@ -822,6 +831,7 @@ describe('Worker', function (): void {
             $config,
             createWorkerTestEnvelope(),
             createNullWorkerContainer(),
+            new FakeClock(),
         );
 
         // Process jobs (once each)
@@ -926,11 +936,951 @@ describe('Worker', function (): void {
             $failedRepository = createTestFailedJobRepository();
             $config = createTestQueueConfig();
 
-            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container);
+            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container, new FakeClock());
             $worker->work(once: true);
 
             expect($capture->called)->toBeTrue()
                 ->and($capture->event->payload)->toBe('worker-injects-container');
         },
     );
+});
+
+class ConfigDefaultFailingJob extends Job
+{
+    public function handle(): void
+    {
+        throw new RuntimeException('Always fails');
+    }
+}
+
+class SingleJobRecordingQueue implements QueueInterface
+{
+    private bool $popped = false;
+
+    /** @var list<int> */
+    public array $releasedWithDelays = [];
+
+    public bool $deleted = false;
+
+    public function __construct(
+        private readonly JobInterface $job,
+    ) {}
+
+    public function push(
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        return 'job-1';
+    }
+
+    public function later(
+        int $delay,
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        return 'job-1';
+    }
+
+    public function pop(
+        ?string $queue = null,
+    ): ?JobInterface {
+        if ($this->popped) {
+            return null;
+        }
+
+        $this->popped = true;
+
+        return $this->job;
+    }
+
+    public function size(
+        ?string $queue = null,
+    ): int {
+        return 0;
+    }
+
+    public function clear(
+        ?string $queue = null,
+    ): int {
+        return 0;
+    }
+
+    public function delete(
+        string $jobId,
+    ): bool {
+        $this->deleted = true;
+
+        return true;
+    }
+
+    public function release(
+        string $jobId,
+        int $delay = 0,
+    ): bool {
+        $this->releasedWithDelays[] = $delay;
+
+        return true;
+    }
+}
+
+/**
+ * Run one worker iteration for a failing job that has already used $priorAttempts attempts.
+ *
+ * @return array{queue: SingleJobRecordingQueue, failed: FailedJobRepositoryInterface}
+ */
+function runFailingJobOnce(
+    JobInterface $job,
+    int $priorAttempts,
+    int $configMaxAttempts,
+    FakeClock $clock = new FakeClock(),
+): array {
+    $job->setId('job-1');
+
+    for ($i = 0; $i < $priorAttempts; $i++) {
+        $job->incrementAttempts();
+    }
+
+    $queue = new SingleJobRecordingQueue($job);
+    $failedRepository = createTestFailedJobRepository();
+
+    $worker = new Worker(
+        $queue,
+        $failedRepository,
+        createTestQueueConfig(['queue.max_attempts' => $configMaxAttempts]),
+        createWorkerTestEnvelope(),
+        createNullWorkerContainer(),
+        $clock,
+    );
+    $worker->work(once: true);
+
+    return ['queue' => $queue, 'failed' => $failedRepository];
+}
+
+describe('Worker max attempts', function (): void {
+    it(
+        'releases a failing job while attempts are below queue.max_attempts when the job sets no maxAttempts',
+        function (): void {
+            $result = runFailingJobOnce(new ConfigDefaultFailingJob(), priorAttempts: 3, configMaxAttempts: 5);
+
+            expect($result['queue']->releasedWithDelays)->toHaveCount(1)
+                ->and($result['failed']->count())->toBe(0);
+        },
+    );
+
+    it('fails a job once attempts reach queue.max_attempts when the job sets no maxAttempts', function (): void {
+        $result = runFailingJobOnce(new ConfigDefaultFailingJob(), priorAttempts: 4, configMaxAttempts: 5);
+
+        expect($result['queue']->releasedWithDelays)->toBe([])
+            ->and($result['queue']->deleted)->toBeTrue()
+            ->and($result['failed']->count())->toBe(1);
+    });
+
+    it('prefers the job maxAttempts over queue.max_attempts', function (): void {
+        // FailingTestJob declares maxAttempts = 2 while config allows 10
+        $result = runFailingJobOnce(new FailingTestJob(), priorAttempts: 1, configMaxAttempts: 10);
+
+        expect($result['queue']->releasedWithDelays)->toBe([])
+            ->and($result['failed']->count())->toBe(1);
+    });
+
+    it('records the failed job with the time from the injected clock', function (): void {
+        $clock = new FakeClock('2026-03-01 09:15:00 UTC');
+
+        $result = runFailingJobOnce(new FailingTestJob(), priorAttempts: 1, configMaxAttempts: 10, clock: $clock);
+
+        expect($result['failed']->find('job-1')?->failedAt)->toEqual(new DateTimeImmutable('2026-03-01 09:15:00 UTC'));
+    });
+});
+
+class BackoffFailingJob extends Job
+{
+    /**
+     * @param int|list<int>|null $backoff
+     */
+    public function __construct(
+        array|int|null $backoff = null,
+    ) {
+        $this->backoff = $backoff;
+    }
+
+    public function handle(): void
+    {
+        throw new RuntimeException('Always fails');
+    }
+}
+
+function jobAfterAttempts(
+    JobInterface $job,
+    int $attempts,
+): JobInterface {
+    for ($i = 0; $i < $attempts; $i++) {
+        $job->incrementAttempts();
+    }
+
+    return $job;
+}
+
+function createBackoffWorker(
+    array $configValues = [],
+): Worker {
+    return new Worker(
+        new SingleJobRecordingQueue(new BackoffFailingJob()),
+        createTestFailedJobRepository(),
+        createTestQueueConfig($configValues),
+        createWorkerTestEnvelope(),
+        createNullWorkerContainer(),
+        new FakeClock(),
+    );
+}
+
+describe('Worker backoff', function (): void {
+    it('uses a fixed int job backoff for every attempt', function (): void {
+        $worker = createBackoffWorker();
+
+        expect($worker->backoffFor(jobAfterAttempts(new BackoffFailingJob(5), 1)))->toBe(5)
+            ->and($worker->backoffFor(jobAfterAttempts(new BackoffFailingJob(5), 4)))->toBe(5);
+    });
+
+    it('uses the list job backoff per attempt and repeats the last value', function (): void {
+        $worker = createBackoffWorker();
+        $delays = array_map(
+            fn (int $attempts): int => $worker->backoffFor(
+                jobAfterAttempts(new BackoffFailingJob([5, 30, 120]), $attempts),
+            ),
+            [1, 2, 3, 4, 7],
+        );
+
+        expect($delays)->toBe([5, 30, 120, 120, 120]);
+    });
+
+    it('falls back to the queue.backoff config when the job sets none', function (): void {
+        $intWorker = createBackoffWorker(['queue.backoff' => 15]);
+        $listWorker = createBackoffWorker(['queue.backoff' => [10, 60]]);
+
+        expect($intWorker->backoffFor(jobAfterAttempts(new BackoffFailingJob(), 2)))->toBe(15)
+            ->and($listWorker->backoffFor(jobAfterAttempts(new BackoffFailingJob(), 1)))->toBe(10)
+            ->and($listWorker->backoffFor(jobAfterAttempts(new BackoffFailingJob(), 3)))->toBe(60);
+    });
+
+    it('prefers the job backoff over the queue.backoff config', function (): void {
+        $worker = createBackoffWorker(['queue.backoff' => 99]);
+
+        expect($worker->backoffFor(jobAfterAttempts(new BackoffFailingJob(7), 1)))->toBe(7);
+    });
+
+    it('keeps the 2^attempts * 10 curve when neither job nor config sets backoff', function (): void {
+        $worker = createBackoffWorker(['queue.backoff' => null]);
+        $delays = array_map(
+            fn (int $attempts): int => $worker->backoffFor(jobAfterAttempts(new BackoffFailingJob(), $attempts)),
+            [1, 2, 3, 6],
+        );
+
+        expect($delays)->toBe([20, 40, 80, 640]);
+    });
+
+    it('throws QueueException for a negative or empty backoff', function (array|int $backoff): void {
+        $worker = createBackoffWorker();
+
+        expect(fn () => $worker->backoffFor(jobAfterAttempts(new BackoffFailingJob($backoff), 1)))
+            ->toThrow(QueueException::class, 'Invalid queue backoff');
+    })->with([
+        'negative int' => [-1],
+        'empty list' => [[[]]],
+        'negative list entry' => [[[10, -5]]],
+        'non-list array' => [[['a' => 10]]],
+    ]);
+
+    it('throws QueueException for an invalid queue.backoff config list', function (): void {
+        $worker = createBackoffWorker(['queue.backoff' => [10, 'soon']]);
+
+        expect(fn () => $worker->backoffFor(jobAfterAttempts(new BackoffFailingJob(), 1)))
+            ->toThrow(QueueException::class, 'Invalid queue backoff in config queue.backoff');
+    });
+
+    it('releases a failed job with the backoffFor delay', function (): void {
+        $result = runFailingJobOnce(new BackoffFailingJob([3, 9]), priorAttempts: 1, configMaxAttempts: 5);
+
+        // Attempt 2 fails, so the second list entry applies
+        expect($result['queue']->releasedWithDelays)->toBe([9]);
+    });
+});
+
+class RecordingLog
+{
+    /** @var list<string> */
+    public array $entries = [];
+}
+
+class NamedRecordingJob extends Job
+{
+    public function __construct(
+        public string $name,
+        public RecordingLog $log,
+        public bool $fails = false,
+    ) {}
+
+    public function handle(): void
+    {
+        $this->log->entries[] = "handle:$this->name";
+
+        if ($this->fails) {
+            throw new RuntimeException("$this->name failed");
+        }
+    }
+}
+
+class MultiQueueRecordingQueue implements QueueInterface
+{
+    /**
+     * @param array<string, list<JobInterface>> $jobs
+     */
+    public function __construct(
+        public array $jobs,
+        private readonly RecordingLog $log,
+    ) {}
+
+    public function push(
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        $this->jobs[$queue ?? 'default'][] = $job;
+
+        return 'pushed';
+    }
+
+    public function later(
+        int $delay,
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        return 'later';
+    }
+
+    public function pop(
+        ?string $queue = null,
+    ): ?JobInterface {
+        $this->log->entries[] = 'pop:' . ($queue ?? 'null');
+        $name = $queue ?? 'default';
+
+        if (($this->jobs[$name] ?? []) === []) {
+            return null;
+        }
+
+        return array_shift($this->jobs[$name]);
+    }
+
+    public function size(
+        ?string $queue = null,
+    ): int {
+        return count($this->jobs[$queue ?? 'default'] ?? []);
+    }
+
+    public function clear(
+        ?string $queue = null,
+    ): int {
+        return 0;
+    }
+
+    public function delete(
+        string $jobId,
+    ): bool {
+        return true;
+    }
+
+    public function release(
+        string $jobId,
+        int $delay = 0,
+    ): bool {
+        return true;
+    }
+}
+
+/**
+ * Records each pause instead of sleeping, and stops the worker after the given number of pauses.
+ */
+class PauseRecordingWorker extends Worker
+{
+    private int $pauses = 0;
+
+    public function __construct(
+        QueueInterface $queue,
+        FailedJobRepositoryInterface $failedJobRepository,
+        QueueConfig $config,
+        private readonly RecordingLog $log,
+        private readonly int $stopAfterPauses = 1,
+    ) {
+        parent::__construct(
+            $queue,
+            $failedJobRepository,
+            $config,
+            createWorkerTestEnvelope(),
+            createNullWorkerContainer(),
+            new FakeClock(),
+        );
+    }
+
+    protected function pause(
+        int $seconds,
+    ): void {
+        $this->log->entries[] = "sleep:$seconds";
+        $this->pauses++;
+
+        if ($this->pauses >= $this->stopAfterPauses) {
+            $this->stop();
+        }
+    }
+}
+
+function namedJob(
+    string $name,
+    RecordingLog $log,
+    bool $fails = false,
+): NamedRecordingJob {
+    $job = new NamedRecordingJob($name, $log, $fails);
+    $job->setId($name);
+
+    return $job;
+}
+
+function createPauseRecordingWorker(
+    MultiQueueRecordingQueue $queue,
+    RecordingLog $log,
+    ?FailedJobRepositoryInterface $failed = null,
+    array $configValues = [],
+): PauseRecordingWorker {
+    return new PauseRecordingWorker(
+        $queue,
+        $failed ?? createTestFailedJobRepository(),
+        createTestQueueConfig($configValues),
+        $log,
+    );
+}
+
+describe('Worker priority queues', function (): void {
+    it('processes jobs on the high queue before jobs on the low queue', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue([
+            'low' => [namedJob('low-1', $log)],
+            'high' => [namedJob('high-1', $log), namedJob('high-2', $log)],
+        ], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(queues: ['high', 'low'], sleep: 0);
+
+        $handled = array_values(array_filter(
+            $log->entries,
+            fn (string $entry): bool => str_starts_with($entry, 'handle:'),
+        ));
+
+        expect($handled)->toBe(['handle:high-1', 'handle:high-2', 'handle:low-1']);
+    });
+
+    it('returns to the highest priority queue after each processed job', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue([
+            'high' => [],
+            'low' => [namedJob('low-1', $log)],
+        ], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(queues: ['high', 'low'], sleep: 0);
+
+        expect($log->entries)->toBe([
+            'pop:high', 'pop:low', 'handle:low-1',
+            'pop:high', 'pop:low', 'sleep:0',
+        ]);
+    });
+
+    it('sleeps only when every listed queue is empty', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue([
+            'high' => [],
+            'default' => [namedJob('default-1', $log)],
+            'low' => [],
+        ], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(queues: ['high', 'default', 'low'], sleep: 5);
+
+        expect($log->entries)->toBe([
+            'pop:high', 'pop:default', 'handle:default-1',
+            'pop:high', 'pop:default', 'pop:low', 'sleep:5',
+        ]);
+    });
+
+    it('processes at most one job across all queues with once', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue([
+            'high' => [namedJob('high-1', $log)],
+            'low' => [namedJob('low-1', $log)],
+        ], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(queues: ['high', 'low'], once: true);
+
+        expect($log->entries)->toBe(['pop:high', 'handle:high-1'])
+            ->and($queue->jobs['low'])->toHaveCount(1);
+    });
+
+    it('returns without sleeping with once when every queue is empty', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue(['high' => [], 'low' => []], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(queues: ['high', 'low'], once: true);
+
+        expect($log->entries)->toBe(['pop:high', 'pop:low']);
+    });
+
+    it('records the concrete queue a failed job was popped from', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue([
+            'high' => [],
+            'low' => [namedJob('low-fail', $log, fails: true)],
+        ], $log);
+        $failed = createTestFailedJobRepository();
+
+        createPauseRecordingWorker($queue, $log, $failed, ['queue.max_attempts' => 1])
+            ->work(queues: ['high', 'low'], once: true);
+
+        expect($failed->find('low-fail')?->queue)->toBe('low');
+    });
+
+    it('records the config default queue when no queues are given', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue(['default' => [namedJob('default-fail', $log, fails: true)]], $log);
+        $failed = createTestFailedJobRepository();
+
+        createPauseRecordingWorker($queue, $log, $failed, ['queue.max_attempts' => 1, 'queue.queue' => 'emails'])
+            ->work(once: true);
+
+        expect($failed->find('default-fail')?->queue)->toBe('emails');
+    });
+
+    it('pops the driver default queue when queues is null', function (): void {
+        $log = new RecordingLog();
+        $queue = new MultiQueueRecordingQueue(['default' => []], $log);
+
+        createPauseRecordingWorker($queue, $log)->work(sleep: 0);
+
+        expect($log->entries)->toBe(['pop:null', 'sleep:0']);
+    });
+
+    it('throws QueueException when given an empty queue list', function (): void {
+        $log = new RecordingLog();
+        $worker = createPauseRecordingWorker(new MultiQueueRecordingQueue([], $log), $log);
+
+        expect(fn () => $worker->work(queues: [], once: true))
+            ->toThrow(QueueException::class, 'No queues given');
+    });
+
+    it('throws QueueException when a queue name is blank or not a string', function (array $queues): void {
+        $log = new RecordingLog();
+        $worker = createPauseRecordingWorker(new MultiQueueRecordingQueue([], $log), $log);
+
+        expect(fn () => $worker->work(queues: $queues, once: true))
+            ->toThrow(QueueException::class, 'Invalid queue name');
+    })->with([
+        'blank' => [['high', ' ']],
+        'not a string' => [['high', 5]],
+        'not a list' => [['first' => 'high']],
+    ]);
+});
+
+/**
+ * Pops the given jobs in order and records what the worker did with each one.
+ */
+class SequenceRecordingQueue implements QueueInterface
+{
+    /** @var list<string> */
+    public array $deleted = [];
+
+    /** @var list<string> */
+    public array $released = [];
+
+    /**
+     * @param list<JobInterface> $jobs
+     */
+    public function __construct(
+        private array $jobs,
+    ) {}
+
+    public function push(
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        return 'unused';
+    }
+
+    public function later(
+        int $delay,
+        JobInterface $job,
+        ?string $queue = null,
+    ): string {
+        return 'unused';
+    }
+
+    public function pop(
+        ?string $queue = null,
+    ): ?JobInterface {
+        return array_shift($this->jobs);
+    }
+
+    public function size(
+        ?string $queue = null,
+    ): int {
+        return count($this->jobs);
+    }
+
+    public function clear(
+        ?string $queue = null,
+    ): int {
+        return 0;
+    }
+
+    public function delete(
+        string $jobId,
+    ): bool {
+        $this->deleted[] = $jobId;
+
+        return true;
+    }
+
+    public function release(
+        string $jobId,
+        int $delay = 0,
+    ): bool {
+        $this->released[] = $jobId;
+
+        return true;
+    }
+}
+
+/**
+ * Container-aware job that keeps the injected container until releaseContainer() runs.
+ */
+class RecordingContainerAwareJob extends Job implements ContainerAwareJobInterface
+{
+    public private(set) ?ContainerInterface $container = null;
+
+    public private(set) ?JobEnvelope $jobEnvelope = null;
+
+    public private(set) int $releaseCount = 0;
+
+    public private(set) bool $hadContainerWhenHandled = false;
+
+    public function __construct(
+        public readonly bool $fails = false,
+    ) {}
+
+    public function setContainer(ContainerInterface $container): void
+    {
+        $this->container = $container;
+    }
+
+    public function setJobEnvelope(JobEnvelope $jobEnvelope): void
+    {
+        $this->jobEnvelope = $jobEnvelope;
+    }
+
+    public function releaseContainer(): void
+    {
+        $this->container = null;
+        $this->jobEnvelope = null;
+        $this->releaseCount++;
+    }
+
+    public function handle(): void
+    {
+        $this->hadContainerWhenHandled = $this->container !== null && $this->jobEnvelope !== null;
+
+        if ($this->fails) {
+            throw new RuntimeException('Container-aware job always fails');
+        }
+    }
+}
+
+/**
+ * Job whose payload can never be serialized: it holds a closure.
+ */
+class ClosureHoldingFailingJob extends Job
+{
+    public function __construct(
+        public readonly Closure $callback,
+    ) {}
+
+    public function handle(): void
+    {
+        throw new RuntimeException('Closure job failed');
+    }
+}
+
+/**
+ * Stops the worker when it runs, proving the worker survived every job before it.
+ */
+class StopWorkerJob extends Job
+{
+    public ?Worker $worker = null;
+
+    public function handle(): void
+    {
+        $this->worker?->stop();
+    }
+}
+
+/**
+ * Run the worker over the jobs until the trailing stop job runs.
+ *
+ * Every job is put on its last attempt first (queue.max_attempts is 3).
+ *
+ * @param list<JobInterface> $jobs
+ * @return array{queue: SequenceRecordingQueue, failed: FailedJobRepositoryInterface}
+ */
+function runJobsOnLastAttempt(
+    array $jobs,
+): array {
+    foreach ($jobs as $index => $job) {
+        $job->setId("job-$index");
+        $job->incrementAttempts();
+        $job->incrementAttempts();
+    }
+
+    $stopJob = new StopWorkerJob();
+    $stopJob->setId('stop-worker');
+
+    $queue = new SequenceRecordingQueue([...$jobs, $stopJob]);
+    $failedRepository = createTestFailedJobRepository();
+
+    $worker = new Worker(
+        $queue,
+        $failedRepository,
+        createTestQueueConfig(),
+        createWorkerTestEnvelope(),
+        createNullWorkerContainer(),
+        new FakeClock(),
+    );
+    $stopJob->worker = $worker;
+
+    $worker->work();
+
+    return ['queue' => $queue, 'failed' => $failedRepository];
+}
+
+describe('Worker failed job serialization', function (): void {
+    it(
+        'stores a container-aware job that always fails in the failed-job repository once it reaches maxAttempts',
+        function (): void {
+            $result = runJobsOnLastAttempt([new RecordingContainerAwareJob(fails: true)]);
+
+            $failedJob = $result['failed']->find('job-0');
+            $stored = unserialize(createWorkerTestEnvelope()->verifyAndUnwrap($failedJob->payload));
+
+            expect($failedJob->exception)->toContain('Container-aware job always fails')
+                ->and($stored)->toBeInstanceOf(RecordingContainerAwareJob::class)
+                ->and($stored->container)->toBeNull();
+        },
+    );
+
+    it('keeps working after a container-aware job fails for the last time', function (): void {
+        $result = runJobsOnLastAttempt([new RecordingContainerAwareJob(fails: true)]);
+
+        expect($result['queue']->deleted)->toBe(['job-0', 'stop-worker'])
+            ->and($result['queue']->released)->toBe([]);
+    });
+
+    it('releases the container from a container-aware job after handle succeeds', function (): void {
+        $job = new RecordingContainerAwareJob();
+
+        runJobsOnLastAttempt([$job]);
+
+        expect($job->hadContainerWhenHandled)->toBeTrue()
+            ->and($job->releaseCount)->toBe(1)
+            ->and($job->container)->toBeNull();
+    });
+
+    it('releases the container from a container-aware job after handle throws', function (): void {
+        $job = new RecordingContainerAwareJob(fails: true);
+
+        runJobsOnLastAttempt([$job]);
+
+        expect($job->hadContainerWhenHandled)->toBeTrue()
+            ->and($job->releaseCount)->toBe(1)
+            ->and($job->container)->toBeNull();
+    });
+
+    it('records a job whose payload cannot be serialized as failed with the serialization error', function (): void {
+        $result = runJobsOnLastAttempt([new ClosureHoldingFailingJob(fn (): null => null)]);
+
+        $failedJob = $result['failed']->find('job-0');
+
+        expect($failedJob)->not->toBeNull()
+            ->and($failedJob->exception)->toContain('Closure job failed')
+            ->and($failedJob->exception)->toContain('Job payload could not be serialized')
+            ->and($failedJob->exception)->toContain(ClosureHoldingFailingJob::class)
+            ->and($failedJob->exception)->toContain("Serialization of 'Closure' is not allowed");
+    });
+
+    it('stores the job class in the payload of a job that cannot be serialized', function (): void {
+        $result = runJobsOnLastAttempt([new ClosureHoldingFailingJob(fn (): null => null)]);
+
+        $payload = unserialize(
+            createWorkerTestEnvelope()->verifyAndUnwrap($result['failed']->find('job-0')->payload),
+        );
+
+        expect($payload)->toBe([
+            'class' => ClosureHoldingFailingJob::class,
+            'serialization_error' => "Serialization of 'Closure' is not allowed",
+        ]);
+    });
+
+    it('deletes a job that cannot be serialized from the queue and keeps working', function (): void {
+        $result = runJobsOnLastAttempt([
+            new ClosureHoldingFailingJob(fn (): null => null),
+            new RecordingContainerAwareJob(fails: true),
+        ]);
+
+        expect($result['queue']->deleted)->toBe(['job-0', 'job-1', 'stop-worker'])
+            ->and($result['failed']->count())->toBe(2);
+    });
+});
+
+/**
+ * Run the worker over the jobs until the trailing stop job runs.
+ *
+ * Every job is on its first attempt, so a failing job has attempts left (queue.max_attempts is 3).
+ *
+ * @param list<JobInterface> $jobs
+ * @param array<string, mixed> $configValues
+ * @return array{queue: SequenceRecordingQueue, failed: FailedJobRepositoryInterface}
+ */
+function runJobsOnFirstAttempt(
+    array $jobs,
+    array $configValues = [],
+    ?SequenceRecordingQueue $queue = null,
+): array {
+    foreach ($jobs as $index => $job) {
+        $job->setId("job-$index");
+    }
+
+    $stopJob = new StopWorkerJob();
+    $stopJob->setId('stop-worker');
+
+    $queue ??= new SequenceRecordingQueue([...$jobs, $stopJob]);
+    $failedRepository = createTestFailedJobRepository();
+
+    $worker = new Worker(
+        $queue,
+        $failedRepository,
+        createTestQueueConfig($configValues),
+        createWorkerTestEnvelope(),
+        createNullWorkerContainer(),
+        new FakeClock(),
+    );
+    $stopJob->worker = $worker;
+
+    $worker->work();
+
+    return ['queue' => $queue, 'failed' => $failedRepository];
+}
+
+/**
+ * Job with an invalid backoff whose payload can never be serialized: it holds a closure.
+ */
+class ClosureHoldingInvalidBackoffJob extends Job
+{
+    public function __construct(
+        public readonly Closure $callback,
+    ) {
+        $this->backoff = -1;
+    }
+
+    public function handle(): void
+    {
+        throw new RuntimeException('Closure job with bad backoff failed');
+    }
+}
+
+/**
+ * Queue whose release() fails, as a broken driver would.
+ */
+class FailingReleaseQueue extends SequenceRecordingQueue
+{
+    public function release(
+        string $jobId,
+        int $delay = 0,
+    ): bool {
+        throw new QueueException('Driver could not release the job.');
+    }
+}
+
+describe('Worker invalid backoff', function (): void {
+    it(
+        'stores a job with an invalid backoff in failed jobs with the job error and the backoff error',
+        function (): void {
+            $result = runJobsOnFirstAttempt([new BackoffFailingJob(-5)]);
+
+            $failedJob = $result['failed']->find('job-0');
+
+            expect($failedJob)->not->toBeNull()
+                ->and($failedJob->exception)->toContain('Always fails')
+                ->and($failedJob->exception)->toContain(
+                    'Invalid queue backoff in job ' . BackoffFailingJob::class . '.',
+                )
+                ->and($failedJob->exception)->toContain('delay must not be negative; got -5');
+        },
+    );
+
+    it('deletes a job with an invalid backoff from the queue instead of releasing it', function (): void {
+        $result = runJobsOnFirstAttempt([new BackoffFailingJob([])]);
+
+        expect($result['queue']->released)->toBe([])
+            ->and($result['queue']->deleted)->toContain('job-0');
+    });
+
+    it('processes the next job after failing a job with an invalid backoff', function (): void {
+        $result = runJobsOnFirstAttempt([new BackoffFailingJob(['a' => 10]), new BackoffFailingJob(5)]);
+
+        expect($result['failed']->count())->toBe(1)
+            ->and($result['queue']->released)->toBe(['job-1'])
+            ->and($result['queue']->deleted)->toBe(['job-0', 'stop-worker']);
+    });
+
+    it('stores a retryable copy of the job that had an invalid backoff', function (): void {
+        $result = runJobsOnFirstAttempt([new BackoffFailingJob(-5)]);
+
+        $stored = unserialize(
+            createWorkerTestEnvelope()->verifyAndUnwrap($result['failed']->find('job-0')->payload),
+        );
+
+        expect($stored)->toBeInstanceOf(BackoffFailingJob::class)
+            ->and($stored->backoff)->toBe(-5);
+    });
+
+    it('fails the job when the queue.backoff config is invalid instead of stopping the worker', function (): void {
+        $result = runJobsOnFirstAttempt([new BackoffFailingJob()], ['queue.backoff' => [10, 'soon']]);
+
+        $failedJob = $result['failed']->find('job-0');
+
+        expect($failedJob)->not->toBeNull()
+            ->and($failedJob->exception)->toContain('Always fails')
+            ->and($failedJob->exception)->toContain('Invalid queue backoff in config queue.backoff.')
+            ->and($result['queue']->deleted)->toBe(['job-0', 'stop-worker']);
+    });
+
+    it(
+        'records the job error, the backoff error and the serialization note when an invalid-backoff job cannot be serialized',
+        function (): void {
+            $result = runJobsOnFirstAttempt([new ClosureHoldingInvalidBackoffJob(fn (): null => null)]);
+
+            $failedJob = $result['failed']->find('job-0');
+
+            expect($failedJob->exception)->toContain('Closure job with bad backoff failed')
+                ->and($failedJob->exception)->toContain('Invalid queue backoff in job')
+                ->and($failedJob->exception)->toContain('Job payload could not be serialized');
+        },
+    );
+
+    it("still propagates a QueueException thrown by the driver's release()", function (): void {
+        $job = new BackoffFailingJob(5);
+        $job->setId('job-0');
+        $queue = new FailingReleaseQueue([$job]);
+
+        expect(fn () => runJobsOnFirstAttempt([], queue: $queue))
+            ->toThrow(QueueException::class, 'Driver could not release the job.');
+    });
 });

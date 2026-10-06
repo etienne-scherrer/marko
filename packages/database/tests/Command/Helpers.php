@@ -4,19 +4,25 @@ declare(strict_types=1);
 
 namespace Marko\Database\Tests\Command;
 
+use Marko\Core\Command\ConfirmationPrompterInterface;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Core\Path\ProjectPaths;
+use Marko\Database\Command\DestructiveCommandGuard;
 use Marko\Database\Command\DiffCommand;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Diff\DiffCalculator;
+use Marko\Database\Diff\ExpressionDefaultCanonicalizer;
 use Marko\Database\Entity\EntityDiscovery;
 use Marko\Database\Entity\EntityMetadataFactory;
 use Marko\Database\Entity\SchemaBuilder;
 use Marko\Database\Introspection\IntrospectorInterface;
+use Marko\Database\Migration\Migrator;
 use Marko\Database\Schema\SchemaRegistry;
 use Marko\Database\Schema\Table;
+use Marko\Testing\Fake\FakeConfirmationPrompter;
 
 /**
  * Command test helpers.
@@ -220,6 +226,17 @@ final class Helpers
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
     }
 
@@ -228,18 +245,23 @@ final class Helpers
      *
      * @param array<string, Table> $tables Tables for introspector
      * @param array<class-string>  $entities Entity classes for discovery
+     * @param IntrospectorInterface|null $introspector Replaces the stub built from $tables
      */
     public static function createDiffCommand(
         ?DiffCalculator $diffCalculator = null,
         array $tables = [],
         array $entities = [],
+        ?IntrospectorInterface $introspector = null,
     ): DiffCommand {
+        $introspector ??= self::createStubIntrospector($tables);
+
         return new DiffCommand(
             discovery: self::createStubEntityDiscovery($entities),
-            introspector: self::createStubIntrospector($tables),
+            introspector: $introspector,
             schemaRegistry: new SchemaRegistry(new EntityMetadataFactory(), new SchemaBuilder()),
             diffCalculator: $diffCalculator ?? new DiffCalculator(),
             paths: new ProjectPaths('/test'),
+            expressionDefaultCanonicalizer: new ExpressionDefaultCanonicalizer($introspector),
         );
     }
 
@@ -258,5 +280,51 @@ final class Helpers
         $result = self::getOutputContent($stream);
 
         return ['output' => $result, 'exitCode' => $exitCode];
+    }
+
+    /**
+     * Create a DestructiveCommandGuard for an environment name (null leaves the environment unset).
+     */
+    public static function createDestructiveCommandGuard(
+        ?string $environment,
+        ?ConfirmationPrompterInterface $confirmationPrompter = null,
+    ): DestructiveCommandGuard {
+        return new DestructiveCommandGuard(
+            appEnvironment: new AppEnvironment($environment === null ? [] : ['APP_ENV' => $environment]),
+            confirmationPrompter: $confirmationPrompter ?? new FakeConfirmationPrompter(interactive: false),
+        );
+    }
+
+    /**
+     * Create a Migrator stub that records reset() and migrate() calls.
+     *
+     * @return Migrator&object{resetCalled: bool, migrateCalled: bool}
+     */
+    public static function createResettingMigrator(): Migrator
+    {
+        /** @noinspection PhpMissingParentConstructorInspection - Test stub intentionally skips parent */
+        return new class () extends Migrator
+        {
+            public bool $resetCalled = false;
+
+            public bool $migrateCalled = false;
+
+            /** @noinspection PhpMissingParentConstructorInspection */
+            public function __construct() {}
+
+            public function reset(): array
+            {
+                $this->resetCalled = true;
+
+                return ['2024_01_01_000000_create_posts'];
+            }
+
+            public function migrate(): array
+            {
+                $this->migrateCalled = true;
+
+                return ['2024_01_01_000000_create_posts'];
+            }
+        };
     }
 }

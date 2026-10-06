@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Marko\Database\Repository;
 
-use BackedEnum;
 use DateTimeImmutable;
+use DateTimeZone;
+use Marko\Clock\SystemClock;
 use Marko\Core\Event\EventDispatcherInterface;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\TransactionInterface;
@@ -14,6 +15,7 @@ use Marko\Database\Entity\EntityCollection;
 use Marko\Database\Entity\EntityHydrator;
 use Marko\Database\Entity\EntityMetadata;
 use Marko\Database\Entity\EntityMetadataFactory;
+use Marko\Database\Entity\PropertyMetadata;
 use Marko\Database\Entity\RelationshipLoader;
 use Marko\Database\Events\EntityCreated;
 use Marko\Database\Events\EntityCreating;
@@ -22,10 +24,13 @@ use Marko\Database\Events\EntityDeleting;
 use Marko\Database\Events\EntityUpdated;
 use Marko\Database\Events\EntityUpdating;
 use Marko\Database\Exceptions\BatchInsertException;
+use Marko\Database\Exceptions\EntityException;
+use Marko\Database\Exceptions\EntityNotFoundException;
 use Marko\Database\Exceptions\RepositoryException;
 use Marko\Database\Query\QueryBuilderFactoryInterface;
 use Marko\Database\Query\QueryBuilderInterface;
 use Marko\Database\Query\QuerySpecification;
+use Psr\Clock\ClockInterface;
 use ReflectionClass;
 use Throwable;
 
@@ -62,6 +67,7 @@ abstract class Repository implements RepositoryInterface
      * @param QueryBuilderFactoryInterface|null $queryBuilderFactory Optional factory that creates QueryBuilderInterface instances
      * @param EventDispatcherInterface|null $eventDispatcher Optional event dispatcher for lifecycle events
      * @param RelationshipLoader|null $relationshipLoader Optional loader for eager-loading relationships
+     * @param ClockInterface $clock Clock for #[Timestamps]; the container injects the bound clock
      *
      * @throws RepositoryException
      */
@@ -72,6 +78,7 @@ abstract class Repository implements RepositoryInterface
         protected readonly ?QueryBuilderFactoryInterface $queryBuilderFactory = null,
         protected readonly ?EventDispatcherInterface $eventDispatcher = null,
         protected readonly ?RelationshipLoader $relationshipLoader = null,
+        protected readonly ClockInterface $clock = new SystemClock(),
     ) {
         $this->validateEntityClass();
         $this->metadata = $this->metadataFactory->parse(static::ENTITY_CLASS);
@@ -120,8 +127,8 @@ abstract class Repository implements RepositoryInterface
 
         $sql = sprintf(
             'SELECT * FROM %s WHERE %s = ?',
-            $this->metadata->tableName,
-            $columnName,
+            $this->quote($this->metadata->tableName),
+            $this->quote($columnName),
         );
 
         $rows = $this->connection->query($sql, [$id]);
@@ -145,7 +152,7 @@ abstract class Repository implements RepositoryInterface
      * Find an entity by its primary key or throw an exception.
      *
      * @return TEntity
-     * @throws RepositoryException When entity is not found
+     * @throws EntityNotFoundException When entity is not found
      */
     public function findOrFail(
         int|string $id,
@@ -166,7 +173,7 @@ abstract class Repository implements RepositoryInterface
      */
     public function findAll(): EntityCollection
     {
-        $sql = sprintf('SELECT * FROM %s', $this->metadata->tableName);
+        $sql = sprintf('SELECT * FROM %s', $this->quote($this->metadata->tableName));
         $rows = $this->connection->query($sql);
 
         $entities = array_map(
@@ -188,6 +195,8 @@ abstract class Repository implements RepositoryInterface
      *
      * @param array<string, mixed> $criteria Column-value pairs to match
      * @return EntityCollection<TEntity>
+     *
+     * @throws EntityException
      */
     public function findBy(
         array $criteria,
@@ -198,13 +207,13 @@ abstract class Repository implements RepositoryInterface
 
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
-            $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $conditions[] = $this->quote($column) . ' = ?';
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
             'SELECT * FROM %s WHERE %s',
-            $this->metadata->tableName,
+            $this->quote($this->metadata->tableName),
             implode(' AND ', $conditions),
         );
 
@@ -232,6 +241,8 @@ abstract class Repository implements RepositoryInterface
      * but without fetching all matching rows first.
      *
      * @return TEntity|null
+     *
+     * @throws EntityException
      */
     public function findOneBy(
         array $criteria,
@@ -242,13 +253,13 @@ abstract class Repository implements RepositoryInterface
 
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
-            $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $conditions[] = $this->quote($column) . ' = ?';
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
             'SELECT * FROM %s WHERE %s LIMIT 1',
-            $this->metadata->tableName,
+            $this->quote($this->metadata->tableName),
             implode(' AND ', $conditions),
         );
 
@@ -293,10 +304,235 @@ abstract class Repository implements RepositoryInterface
     /**
      * Insert multiple entities in a single multi-row INSERT statement.
      *
+     * The insert runs through transaction() when the connection supports
+     * transactions, so it nests as a savepoint inside a caller's transaction.
+     *
+     * Generated keys: with RETURNING, keys are matched to entities by the row
+     * order the server returns (observed on PostgreSQL and MariaDB 10.5+, not
+     * documented by either, covered by integration tests); the row count is
+     * checked. Without RETURNING (MySQL), keys are LAST_INSERT_ID() + offset *
+     * @@auto_increment_increment, which assumes the batch got one consecutive
+     * block (not guaranteed under innodb_autoinc_lock_mode 2 while a bulk insert
+     * runs on the same table). See RepositoryInterface::insertBatch().
+     *
+     * @param array<Entity> $entities
+     * @throws BatchInsertException|RepositoryException|Throwable
+     */
+    public function insertBatch(array $entities): void
+    {
+        $this->assertUniformBatch($entities);
+
+        // Fire Creating events for each entity before insert
+        foreach ($entities as $entity) {
+            $this->eventDispatcher?->dispatch(new EntityCreating($entity, static::ENTITY_CLASS));
+        }
+
+        foreach ($entities as $entity) {
+            $this->applyInsertTimestamps($entity);
+        }
+
+        $allRows = $this->extractBatchRows($entities, requireKey: true);
+        $columns = array_keys($allRows[0]);
+        $readsGeneratedKeys = $this->omitsGeneratedKey($allRows[0]);
+
+        if ($readsGeneratedKeys) {
+            $this->assertCanReadGeneratedKey();
+        }
+
+        // Build multi-row INSERT SQL
+        $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $placeholders = implode(', ', array_fill(0, count($allRows), $placeholderRow));
+
+        $sql = sprintf(
+            'INSERT INTO %s (%s) VALUES %s',
+            $this->quote($this->metadata->tableName),
+            implode(', ', array_map($this->quote(...), $columns)),
+            $placeholders,
+        );
+
+        // Flatten all row values into a single bindings array
+        $bindings = [];
+        foreach ($allRows as $row) {
+            foreach ($row as $value) {
+                $bindings[] = $value;
+            }
+        }
+
+        $write = function () use ($entities, $sql, $bindings, $columns, $readsGeneratedKeys): void {
+            $pkProperty = $this->metadata->getPrimaryKeyProperty();
+            $isAutoIncrement = $pkProperty?->isAutoIncrement === true;
+
+            if ($pkProperty !== null
+                && ($isAutoIncrement || $readsGeneratedKeys)
+                && $this->connection->supportsReturning()
+            ) {
+                // INSERT ... RETURNING <pk> returns exact keys in insert order. On
+                // PostgreSQL lastInsertId() resolves to LASTVAL() (the LAST row's id),
+                // so the MySQL offset-arithmetic strategy would produce shifted ids,
+                // and a generated key has no lastInsertId() at all.
+                $pkColumn = $pkProperty->columnName;
+                $returningRows = $this->connection->query("$sql RETURNING " . $this->quote($pkColumn), $bindings);
+
+                $actualCount = count($returningRows);
+                $expectedCount = count($entities);
+
+                if ($actualCount !== $expectedCount) {
+                    throw BatchInsertException::returningRowCountMismatch($expectedCount, $actualCount, $pkColumn);
+                }
+
+                foreach (array_values($entities) as $offset => $entity) {
+                    $this->assignPrimaryKey($entity, $pkProperty, $returningRows[$offset][$pkColumn]);
+                }
+            } else {
+                $assignsKeys = $isAutoIncrement
+                    && !in_array($pkProperty->columnName, $columns, true);
+                $step = $assignsKeys ? $this->readAutoIncrementStep() : 1;
+
+                $this->connection->execute($sql, $bindings);
+
+                // MySQL strategy: LAST_INSERT_ID() returns the FIRST inserted id for a
+                // single multi-row INSERT, and each following row advances by
+                // auto_increment_increment. InnoDB allocates one consecutive block for a
+                // multi-row VALUES insert under every innodb_autoinc_lock_mode, unless
+                // (mode 2 only) a bulk insert on the same table interleaves. The step is
+                // read before the INSERT because a later statement would reset
+                // lastInsertId(). Explicit keys are never overwritten.
+                if ($assignsKeys) {
+                    $firstId = $this->connection->lastInsertId();
+                    $reflection = new ReflectionClass($entities[0]);
+
+                    foreach ($entities as $offset => $entity) {
+                        $property = $reflection->getProperty($this->metadata->primaryKey);
+                        $property->setValue($entity, $firstId + $offset * $step);
+                    }
+                }
+            }
+
+            // Register original values for dirty tracking
+            foreach ($entities as $entity) {
+                $this->hydrator->registerOriginalValues($entity, $this->metadata);
+            }
+        };
+
+        if ($this->connection instanceof TransactionInterface) {
+            $this->connection->transaction($write);
+        } else {
+            $write();
+        }
+
+        // Fire Created events for each entity after insert
+        foreach ($entities as $entity) {
+            $this->eventDispatcher?->dispatch(new EntityCreated($entity, static::ENTITY_CLASS));
+        }
+    }
+
+    /**
+     * Insert the entities, or update the existing row when one already has
+     * the same values in the $uniqueBy properties, in a single statement.
+     *
+     * $uniqueBy and $update name entity properties, never columns. The
+     * conflict properties are always explicit: they must match a unique index
+     * (PostgreSQL requires an index on exactly those columns). When $update is
+     * null, every property except the $uniqueBy ones, the primary key and the
+     * #[Timestamps] created-at property is updated; pass [] to leave existing
+     * rows untouched.
+     *
+     * #[Timestamps] are applied first: created-at is filled when unset and
+     * updated-at is set to now. Upsert does not fire lifecycle events, set
+     * generated ids or register entities for dirty tracking, because it can't
+     * tell which rows were inserted and which were updated. Load the entities
+     * again when you need them.
+     *
+     * @param array<Entity> $entities
+     * @param array<int, string> $uniqueBy Properties identifying an existing row
+     * @param array<int, string>|null $update Properties to update on conflict
+     * @return int Affected-row count as reported by the driver
+     * @throws BatchInsertException|RepositoryException
+     */
+    public function upsert(
+        array $entities,
+        array $uniqueBy,
+        ?array $update = null,
+    ): int {
+        if ($this->queryBuilderFactory === null) {
+            throw RepositoryException::queryBuilderNotConfigured(static::class);
+        }
+
+        $this->assertUniformBatch($entities);
+
+        $now = $this->now();
+
+        foreach ($entities as $entity) {
+            $this->applyInsertTimestamps($entity);
+            $this->touchUpdatedAt($entity, $now);
+        }
+
+        $rows = $this->extractBatchRows($entities, requireKey: false);
+        $uniqueColumns = $this->propertiesToColumns($uniqueBy, '$uniqueBy');
+
+        if ($update === null) {
+            $excluded = $uniqueColumns;
+            $excluded[] = $this->metadata->getPrimaryKeyProperty()?->columnName;
+
+            if ($this->metadata->createdAtProperty !== null) {
+                $excluded[] = $this->metadata->getPropertyToColumnMap()[$this->metadata->createdAtProperty];
+            }
+
+            $updateColumns = array_values(array_filter(
+                array_keys($rows[0]),
+                fn (string $column): bool => !in_array($column, $excluded, true),
+            ));
+        } else {
+            $updateColumns = $this->propertiesToColumns($update, '$update');
+        }
+
+        return $this->queryBuilderFactory->create()
+            ->table($this->metadata->tableName)
+            ->upsert($rows, $uniqueColumns, $updateColumns);
+    }
+
+    /**
+     * Map entity property names to their column names.
+     *
+     * @param array<int, string> $properties
+     * @return list<string>
+     * @throws RepositoryException
+     */
+    private function propertiesToColumns(
+        array $properties,
+        string $argument,
+    ): array {
+        $map = $this->metadata->getPropertyToColumnMap();
+
+        return array_values(array_map(
+            fn (string $property): string => $map[$property]
+                ?? throw RepositoryException::unknownProperty($this->metadata->entityClass, $property, $argument),
+            $properties,
+        ));
+    }
+
+    /**
+     * Set the #[Timestamps] updated-at property to the given instant.
+     */
+    private function touchUpdatedAt(
+        Entity $entity,
+        DateTimeImmutable $now,
+    ): void {
+        if ($this->metadata->updatedAtProperty === null) {
+            return;
+        }
+
+        new ReflectionClass($entity)->getProperty($this->metadata->updatedAtProperty)->setValue($entity, $now);
+    }
+
+    /**
+     * Reject an empty batch, entities with companions, and a batch that mixes
+     * entity classes or holds entities this repository does not manage.
+     *
      * @param array<Entity> $entities
      * @throws BatchInsertException|RepositoryException
      */
-    public function insertBatch(array $entities): void
+    private function assertUniformBatch(array $entities): void
     {
         if (count($entities) === 0) {
             throw BatchInsertException::emptyBatch();
@@ -317,139 +553,149 @@ abstract class Repository implements RepositoryInterface
         }
 
         $this->validateEntityType($entities[0]);
-
-        // Fire Creating events for each entity before insert
-        foreach ($entities as $entity) {
-            $this->eventDispatcher?->dispatch(new EntityCreating($entity, static::ENTITY_CLASS));
-        }
-
-        // Build column set from first entity
-        $firstData = $this->extractBatchRow($entities[0]);
-        $columns = array_keys($firstData);
-        $expectedColumns = $columns;
-
-        // Verify column consistency across the batch
-        foreach ($entities as $index => $entity) {
-            if ($index === 0) {
-                continue;
-            }
-
-            $rowData = $this->extractBatchRow($entity);
-            $rowColumns = array_keys($rowData);
-
-            if ($rowColumns !== $expectedColumns) {
-                throw BatchInsertException::columnSetMismatch($firstClass, $index);
-            }
-        }
-
-        // Compile all row data
-        $allRows = array_map(fn (Entity $e) => $this->extractBatchRow($e), $entities);
-
-        // Build multi-row INSERT SQL
-        $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-        $placeholders = implode(', ', array_fill(0, count($allRows), $placeholderRow));
-
-        $sql = sprintf(
-            'INSERT INTO %s (%s) VALUES %s',
-            $this->metadata->tableName,
-            implode(', ', $columns),
-            $placeholders,
-        );
-
-        // Flatten all row values into a single bindings array
-        $bindings = [];
-        foreach ($allRows as $row) {
-            foreach ($row as $value) {
-                $bindings[] = $value;
-            }
-        }
-
-        // Wrap in transaction if none is active
-        $ownsTransaction = false;
-        if ($this->connection instanceof TransactionInterface && !$this->connection->inTransaction()) {
-            $this->connection->beginTransaction();
-            $ownsTransaction = true;
-        }
-
-        try {
-            $pkProperty = $this->metadata->getPrimaryKeyProperty();
-            $isAutoIncrement = $pkProperty?->isAutoIncrement === true;
-
-            if ($isAutoIncrement && $this->connection->driverName() === 'pgsql') {
-                // PostgreSQL: use INSERT ... RETURNING <pk> to get exact ids in insert order.
-                // lastInsertId() on pgsql resolves to LASTVAL() (the LAST row's id), so
-                // the MySQL offset-arithmetic strategy would produce shifted ids.
-                $pkColumn = $pkProperty->columnName;
-                $returningRows = $this->connection->query("$sql RETURNING $pkColumn", $bindings);
-
-                $actualCount = count($returningRows);
-                $expectedCount = count($entities);
-
-                if ($actualCount !== $expectedCount) {
-                    throw BatchInsertException::returningRowCountMismatch($expectedCount, $actualCount, $pkColumn);
-                }
-
-                $reflection = new ReflectionClass($entities[0]);
-                foreach ($entities as $offset => $entity) {
-                    $property = $reflection->getProperty($this->metadata->primaryKey);
-                    $property->setValue($entity, (int) $returningRows[$offset][$pkColumn]);
-                }
-            } else {
-                $this->connection->execute($sql, $bindings);
-
-                // MySQL strategy: LAST_INSERT_ID() returns the FIRST inserted id for a
-                // single multi-row INSERT when innodb_autoinc_lock_mode is 0 or 1.
-                if ($isAutoIncrement) {
-                    $firstId = $this->connection->lastInsertId();
-                    $reflection = new ReflectionClass($entities[0]);
-
-                    foreach ($entities as $offset => $entity) {
-                        $property = $reflection->getProperty($this->metadata->primaryKey);
-                        $property->setValue($entity, $firstId + $offset);
-                    }
-                }
-            }
-
-            // Register original values for dirty tracking
-            foreach ($entities as $entity) {
-                $this->hydrator->registerOriginalValues($entity, $this->metadata);
-            }
-
-            if ($ownsTransaction) {
-                $this->connection->commit();
-            }
-        } catch (Throwable $e) {
-            if ($ownsTransaction) {
-                $this->connection->rollback();
-            }
-
-            throw $e;
-        }
-
-        // Fire Created events for each entity after insert
-        foreach ($entities as $entity) {
-            $this->eventDispatcher?->dispatch(new EntityCreated($entity, static::ENTITY_CLASS));
-        }
     }
 
     /**
-     * Extract row data for a single entity, excluding auto-increment PK if null.
+     * Extract one row per entity and verify every row has the same columns.
      *
-     * @return array<string, mixed>
+     * With $requireKey, an unset key that the database does not fill throws
+     * (insertBatch); upsert passes false and leaves such a key to the database.
+     *
+     * @param array<Entity> $entities
+     * @return list<array<string, mixed>>
+     * @throws BatchInsertException|EntityException|RepositoryException
      */
-    private function extractBatchRow(Entity $entity): array
-    {
-        $data = $this->hydrator->extract($entity, $this->metadata);
-
+    private function extractBatchRows(
+        array $entities,
+        bool $requireKey,
+    ): array {
+        $rows = array_values(array_map(
+            fn (Entity $entity): array => $this->withoutDatabaseFilledKey(
+                $this->hydrator->extract($entity, $this->metadata),
+                $requireKey,
+            ),
+            $entities,
+        ));
+        $expectedColumns = array_keys($rows[0]);
         $pkProperty = $this->metadata->getPrimaryKeyProperty();
-        if ($pkProperty?->isAutoIncrement === true) {
-            $pkColumn = $pkProperty->columnName;
-            if ($data[$pkColumn] === null) {
-                unset($data[$pkColumn]);
+        $firstOmitsGeneratedKey = $this->omitsGeneratedKey($rows[0]);
+
+        foreach ($rows as $index => $row) {
+            if ($pkProperty !== null && $this->omitsGeneratedKey($row) !== $firstOmitsGeneratedKey) {
+                throw BatchInsertException::mixedGeneratedKeys($entities[0]::class, $pkProperty->name, $index);
+            }
+
+            if (array_keys($row) !== $expectedColumns) {
+                throw BatchInsertException::columnSetMismatch($entities[0]::class, $index);
             }
         }
 
-        return $data;
+        return $rows;
+    }
+
+    /**
+     * Leave a primary key the database fills out of an extracted row.
+     *
+     * An unset or null auto-increment or generated key is removed so the
+     * database assigns it. Any other unset or null key throws when $requireKey
+     * is true, instead of reaching the database as a NULL key.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     * @throws RepositoryException
+     */
+    private function withoutDatabaseFilledKey(
+        array $row,
+        bool $requireKey = true,
+    ): array {
+        $pkProperty = $this->metadata->getPrimaryKeyProperty();
+
+        if ($pkProperty === null || ($row[$pkProperty->columnName] ?? null) !== null) {
+            return $row;
+        }
+
+        if ($pkProperty->isAutoIncrement || $pkProperty->isGenerated) {
+            unset($row[$pkProperty->columnName]);
+
+            return $row;
+        }
+
+        if ($requireKey) {
+            throw RepositoryException::primaryKeyNotSet($this->metadata->entityClass, $pkProperty->name);
+        }
+
+        return $row;
+    }
+
+    /**
+     * Whether a row leaves out a database-generated key that must be read back.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function omitsGeneratedKey(
+        array $row,
+    ): bool {
+        $pkProperty = $this->metadata->getPrimaryKeyProperty();
+
+        return $pkProperty?->isGenerated === true && !array_key_exists($pkProperty->columnName, $row);
+    }
+
+    /**
+     * Read how far MySQL advances the auto-increment key between rows of one INSERT.
+     *
+     * Other drivers advance by one, so they are not asked.
+     *
+     * @throws BatchInsertException
+     */
+    private function readAutoIncrementStep(): int
+    {
+        if ($this->connection->driverName() !== 'mysql') {
+            return 1;
+        }
+
+        $rows = $this->connection->query('SELECT @@auto_increment_increment AS auto_increment_increment');
+        $value = $rows[0]['auto_increment_increment'] ?? null;
+
+        $isInteger = is_int($value) || (is_string($value) && ctype_digit($value));
+
+        if (!$isInteger || (int) $value < 1) {
+            throw BatchInsertException::unreadableAutoIncrementStep($value);
+        }
+
+        return (int) $value;
+    }
+
+    /**
+     * Fail before inserting when a generated key can't be read back from this connection.
+     *
+     * @throws RepositoryException
+     */
+    private function assertCanReadGeneratedKey(): void
+    {
+        if ($this->connection->supportsReturning()) {
+            return;
+        }
+
+        throw RepositoryException::generatedKeyNotReadable(
+            $this->metadata->entityClass,
+            $this->metadata->primaryKey,
+            $this->connection->driverName(),
+        );
+    }
+
+    /**
+     * Set a key value read back from the database, converted through the key property's cast.
+     *
+     * @throws EntityException
+     */
+    private function assignPrimaryKey(
+        Entity $entity,
+        PropertyMetadata $pkProperty,
+        mixed $value,
+    ): void {
+        new ReflectionClass($entity)
+            ->getProperty($pkProperty->name)
+            ->setValue($entity, $this->hydrator->toPhpValue($value, $pkProperty));
     }
 
     /**
@@ -470,8 +716,8 @@ abstract class Repository implements RepositoryInterface
 
         $sql = sprintf(
             'DELETE FROM %s WHERE %s = ?',
-            $this->metadata->tableName,
-            $columnName,
+            $this->quote($this->metadata->tableName),
+            $this->quote($columnName),
         );
 
         $this->eventDispatcher?->dispatch(new EntityDeleting($entity, static::ENTITY_CLASS));
@@ -561,7 +807,7 @@ abstract class Repository implements RepositoryInterface
 
         $sql = sprintf(
             'SELECT COUNT(*) as aggregate FROM %s',
-            $this->metadata->tableName,
+            $this->quote($this->metadata->tableName),
         );
 
         $result = $this->connection->query($sql);
@@ -582,8 +828,8 @@ abstract class Repository implements RepositoryInterface
 
         $sql = sprintf(
             'SELECT 1 FROM %s WHERE %s = ? LIMIT 1',
-            $this->metadata->tableName,
-            $columnName,
+            $this->quote($this->metadata->tableName),
+            $this->quote($columnName),
         );
 
         $rows = $this->connection->query($sql, [$id]);
@@ -598,6 +844,8 @@ abstract class Repository implements RepositoryInterface
      * no hydration, no eager-loading.
      *
      * @param array<string, mixed> $criteria Column-value pairs to match
+     *
+     * @throws EntityException
      */
     public function existsBy(
         array $criteria,
@@ -608,19 +856,49 @@ abstract class Repository implements RepositoryInterface
 
         foreach ($criteria as $property => $value) {
             $column = $propertyToColumn[$property] ?? $property;
-            $conditions[] = "$column = ?";
-            $bindings[] = $value;
+            $conditions[] = $this->quote($column) . ' = ?';
+            $bindings[] = $this->criteriaValue($property, $value);
         }
 
         $sql = sprintf(
             'SELECT 1 FROM %s WHERE %s LIMIT 1',
-            $this->metadata->tableName,
+            $this->quote($this->metadata->tableName),
             implode(' AND ', $conditions),
         );
 
         $rows = $this->connection->query($sql, $bindings);
 
         return count($rows) > 0;
+    }
+
+    /**
+     * Quote a table or column name through the connection, so reserved words (`key`, `group`, `order`), mixed
+     * case and embedded delimiters are safe on every driver.
+     */
+    private function quote(
+        string $identifier,
+    ): string {
+        return $this->connection->quoteIdentifier($identifier);
+    }
+
+    /**
+     * Convert a criteria value through the cast pipeline when the key is a mapped property.
+     *
+     * @throws EntityException
+     */
+    private function criteriaValue(
+        string|int $property,
+        mixed $value,
+    ): mixed {
+        $propertyMetadata = $this->metadata->properties[$property] ?? null;
+
+        if ($propertyMetadata?->encrypted === true) {
+            throw EntityException::encryptedCriteria($this->metadata->entityClass, (string) $property);
+        }
+
+        return $propertyMetadata !== null
+            ? $this->hydrator->toDatabaseValue($value, $propertyMetadata)
+            : $value;
     }
 
     /**
@@ -636,14 +914,14 @@ abstract class Repository implements RepositoryInterface
     ): bool {
         $sql = sprintf(
             'SELECT 1 FROM %s WHERE %s = ?',
-            $this->metadata->tableName,
-            $column,
+            $this->quote($this->metadata->tableName),
+            $this->quote($column),
         );
         $bindings = [$value];
 
         if ($excludeId !== null) {
             $pkColumn = $this->metadata->getPrimaryKeyProperty()->columnName;
-            $sql .= " AND $pkColumn != ?";
+            $sql .= ' AND ' . $this->quote($pkColumn) . ' != ?';
             $bindings[] = $excludeId;
         }
 
@@ -655,20 +933,56 @@ abstract class Repository implements RepositoryInterface
     }
 
     /**
+     * The current instant used for #[Timestamps]: the injected clock's time, in UTC.
+     */
+    protected function now(): DateTimeImmutable
+    {
+        return $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+    }
+
+    /**
+     * Fill unset #[Timestamps] properties with a single shared instant.
+     */
+    private function applyInsertTimestamps(
+        Entity $entity,
+    ): void {
+        $now = null;
+        $reflection = new ReflectionClass($entity);
+
+        foreach ([$this->metadata->createdAtProperty, $this->metadata->updatedAtProperty] as $name) {
+            if ($name === null) {
+                continue;
+            }
+
+            $property = $reflection->getProperty($name);
+
+            if (!$property->isInitialized($entity) || $property->getValue($entity) === null) {
+                $property->setValue($entity, $now ??= $this->now());
+            }
+        }
+    }
+
+    /**
      * Insert a new entity.
+     *
+     * An unset or null auto-increment or generated key is left to the database.
+     * A generated key is read back with INSERT ... RETURNING; on a connection
+     * without RETURNING, and for any other unset key, this throws.
+     *
+     * @throws EntityException|RepositoryException
      */
     protected function insert(
         Entity $entity,
     ): void {
-        $data = $this->hydrator->extractAll($entity, $this->metadata);
+        $this->applyInsertTimestamps($entity);
 
-        // Remove primary key if it's auto-increment and null
+        $data = $this->withoutDatabaseFilledKey($this->hydrator->extractAll($entity, $this->metadata));
+
         $pkProperty = $this->metadata->getPrimaryKeyProperty();
-        if ($pkProperty?->isAutoIncrement === true) {
-            $pkColumn = $pkProperty->columnName;
-            if (array_key_exists($pkColumn, $data) && $data[$pkColumn] === null) {
-                unset($data[$pkColumn]);
-            }
+        $readsGeneratedKey = $this->omitsGeneratedKey($data);
+
+        if ($readsGeneratedKey) {
+            $this->assertCanReadGeneratedKey();
         }
 
         $columns = array_keys($data);
@@ -676,12 +990,29 @@ abstract class Repository implements RepositoryInterface
 
         $sql = sprintf(
             'INSERT INTO %s (%s) VALUES (%s)',
-            $this->metadata->tableName,
-            implode(', ', $columns),
+            $this->quote($this->metadata->tableName),
+            implode(', ', array_map($this->quote(...), $columns)),
             implode(', ', $placeholders),
         );
 
-        $this->connection->execute($sql, array_values($data));
+        if ($readsGeneratedKey && $pkProperty !== null) {
+            // The database generated the key: read it back in the same statement.
+            $pkColumn = $pkProperty->columnName;
+            $rows = $this->connection->query("$sql RETURNING " . $this->quote($pkColumn), array_values($data));
+
+            if (count($rows) !== 1) {
+                throw RepositoryException::returningRowCountMismatch(
+                    $this->metadata->entityClass,
+                    $pkColumn,
+                    1,
+                    count($rows),
+                );
+            }
+
+            $this->assignPrimaryKey($entity, $pkProperty, $rows[0][$pkColumn]);
+        } else {
+            $this->connection->execute($sql, array_values($data));
+        }
 
         // Set the generated ID on the entity
         if ($pkProperty?->isAutoIncrement === true) {
@@ -724,7 +1055,7 @@ abstract class Repository implements RepositoryInterface
             $value = $property->getValue($entity);
             $columnName = $propertyToColumn[$propertyName];
 
-            $data[$columnName] = $this->convertToDbValue($value);
+            $data[$columnName] = $this->hydrator->toDatabaseValue($value, $this->metadata->properties[$propertyName]);
         }
 
         // Collect dirty companion data. Companions with no originalValues
@@ -755,7 +1086,10 @@ abstract class Repository implements RepositoryInterface
                 $value = $property->getValue($companion);
                 $columnName = $companionPropertyToColumn[$propertyName];
 
-                $data[$columnName] = $this->convertToDbValue($value);
+                $data[$columnName] = $this->hydrator->toDatabaseValue(
+                    $value,
+                    $companionMetadata->properties[$propertyName],
+                );
             }
 
             $participatingCompanions[] = [$companion, $companionMetadata];
@@ -766,21 +1100,30 @@ abstract class Repository implements RepositoryInterface
             return;
         }
 
+        $updatedAt = $this->metadata->updatedAtProperty;
+
+        if ($updatedAt !== null && !in_array($updatedAt, $dirtyProperties, true)) {
+            $now = $this->now();
+            $reflection->getProperty($updatedAt)->setValue($entity, $now);
+            $updatedAtMetadata = $this->metadata->properties[$updatedAt];
+            $data[$updatedAtMetadata->columnName] = $this->hydrator->toDatabaseValue($now, $updatedAtMetadata);
+        }
+
         // Get the primary key value for the WHERE clause
         $pkPropertyName = $this->metadata->primaryKey;
         $pkProperty = $reflection->getProperty($pkPropertyName);
         $id = $pkProperty->getValue($entity);
 
         $setClauses = array_map(
-            fn (string $column): string => "$column = ?",
+            fn (string $column): string => $this->quote($column) . ' = ?',
             array_keys($data),
         );
 
         $sql = sprintf(
             'UPDATE %s SET %s WHERE %s = ?',
-            $this->metadata->tableName,
+            $this->quote($this->metadata->tableName),
             implode(', ', $setClauses),
-            $pkColumn,
+            $this->quote($pkColumn),
         );
 
         $bindings = array_values($data);
@@ -794,27 +1137,6 @@ abstract class Repository implements RepositoryInterface
         foreach ($participatingCompanions as [$companion, $companionMetadata]) {
             $this->hydrator->registerOriginalValues($companion, $companionMetadata);
         }
-    }
-
-    /**
-     * Convert a PHP value to a database-compatible value.
-     */
-    private function convertToDbValue(
-        mixed $value,
-    ): mixed {
-        if ($value === null) {
-            return null;
-        }
-
-        if ($value instanceof BackedEnum) {
-            return $value->value;
-        }
-
-        if ($value instanceof DateTimeImmutable) {
-            return $value->format('Y-m-d H:i:s');
-        }
-
-        return $value;
     }
 
     /**

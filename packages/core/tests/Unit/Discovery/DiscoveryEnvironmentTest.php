@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Marko\Core\Discovery\DiscoveryEnvironment;
+use Marko\Core\Environment\AppEnvironment;
+use Marko\Core\Exceptions\DiscoveryCacheException;
 
 describe('DiscoveryEnvironment', function (): void {
     beforeEach(function (): void {
@@ -55,14 +57,46 @@ describe('DiscoveryEnvironment', function (): void {
     );
 
     it(
-        'returns enabled() true for any other present DISCOVERY_CACHE_ENABLED value (e.g. "1", "true", "yes")',
+        'returns enabled() true for the DISCOVERY_CACHE_ENABLED values 1, true, yes and on (case-insensitive)',
         function (): void {
             $env = new DiscoveryEnvironment();
 
-            foreach (['1', 'true', 'TRUE', 'True', 'yes', 'YES', 'Yes', 'on', 'ON', 'enabled'] as $truthy) {
+            foreach (['1', 'true', 'TRUE', 'True', 'yes', 'YES', 'Yes', 'on', 'ON', ' on '] as $truthy) {
                 $_ENV['DISCOVERY_CACHE_ENABLED'] = $truthy;
                 expect($env->enabled())->toBeTrue();
             }
+        },
+    );
+
+    it(
+        'throws DiscoveryCacheException for an unrecognised DISCOVERY_CACHE_ENABLED value instead of guessing',
+        function (string $value): void {
+            $_ENV['DISCOVERY_CACHE_ENABLED'] = $value;
+
+            expect(fn (): bool => (new DiscoveryEnvironment())->enabled())
+                ->toThrow(
+                    DiscoveryCacheException::class,
+                    'Environment variable "DISCOVERY_CACHE_ENABLED" must be a boolean',
+                );
+        },
+    )->with(['enabled', 'ture', '2']);
+
+    it(
+        'builds the shipped config/discovery.php from DiscoveryEnvironment so config mirrors the boot gate',
+        function (): void {
+            $_ENV['DISCOVERY_CACHE_ENABLED'] = 'off';
+            $_ENV['APP_ENV'] = 'Staging';
+            $_ENV['DISCOVERY_CACHE_PATH'] = '/var/cache/discovery.php';
+
+            $config = require dirname(__DIR__, 3) . '/config/discovery.php';
+            $env = new DiscoveryEnvironment();
+
+            expect($config)->toBe([
+                'enabled' => $env->enabled(),
+                'environment' => $env->environment(),
+                'cache_path' => $env->cachePath(),
+            ])->and($config['enabled'])->toBeFalse()
+                ->and($config['environment'])->toBe('staging');
         },
     );
 
@@ -109,6 +143,42 @@ describe('DiscoveryEnvironment', function (): void {
         expect($env->enabled())->toBeFalse()
             ->and($env->environment())->toBe('testing')
             ->and($env->cachePath())->toBe('/tmp/discovery.php');
+    });
+
+    it('reads APP_ENV from getenv when $_ENV lacks it', function (): void {
+        unset($_ENV['APP_ENV'], $_ENV['MARKO_ENV']);
+        putenv('APP_ENV=local');
+
+        try {
+            expect((new DiscoveryEnvironment())->environment())->toBe('local');
+        } finally {
+            putenv('APP_ENV');
+        }
+    });
+
+    it(
+        'reads DISCOVERY_CACHE_ENABLED and DISCOVERY_CACHE_PATH from getenv when $_ENV lacks them',
+        function (): void {
+            unset($_ENV['DISCOVERY_CACHE_ENABLED'], $_ENV['DISCOVERY_CACHE_PATH']);
+            putenv('DISCOVERY_CACHE_ENABLED=off');
+            putenv('DISCOVERY_CACHE_PATH=/var/cache/from-getenv.php');
+
+            try {
+                $env = new DiscoveryEnvironment();
+
+                expect($env->enabled())->toBeFalse()
+                    ->and($env->cachePath())->toBe('/var/cache/from-getenv.php');
+            } finally {
+                putenv('DISCOVERY_CACHE_ENABLED');
+                putenv('DISCOVERY_CACHE_PATH');
+            }
+        },
+    );
+
+    it('delegates environment() to the injected AppEnvironment', function (): void {
+        $env = new DiscoveryEnvironment(new AppEnvironment(['MARKO_ENV' => 'dev', 'APP_ENV' => 'production']));
+
+        expect($env->environment())->toBe('dev');
     });
 
     it(

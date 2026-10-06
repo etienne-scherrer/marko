@@ -7,7 +7,24 @@ use Marko\Core\Command\CommandInterface;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 use Marko\Scheduler\Command\RunScheduleCommand;
+use Marko\Scheduler\Mutex\FileTaskMutex;
 use Marko\Scheduler\Schedule;
+use Marko\Scheduler\ScheduleRunner;
+use Marko\Testing\Fake\FakeClock;
+
+/**
+ * Helper to build the command with a real runner. None of these tasks use
+ * withoutOverlapping(), so the mutex directory is never created.
+ */
+function createRunScheduleCommand(
+    Schedule $schedule,
+    FakeClock $clock = new FakeClock('2026-10-05 12:00:00'),
+): RunScheduleCommand {
+    return new RunScheduleCommand(
+        new ScheduleRunner($schedule, new FileTaskMutex(sys_get_temp_dir() . '/marko-scheduler-unused', $clock)),
+        $clock,
+    );
+}
 
 /**
  * Helper to create output stream for capturing command output.
@@ -72,7 +89,7 @@ it('executes due tasks', function (): void {
         $executed = true;
     })->everyMinute()->description('Test task');
 
-    $command = new RunScheduleCommand($schedule);
+    $command = createRunScheduleCommand($schedule);
     ['output' => $output, 'exitCode' => $exitCode] = executeScheduleCommand($command);
 
     expect($executed)->toBeTrue()
@@ -81,22 +98,32 @@ it('executes due tasks', function (): void {
         ->and($exitCode)->toBe(0);
 });
 
-it('skips non-due tasks', function (): void {
+it('skips tasks that are not due at the injected clock time', function (): void {
     $executed = false;
     $schedule = new Schedule();
-    // Schedule for a specific time that's almost certainly not now
     $schedule->call(function () use (&$executed): void {
         $executed = true;
-    })->cron('0 0 1 1 *')->description('New Year task'); // Only Jan 1 at midnight
+    })->cron('0 0 1 1 *')->description('New Year task');
 
-    $command = new RunScheduleCommand($schedule);
+    $command = createRunScheduleCommand($schedule, new FakeClock('2026-10-05 12:00:00'));
     ['output' => $output] = executeScheduleCommand($command);
 
-    // Task might or might not be due depending on current time
-    // But if it's not Jan 1 midnight, it won't execute
-    if (! $executed) {
-        expect($output)->toContain('No scheduled tasks are due.');
-    }
+    expect($executed)->toBeFalse()
+        ->and($output)->toContain('No scheduled tasks are due.');
+});
+
+it('runs the tasks due at the injected clock time', function (): void {
+    $executed = false;
+    $schedule = new Schedule();
+    $schedule->call(function () use (&$executed): void {
+        $executed = true;
+    })->cron('0 0 1 1 *')->description('New Year task');
+
+    $command = createRunScheduleCommand($schedule, new FakeClock('2027-01-01 00:00:00'));
+    ['output' => $output] = executeScheduleCommand($command);
+
+    expect($executed)->toBeTrue()
+        ->and($output)->toContain('Executed: New Year task');
 });
 
 it('reports executed task count', function (): void {
@@ -104,7 +131,7 @@ it('reports executed task count', function (): void {
     $schedule->call(fn (): null => null)->everyMinute()->description('Task A');
     $schedule->call(fn (): null => null)->everyMinute()->description('Task B');
 
-    $command = new RunScheduleCommand($schedule);
+    $command = createRunScheduleCommand($schedule);
     ['output' => $output] = executeScheduleCommand($command);
 
     expect($output)->toContain('Executed: Task A')
@@ -112,16 +139,31 @@ it('reports executed task count', function (): void {
         ->and($output)->toContain('Executed 2 scheduled tasks.');
 });
 
-it('handles task execution errors gracefully', function (): void {
+it('exits with 1 when a task fails', function (): void {
+    $ranAfterFailure = false;
     $schedule = new Schedule();
     $schedule->call(function (): never {
         throw new RuntimeException('Something went wrong');
     })->everyMinute()->description('Failing task');
+    $schedule->call(function () use (&$ranAfterFailure): void {
+        $ranAfterFailure = true;
+    })->everyMinute()->description('Healthy task');
 
-    $command = new RunScheduleCommand($schedule);
+    $command = createRunScheduleCommand($schedule);
     ['output' => $output, 'exitCode' => $exitCode] = executeScheduleCommand($command);
 
     expect($output)->toContain('Failed: Failing task - Something went wrong')
-        ->and($output)->toContain('Executed 0 scheduled tasks.')
-        ->and($exitCode)->toBe(0);
+        ->and($output)->toContain('Executed: Healthy task')
+        ->and($ranAfterFailure)->toBeTrue()
+        ->and($exitCode)->toBe(1);
+});
+
+it('exits with 0 when every due task succeeds', function (): void {
+    $schedule = new Schedule();
+    $schedule->call(fn (): null => null)->everyMinute()->description('Healthy task');
+
+    $command = createRunScheduleCommand($schedule);
+    ['exitCode' => $exitCode] = executeScheduleCommand($command);
+
+    expect($exitCode)->toBe(0);
 });

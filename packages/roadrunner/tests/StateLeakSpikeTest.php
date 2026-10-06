@@ -211,10 +211,14 @@ describe('State-leak discovery spike', function (): void {
         );
 
         $moduleFiles = [
+            'admin' => $root . '/packages/admin/module.php',
+            'admin-auth' => $root . '/packages/admin-auth/module.php',
             'authentication' => $root . '/packages/authentication/module.php',
             'authorization' => $root . '/packages/authorization/module.php',
             'codeindexer' => $root . '/packages/codeindexer/module.php',
             'database' => $root . '/packages/database/module.php',
+            'database-mysql' => $root . '/packages/database-mysql/module.php',
+            'database-pgsql' => $root . '/packages/database-pgsql/module.php',
             'debugbar' => $root . '/packages/debugbar/module.php',
             'devai' => $root . '/packages/devai/module.php',
             'docs-fts' => $root . '/packages/docs-fts/module.php',

@@ -2,9 +2,13 @@
 
 declare(strict_types=1);
 
+use Marko\Admin\Discovery\DiscoveredAdminSections;
 use Marko\AdminAuth\AdminUserProvider;
 use Marko\AdminAuth\Config\AdminAuthConfig;
 use Marko\AdminAuth\Config\AdminAuthConfigInterface;
+use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
+use Marko\AdminAuth\Discovery\PermissionDiscovery;
+use Marko\AdminAuth\PermissionRegistry;
 use Marko\AdminAuth\Repository\AdminUserRepository;
 use Marko\AdminAuth\Repository\AdminUserRepositoryInterface;
 use Marko\AdminAuth\Repository\PermissionRepository;
@@ -29,4 +33,17 @@ return [
             );
         },
     ],
+    'singletons' => [
+        // Shared: permissions registered through one injected registry must be visible to every consumer.
+        PermissionRegistryInterface::class => PermissionRegistry::class,
+    ],
+    // Registers every #[AdminPermission] on the #[AdminSection] classes marko/admin discovered
+    // (from the discovery cache, or one scan shared with marko/admin). In memory only: run
+    // `marko admin-auth:permissions:sync` to write them to the permissions table.
+    'boot' => function (
+        DiscoveredAdminSections $discoveredAdminSections,
+        PermissionDiscovery $permissionDiscovery,
+    ): void {
+        $permissionDiscovery->registerFromDefinitions($discoveredAdminSections->all());
+    },
 ];

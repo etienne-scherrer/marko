@@ -9,6 +9,7 @@ use Marko\Database\Command\RollbackCommand;
 use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Migration\Migrator;
 use Marko\Database\Tests\Command\Helpers;
+use Marko\Testing\Fake\FakeConfirmationPrompter;
 
 /**
  * Helper to create a stub Migrator.
@@ -91,7 +92,7 @@ it('blocks execution in production environment', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: true,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('production'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -110,7 +111,7 @@ it('shows error message when blocked in production', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: true,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('production'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -120,18 +121,18 @@ it('shows error message when blocked in production', function (): void {
 
     $result = Helpers::getOutputContent($stream);
 
-    expect($result)->toContain('cannot be run in production')
-        ->and($result)->toContain('Rollback is never allowed in production');
+    expect($result)->toContain("db:rollback cannot be run in the 'production' environment")
+        ->and($result)->toContain('never allowed in production, even with --force');
 });
 
-it('does NOT support --force flag (rollback is never allowed in production)', function (): void {
+it('refuses production even with --force', function (): void {
     $migrator = createStubMigrator(
         lastBatchMigrations: ['2024_01_01_000000_test'],
     );
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: true,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('production'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -144,7 +145,8 @@ it('does NOT support --force flag (rollback is never allowed in production)', fu
 
     $result = Helpers::getOutputContent($stream);
 
-    expect($result)->toContain('cannot be run in production');
+    expect($result)->toContain("db:rollback cannot be run in the 'production' environment")
+        ->and($migrator->rollbackCallCount)->toBe(0);
 });
 
 it('rolls back last batch of migrations in development', function (): void {
@@ -158,7 +160,7 @@ it('rolls back last batch of migrations in development', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -188,7 +190,7 @@ it('executes down() in reverse order within batch', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -214,7 +216,7 @@ it('shows each migration being rolled back', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -238,7 +240,7 @@ it('removes migration records from tracking table', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -261,7 +263,7 @@ it('supports --step option to rollback multiple batches', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -276,6 +278,29 @@ it('supports --step option to rollback multiple batches', function (): void {
         ]);
 });
 
+it('accepts --step 2 as well as --step=2 for db:rollback', function (): void {
+    /** @var Migrator&object{rolledBack: array<string>, rollbackCallCount: int} $migrator */
+    $migrator = createStubMigrator(
+        batchesMigrations: [
+            ['2024_01_03_000000_third'],
+            ['2024_01_02_000000_second'],
+            ['2024_01_01_000000_first'],
+        ],
+    );
+
+    $command = new RollbackCommand(
+        migrator: $migrator,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
+    );
+
+    ['output' => $output] = Helpers::createOutputStream();
+    $input = new Input(['marko', 'db:rollback', '--step', '2']);
+
+    $command->execute($input, $output);
+
+    expect($migrator->rollbackCallCount)->toBe(2);
+});
+
 it('offers to delete uncommitted migration files', function (): void {
     $migrator = createStubMigrator(
         lastBatchMigrations: ['2024_01_01_000000_test'],
@@ -283,7 +308,7 @@ it('offers to delete uncommitted migration files', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -302,7 +327,7 @@ it('shows "Nothing to rollback" when no applied migrations', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -322,7 +347,7 @@ it('warns about entity sync after rollback', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
@@ -344,7 +369,7 @@ it('returns 0 on success, 1 on failure', function (): void {
 
     $command = new RollbackCommand(
         migrator: $migrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output] = Helpers::createOutputStream();
@@ -363,7 +388,7 @@ it('returns 0 on success, 1 on failure', function (): void {
 
     $failingCommand = new RollbackCommand(
         migrator: $failingMigrator,
-        isProduction: false,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('local'),
     );
 
     ['output' => $output2] = Helpers::createOutputStream();
@@ -373,3 +398,72 @@ it('returns 0 on success, 1 on failure', function (): void {
 
     expect($exitCode2)->toBe(1);
 });
+
+it('declares force as a value-less flag', function (): void {
+    $attribute = new ReflectionClass(RollbackCommand::class)->getAttributes(Command::class)[0]->newInstance();
+
+    expect($attribute->flags)->toBe(['force']);
+});
+
+it('runs in development and testing', function (string $environment): void {
+    $migrator = createStubMigrator(lastBatchMigrations: ['2024_01_01_000000_test']);
+    $command = new RollbackCommand(
+        migrator: $migrator,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard($environment),
+    );
+    ['output' => $output] = Helpers::createOutputStream();
+
+    $exitCode = $command->execute(new Input(['marko', 'db:rollback']), $output);
+
+    expect($exitCode)->toBe(0)
+        ->and($migrator->rollbackCallCount)->toBe(1);
+})->with(['dev', 'testing']);
+
+it(
+    'refuses staging and an unknown environment without --force, naming the environment and the flag',
+    function (string $environment): void {
+        $migrator = createStubMigrator(lastBatchMigrations: ['2024_01_01_000000_test']);
+        $command = new RollbackCommand(
+            migrator: $migrator,
+            destructiveCommandGuard: Helpers::createDestructiveCommandGuard($environment),
+        );
+        ['stream' => $stream, 'output' => $output] = Helpers::createOutputStream();
+
+        $exitCode = $command->execute(new Input(['marko', 'db:rollback']), $output);
+
+        expect($exitCode)->toBe(1)
+            ->and(Helpers::getOutputContent($stream))
+            ->toContain("db:rollback is refused in the '$environment' environment without --force")
+            ->and($migrator->rollbackCallCount)->toBe(0);
+    },
+)->with(['staging', 'uat']);
+
+it('runs in staging with --force when nobody can answer', function (): void {
+    $migrator = createStubMigrator(lastBatchMigrations: ['2024_01_01_000000_test']);
+    $command = new RollbackCommand(
+        migrator: $migrator,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('staging'),
+    );
+    ['output' => $output] = Helpers::createOutputStream();
+
+    $exitCode = $command->execute(new Input(['marko', 'db:rollback', '--force', '--step', '2']), $output);
+
+    expect($exitCode)->toBe(0)
+        ->and($migrator->rollbackCallCount)->toBe(2);
+});
+
+it('asks for confirmation with --force when interactive', function (bool $answer): void {
+    $migrator = createStubMigrator(lastBatchMigrations: ['2024_01_01_000000_test']);
+    $prompter = new FakeConfirmationPrompter(answers: [$answer]);
+    $command = new RollbackCommand(
+        migrator: $migrator,
+        destructiveCommandGuard: Helpers::createDestructiveCommandGuard('staging', $prompter),
+    );
+    ['output' => $output] = Helpers::createOutputStream();
+
+    $exitCode = $command->execute(new Input(['marko', 'db:rollback', '--force']), $output);
+
+    $prompter->assertAsked("db:rollback rolls back migrations in the 'staging' environment. Continue?");
+    expect($exitCode)->toBe(0)
+        ->and($migrator->rollbackCallCount)->toBe($answer ? 1 : 0);
+})->with([true, false]);

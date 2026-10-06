@@ -11,6 +11,7 @@ use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
 use Marko\Cache\Redis\Signer\CacheValueSigner;
 use Marko\Encryption\Config\EncryptionConfig;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Predis\Client;
 use Predis\ClientInterface;
@@ -52,6 +53,14 @@ class MockRedisClient extends Client
     public int $pipelineCount = 0;
 
     public int $delCount = 0;
+
+    public int $evalCount = 0;
+
+    public int $incrCount = 0;
+
+    public int $expireCount = 0;
+
+    public ?string $lastEvalScript = null;
 
     /** @noinspection PhpMissingParentConstructorInspection */
     public function __construct() {}
@@ -176,9 +185,36 @@ class MockRedisClient extends Client
         return $this->ttls[$key] ?? -1;
     }
 
+    /**
+     * Emulates the driver's atomic increment Lua script: INCR, then EXPIRE when
+     * the counter was just created or has no TTL. Records the call so tests can
+     * assert the increment happened in one round trip.
+     */
+    public function eval(
+        $script,
+        $numkeys,
+        ...$arguments,
+    ): mixed {
+        $this->evalCount++;
+        $this->lastEvalScript = $script;
+
+        $key = $arguments[0];
+        $ttl = (int) $arguments[1];
+        $current = (int) ($this->storage[$key] ?? 0);
+        $new = $current + 1;
+        $this->storage[$key] = (string) $new;
+
+        if ($ttl > 0 && ($new === 1 || !isset($this->ttls[$key]))) {
+            $this->ttls[$key] = $ttl;
+        }
+
+        return $new;
+    }
+
     public function incr(
         $key,
     ): int {
+        $this->incrCount++;
         $current = (int) ($this->storage[$key] ?? 0);
         $new = $current + 1;
         $this->storage[$key] = (string) $new;
@@ -190,6 +226,8 @@ class MockRedisClient extends Client
         $key,
         $seconds,
     ): int {
+        $this->expireCount++;
+
         if (!isset($this->storage[$key])) {
             return 0;
         }
@@ -227,6 +265,7 @@ function createDriver(
     ?MockRedisClient $mockClient = null,
     int $defaultTtl = 3600,
     string $signingKey = 'test-signing-key',
+    ?FakeClock $clock = null,
 ): RedisCacheDriver {
     $mockClient ??= createMockClient();
     $connection = new class ($mockClient) extends RedisConnection
@@ -244,7 +283,7 @@ function createDriver(
     };
     $config = createCacheConfig($defaultTtl);
 
-    return new RedisCacheDriver($connection, $config, createSigner($signingKey));
+    return new RedisCacheDriver($connection, $config, createSigner($signingKey), $clock ?? new FakeClock());
 }
 
 describe('RedisCacheDriver', function (): void {
@@ -399,6 +438,18 @@ describe('RedisCacheDriver', function (): void {
         $item = $this->driver->getItem('key');
 
         expect($item->expiresAt())->not->toBeNull();
+    });
+
+    it('reports the item expiry as the clock time plus the remaining redis ttl', function (): void {
+        $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+        $driver = createDriver($this->mockClient, clock: $clock);
+        $driver->set('key', 'value', 3600);
+        $this->mockClient->ttls['marko:cache:key'] = 1200;
+
+        $expiresAt = $driver->getItem('key')->expiresAt();
+
+        expect($expiresAt)->not->toBeNull()
+            ->and($expiresAt->getTimestamp())->toBe($clock->now()->getTimestamp() + 1200);
     });
 
     it('returns cache item without expiration for persistent key', function (): void {
@@ -731,5 +782,86 @@ describe('RedisCacheDriver', function (): void {
             ->toThrow(InvalidKeyException::class)
             ->and(fn () => $driver->deleteMultiple(['valid', 'invalid/key']))
             ->toThrow(InvalidKeyException::class);
+    });
+
+    describe('increment() counters', function (): void {
+        it('returns an int from get() for a key written by increment()', function (): void {
+            $this->driver->increment('counter', 60);
+            $this->driver->increment('counter', 60);
+
+            expect($this->driver->get('counter'))->toBe(2);
+        });
+
+        it('returns an int cache item from getItem() for a key written by increment()', function (): void {
+            $this->driver->increment('counter', 60);
+
+            $item = $this->driver->getItem('counter');
+
+            expect($item->isHit())->toBeTrue()
+                ->and($item->get())->toBe(1)
+                ->and($item->expiresAt())->not->toBeNull();
+        });
+
+        it('returns ints from getMultiple() for keys written by increment()', function (): void {
+            $this->driver->increment('a', 60);
+            $this->driver->increment('b', 60);
+            $this->driver->increment('b', 60);
+            $this->driver->set('c', 'text');
+
+            expect($this->driver->getMultiple(['a', 'b', 'c']))
+                ->toBe(['a' => 1, 'b' => 2, 'c' => 'text']);
+        });
+
+        it('returns a negative integer counter as an int', function (): void {
+            $this->mockClient->storage['marko:cache:counter'] = '-3';
+
+            expect($this->driver->get('counter'))->toBe(-3);
+        });
+
+        it('still throws TamperedCacheValueException for a tampered non-integer value', function (): void {
+            $this->mockClient->storage['marko:cache:counter'] = '12abc';
+
+            expect(fn () => $this->driver->get('counter'))
+                ->toThrow(TamperedCacheValueException::class)
+                ->and(fn () => $this->driver->getItem('counter'))
+                ->toThrow(TamperedCacheValueException::class)
+                ->and(fn () => $this->driver->getMultiple(['counter']))
+                ->toThrow(TamperedCacheValueException::class);
+        });
+
+        it('does not treat an integer followed by a newline as a counter', function (): void {
+            $this->mockClient->storage['marko:cache:counter'] = "12\n";
+
+            expect(fn () => $this->driver->get('counter'))
+                ->toThrow(TamperedCacheValueException::class);
+        });
+
+        it('increments and sets the ttl in a single atomic script call', function (): void {
+            $this->driver->increment('counter', 60);
+
+            expect($this->mockClient->evalCount)->toBe(1)
+                ->and($this->mockClient->incrCount)->toBe(0)
+                ->and($this->mockClient->expireCount)->toBe(0)
+                ->and($this->mockClient->lastEvalScript)->toContain('INCR')
+                ->and($this->mockClient->lastEvalScript)->toContain('EXPIRE')
+                ->and($this->mockClient->ttls['marko:cache:counter'])->toBe(60);
+        });
+
+        it('restores a missing ttl on a counter that has none', function (): void {
+            // A counter left behind without a TTL (e.g. by a crash between the old
+            // non-atomic INCR and EXPIRE) must not limit its client forever.
+            $this->mockClient->storage['marko:cache:counter'] = '5';
+
+            $this->driver->increment('counter', 60);
+
+            expect($this->mockClient->ttls['marko:cache:counter'])->toBe(60)
+                ->and($this->mockClient->lastEvalScript)->toContain("'TTL'");
+        });
+
+        it('leaves the counter persistent when incremented with a zero ttl', function (): void {
+            $this->driver->increment('counter', 0);
+
+            expect($this->mockClient->ttls)->not->toHaveKey('marko:cache:counter');
+        });
     });
 });

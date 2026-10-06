@@ -7,11 +7,14 @@ namespace Marko\Webhook\Tests\Jobs;
 use Closure;
 use Marko\Config\ConfigRepositoryInterface;
 use Marko\Core\Container\ContainerInterface;
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Http\Contracts\HttpClientInterface;
 use Marko\Http\HttpResponse;
 use Marko\Queue\QueueInterface;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Marko\Testing\Fake\FakeQueue;
+use Marko\Webhook\Config\WebhookConfig;
 use Marko\Webhook\Contracts\WebhookAttemptRepositoryInterface;
 use Marko\Webhook\Contracts\WebhookDispatcherInterface;
 use Marko\Webhook\Entity\WebhookAttempt;
@@ -97,8 +100,21 @@ describe('DispatchWebhookJob retry', function (): void {
             'webhook.retry_delay' => 60,
         ]);
 
-        $dispatcher = new WebhookDispatcher($httpClient);
-        $deliveryService = new WebhookDeliveryService($attemptRepository);
+        $dispatcher = new WebhookDispatcher(
+            $httpClient,
+            new FakeClock(),
+            new WebhookConfig(new FakeConfigRepository([
+                'webhook.timeout' => 30,
+                'webhook.max_retries' => 3,
+                'webhook.retry_delay' => 60,
+                'webhook.timestamp_tolerance' => 300,
+            ])),
+        );
+        $deliveryService = new WebhookDeliveryService(
+            $attemptRepository,
+            new FakeClock(),
+            DatabaseTimezoneConfig::fromName('UTC'),
+        );
         $fakeQueue = new FakeQueue();
 
         $container = new readonly class ($dispatcher, $deliveryService, $config, $fakeQueue) implements ContainerInterface
@@ -110,8 +126,9 @@ describe('DispatchWebhookJob retry', function (): void {
                 private QueueInterface $queue,
             ) {}
 
-            public function get(string $id): object
-            {
+            public function get(
+                string $id,
+            ): object {
                 return match ($id) {
                     WebhookDispatcherInterface::class => $this->dispatcher,
                     WebhookDeliveryService::class => $this->deliveryService,
@@ -121,8 +138,9 @@ describe('DispatchWebhookJob retry', function (): void {
                 };
             }
 
-            public function has(string $id): bool
-            {
+            public function has(
+                string $id,
+            ): bool {
                 return true;
             }
 
@@ -133,13 +151,15 @@ describe('DispatchWebhookJob retry', function (): void {
                 object $instance,
             ): void {}
 
-            public function call(Closure $callable): mixed
-            {
+            public function call(
+                Closure $callable,
+            ): mixed {
                 return null;
             }
 
-            public function resolvedInstances(?string $interface = null): array
-            {
+            public function resolvedInstances(
+                ?string $interface = null,
+            ): array {
                 return [];
             }
         };
@@ -235,8 +255,21 @@ describe('DispatchWebhookJob retry', function (): void {
             'webhook.retry_delay' => 60,
         ]);
 
-        $dispatcher = new WebhookDispatcher($httpClient);
-        $deliveryService = new WebhookDeliveryService($attemptRepository);
+        $dispatcher = new WebhookDispatcher(
+            $httpClient,
+            new FakeClock(),
+            new WebhookConfig(new FakeConfigRepository([
+                'webhook.timeout' => 30,
+                'webhook.max_retries' => 3,
+                'webhook.retry_delay' => 60,
+                'webhook.timestamp_tolerance' => 300,
+            ])),
+        );
+        $deliveryService = new WebhookDeliveryService(
+            $attemptRepository,
+            new FakeClock(),
+            DatabaseTimezoneConfig::fromName('UTC'),
+        );
         $fakeQueue = new FakeQueue();
 
         $container = new readonly class ($dispatcher, $deliveryService, $config, $fakeQueue) implements ContainerInterface
@@ -248,8 +281,9 @@ describe('DispatchWebhookJob retry', function (): void {
                 private QueueInterface $queue,
             ) {}
 
-            public function get(string $id): object
-            {
+            public function get(
+                string $id,
+            ): object {
                 return match ($id) {
                     WebhookDispatcherInterface::class => $this->dispatcher,
                     WebhookDeliveryService::class => $this->deliveryService,
@@ -259,8 +293,9 @@ describe('DispatchWebhookJob retry', function (): void {
                 };
             }
 
-            public function has(string $id): bool
-            {
+            public function has(
+                string $id,
+            ): bool {
                 return true;
             }
 
@@ -271,13 +306,15 @@ describe('DispatchWebhookJob retry', function (): void {
                 object $instance,
             ): void {}
 
-            public function call(Closure $callable): mixed
-            {
+            public function call(
+                Closure $callable,
+            ): mixed {
                 return null;
             }
 
-            public function resolvedInstances(?string $interface = null): array
-            {
+            public function resolvedInstances(
+                ?string $interface = null,
+            ): array {
                 return [];
             }
         };
@@ -288,7 +325,7 @@ describe('DispatchWebhookJob retry', function (): void {
         $job->handle();
 
         // Should NOT have re-queued
-        expect($fakeQueue->pushed)->toHaveCount(0);
+        expect($fakeQueue->pushed)->toBeEmpty();
 
         // Should have recorded the final failure
         expect($savedAttempts)->toHaveCount(1)

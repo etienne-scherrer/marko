@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\View\Twig;
 
+use Marko\Routing\UrlGeneratorInterface;
 use Twig\Environment;
 use Twig\Loader\ArrayLoader;
 
@@ -11,13 +12,14 @@ readonly class TwigEngineFactory
 {
     public function __construct(
         private TwigViewConfig $config,
+        private UrlGeneratorInterface $urlGenerator,
     ) {}
 
     public function create(): Environment
     {
         $loader = new ArrayLoader();
 
-        return new Environment($loader, [
+        $environment = new Environment($loader, [
             'cache' => $this->config->cacheDirectory(),
             'auto_reload' => $this->config->autoRefresh(),
             'strict_variables' => $this->config->strictVariables(),
@@ -25,5 +27,8 @@ readonly class TwigEngineFactory
             'debug' => $this->config->debug(),
             'charset' => $this->config->charset(),
         ]);
+        $environment->addExtension(new RouteExtension($this->urlGenerator));
+
+        return $environment;
     }
 }

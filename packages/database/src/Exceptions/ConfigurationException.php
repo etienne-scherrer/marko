@@ -31,6 +31,15 @@ class ConfigurationException extends MarkoException
         );
     }
 
+    public static function invalidIgnoreIndexes(): self
+    {
+        return new self(
+            message: "Database configuration key 'migrations.ignore_indexes' must be a list of strings",
+            context: 'While validating database migration configuration',
+            suggestion: "Set 'migrations' => ['ignore_indexes' => ['index_name', 'prefix_*']] in config/database.php",
+        );
+    }
+
     public static function incompleteSslKeyPair(
         string $present,
         string $missing,
@@ -39,6 +48,16 @@ class ConfigurationException extends MarkoException
             message: "SSL configuration key '$present' is set but '$missing' is missing",
             context: 'While validating database SSL configuration',
             suggestion: "When using client certificate authentication, both 'ssl_cert' and 'ssl_key' must be provided together",
+        );
+    }
+
+    public static function invalidTimezone(
+        string $timezone,
+    ): self {
+        return new self(
+            message: "Invalid database timezone: $timezone",
+            context: 'While reading the timezone key of config/database.php',
+            suggestion: "Set 'timezone' to a valid PHP timezone identifier such as 'UTC' or 'America/New_York'",
         );
     }
 }

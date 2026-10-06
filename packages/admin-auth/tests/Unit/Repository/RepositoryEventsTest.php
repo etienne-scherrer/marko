@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Marko\AdminAuth\Tests\Unit\Repository;
 
-use DateTimeImmutable;
 use Marko\AdminAuth\Entity\AdminUser;
 use Marko\AdminAuth\Entity\AdminUserInterface;
 use Marko\AdminAuth\Entity\Role;
@@ -26,6 +25,7 @@ use Marko\Database\Events\EntityDeleted;
 use Marko\Database\Events\EntityDeleting;
 use Marko\Database\Events\EntityUpdated;
 use Marko\Database\Events\EntityUpdating;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeEventDispatcher;
 use RuntimeException;
 
@@ -193,21 +193,10 @@ it('dispatches AdminUserUpdated event when user is modified', function (): void 
     expect($domainEvent->getUser()->getAuthIdentifier())->toBe(1);
 });
 
-it('includes timestamp in all events', function (): void {
+it('stamps RoleCreated with the repository\'s current instant', function (): void {
     $eventDispatcher = new FakeEventDispatcher();
-    $connection = createEventMockConnection();
-    $metadataFactory = new EntityMetadataFactory();
-    $hydrator = new EntityHydrator();
-
-    $repository = new RoleRepository(
-        $connection,
-        $metadataFactory,
-        $hydrator,
-        null,
-        $eventDispatcher,
-    );
-
-    $beforeSave = new DateTimeImmutable();
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $repository = createClockedRoleRepository($clock, createEventMockConnection(), $eventDispatcher);
 
     $role = new Role();
     $role->name = 'Viewer';
@@ -215,15 +204,127 @@ it('includes timestamp in all events', function (): void {
 
     $repository->save($role);
 
-    $afterSave = new DateTimeImmutable();
-
-    $classes = array_map(fn (object $e): string => $e::class, $eventDispatcher->dispatched);
-    $domainEvent = $eventDispatcher->dispatched[array_search(RoleCreated::class, $classes)];
-
-    expect($domainEvent->getTimestamp())->toBeInstanceOf(DateTimeImmutable::class)
-        ->and($domainEvent->getTimestamp()->getTimestamp())->toBeGreaterThanOrEqual($beforeSave->getTimestamp())
-        ->and($domainEvent->getTimestamp()->getTimestamp())->toBeLessThanOrEqual($afterSave->getTimestamp());
+    expect(findDispatchedEvent($eventDispatcher, RoleCreated::class)->getTimestamp())->toEqual($clock->now());
 });
+
+it('stamps RoleUpdated with the repository\'s current instant', function (): void {
+    $eventDispatcher = new FakeEventDispatcher();
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $repository = createClockedRoleRepository($clock, createEventMockConnection(isNew: false), $eventDispatcher);
+
+    $role = new Role();
+    $role->id = 1;
+    $role->name = 'Viewer';
+    $role->slug = 'viewer';
+
+    $clock->travel('+1 hour');
+    $repository->save($role);
+
+    expect(findDispatchedEvent($eventDispatcher, RoleUpdated::class)->getTimestamp())->toEqual($clock->now());
+});
+
+it('stamps RoleDeleted with the repository\'s current instant', function (): void {
+    $eventDispatcher = new FakeEventDispatcher();
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $repository = createClockedRoleRepository($clock, createEventMockConnection(isNew: false), $eventDispatcher);
+
+    $role = new Role();
+    $role->id = 1;
+    $role->name = 'Viewer';
+    $role->slug = 'viewer';
+
+    $repository->delete($role);
+
+    expect(findDispatchedEvent($eventDispatcher, RoleDeleted::class)->getTimestamp())->toEqual($clock->now());
+});
+
+it('stamps AdminUserCreated and AdminUserUpdated with the repository\'s current instant', function (): void {
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+
+    $createDispatcher = new FakeEventDispatcher();
+    $user = new AdminUser();
+    $user->email = 'admin@example.com';
+    $user->password = 'hashed_password';
+    $user->name = 'Admin User';
+    createClockedAdminUserRepository($clock, createEventMockConnection(), $createDispatcher)->save($user);
+    $createdAt = $clock->now();
+
+    $clock->travel('+1 day');
+    $updateDispatcher = new FakeEventDispatcher();
+    $existing = new AdminUser();
+    $existing->id = 1;
+    $existing->email = 'admin@example.com';
+    $existing->password = 'hashed_password';
+    $existing->name = 'Admin Updated';
+    createClockedAdminUserRepository($clock, createEventMockConnection(isNew: false), $updateDispatcher)->save(
+        $existing,
+    );
+
+    expect(findDispatchedEvent($createDispatcher, AdminUserCreated::class)->getTimestamp())->toEqual($createdAt)
+        ->and(findDispatchedEvent($updateDispatcher, AdminUserUpdated::class)->getTimestamp())->toEqual($clock->now());
+});
+
+it('stamps admin-auth events in UTC from the injected clock', function (): void {
+    $eventDispatcher = new FakeEventDispatcher();
+    $clock = new FakeClock('2026-10-05 14:00:00+02:00');
+    $repository = createClockedRoleRepository($clock, createEventMockConnection(), $eventDispatcher);
+
+    $role = new Role();
+    $role->name = 'Viewer';
+    $role->slug = 'viewer';
+
+    $repository->save($role);
+
+    expect(findDispatchedEvent($eventDispatcher, RoleCreated::class)->getTimestamp()->format('Y-m-d H:i:s e'))
+        ->toBe('2026-10-05 12:00:00 UTC');
+});
+
+/**
+ * A RoleRepository whose current instant (the database Repository::now() seam) reads the given clock.
+ */
+function createClockedRoleRepository(
+    FakeClock $clock,
+    ConnectionInterface $connection,
+    FakeEventDispatcher $eventDispatcher,
+): RoleRepository {
+    return new RoleRepository(
+        $connection,
+        new EntityMetadataFactory(),
+        new EntityHydrator(),
+        eventDispatcher: $eventDispatcher,
+        clock: $clock,
+    );
+}
+
+/**
+ * An AdminUserRepository whose current instant (the database Repository::now() seam) reads the given clock.
+ */
+function createClockedAdminUserRepository(
+    FakeClock $clock,
+    ConnectionInterface $connection,
+    FakeEventDispatcher $eventDispatcher,
+): AdminUserRepository {
+    return new AdminUserRepository(
+        $connection,
+        new EntityMetadataFactory(),
+        new EntityHydrator(),
+        eventDispatcher: $eventDispatcher,
+        clock: $clock,
+    );
+}
+
+function findDispatchedEvent(
+    FakeEventDispatcher $eventDispatcher,
+    string $class,
+): object {
+    foreach ($eventDispatcher->dispatched as $event) {
+        if ($event instanceof $class) {
+            return $event;
+        }
+    }
+
+    throw new RuntimeException("No $class event was dispatched");
+}
 
 // Helper functions
 
@@ -273,6 +374,17 @@ function createEventMockConnection(
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }

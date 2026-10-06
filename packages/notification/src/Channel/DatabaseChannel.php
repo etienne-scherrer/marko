@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace Marko\Notification\Channel;
 
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Notification\Contracts\BatchChannelInterface;
 use Marko\Notification\Contracts\ChannelInterface;
 use Marko\Notification\Contracts\NotifiableInterface;
 use Marko\Notification\Contracts\NotificationInterface;
 use Marko\Notification\Exceptions\ChannelException;
+use Psr\Clock\ClockInterface;
 use Random\RandomException;
 use Throwable;
 
+/**
+ * Stores notifications in the notifications table. created_at is written in the
+ * database timezone (`database.timezone`, UTC by default).
+ */
 class DatabaseChannel implements ChannelInterface, BatchChannelInterface
 {
     /**
@@ -21,8 +27,12 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
      */
     private const int ROWS_PER_CHUNK = 500;
 
+    private const string TABLE = 'notifications';
+
     public function __construct(
         private ConnectionInterface $connection,
+        private ClockInterface $clock,
+        private DatabaseTimezoneConfig $databaseTimezoneConfig,
     ) {}
 
     /**
@@ -38,7 +48,7 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
 
         try {
             $this->connection->execute(
-                'INSERT INTO notifications (id, type, notifiable_type, notifiable_id, data, read_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                $this->insertInto() . '(?, ?, ?, ?, ?, ?, ?)',
                 [
                     $this->generateUuid(),
                     $notification::class,
@@ -46,7 +56,7 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
                     (string) $notifiable->getNotifiableId(),
                     json_encode($data, JSON_THROW_ON_ERROR),
                     null,
-                    date('Y-m-d H:i:s'),
+                    $this->databaseTimezoneConfig->format($this->clock->now()),
                 ],
             );
         } catch (Throwable $e) {
@@ -71,7 +81,7 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
                 $placeholderRow = '(?, ?, ?, ?, ?, ?, ?)';
                 $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
 
-                $sql = 'INSERT INTO notifications (id, type, notifiable_type, notifiable_id, data, read_at, created_at) VALUES ' . $placeholders;
+                $sql = $this->insertInto() . $placeholders;
 
                 $bindings = [];
                 foreach ($chunk as $notifiable) {
@@ -82,7 +92,7 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
                     $bindings[] = (string) $notifiable->getNotifiableId();
                     $bindings[] = json_encode($data, JSON_THROW_ON_ERROR);
                     $bindings[] = null;
-                    $bindings[] = date('Y-m-d H:i:s');
+                    $bindings[] = $this->databaseTimezoneConfig->format($this->clock->now());
                 }
 
                 $this->connection->execute($sql, $bindings);
@@ -90,6 +100,15 @@ class DatabaseChannel implements ChannelInterface, BatchChannelInterface
                 throw ChannelException::deliveryFailed('database', $e->getMessage());
             }
         }
+    }
+
+    /**
+     * The INSERT statement up to its VALUES rows, with the table quoted for the connection's SQL dialect.
+     */
+    private function insertInto(): string
+    {
+        return 'INSERT INTO ' . $this->connection->quoteIdentifier(self::TABLE)
+            . ' (id, type, notifiable_type, notifiable_id, data, read_at, created_at) VALUES ';
     }
 
     /**

@@ -93,6 +93,17 @@ function makeInsertConnection(): ConnectionInterface
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -147,6 +158,17 @@ function makeUpdateConnection(): ConnectionInterface
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -200,6 +222,17 @@ function makeDeleteConnection(): ConnectionInterface
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }

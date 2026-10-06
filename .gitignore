@@ -21,6 +21,7 @@ vendor/
 # fixture does not have to rediscover this. `tests/FixtureTrackingTest.php`
 # fails the build if any fixture file becomes unreachable this way.
 !/packages/*/tests/Fixtures/**/vendor/
+!/packages/*/tests/fixtures/**/vendor/
 
 # `rr:serve` and `vendor/bin/rr get-binary` both write into the project root:
 # a downloaded platform-specific binary and a generated default config. Local

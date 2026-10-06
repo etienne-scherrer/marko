@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 use Marko\Core\Commands\DiscoveryCacheCommand;
+use Marko\Core\Container\Container;
 use Marko\Core\Discovery\DiscoveryCache;
 use Marko\Core\Discovery\DiscoveryCompiler;
 use Marko\Core\Discovery\DiscoveryEnvironment;
@@ -25,14 +26,15 @@ afterEach(function (): void {
     }
 });
 
-function makeDiscoveryCacheSetup(string $cacheDir): array
-{
+function makeDiscoveryCacheSetup(
+    string $cacheDir,
+): array {
     $cachePath = $cacheDir . '/discovery.php';
     $_ENV['DISCOVERY_CACHE_PATH'] = $cachePath;
     $paths = new ProjectPaths($cacheDir);
     $env = new DiscoveryEnvironment();
     $cache = new DiscoveryCache($paths, $env);
-    $compiler = new DiscoveryCompiler();
+    $compiler = new DiscoveryCompiler(new Container());
     $moduleRepository = new class () implements ModuleRepositoryInterface
     {
         public function all(): array
@@ -56,8 +58,9 @@ function makeDiscoveryCacheSetup(string $cacheDir): array
     ];
 }
 
-function discoveryCacheTestCleanup(string $dir): void
-{
+function discoveryCacheTestCleanup(
+    string $dir,
+): void {
     if (!is_dir($dir)) {
         return;
     }
@@ -123,18 +126,42 @@ it(
     },
 );
 
+it('reports module, middleware and section counts from discovery:cache', function (): void {
+    $dir = sys_get_temp_dir() . '/marko_cache_cmd_test_' . uniqid('', true);
+    $setup = makeDiscoveryCacheSetup($dir);
+
+    $setup['command']->execute($setup['input'], $setup['output']);
+
+    rewind($setup['stream']);
+    $result = (string) stream_get_contents($setup['stream']);
+
+    expect($result)->toContain('modules: 0')
+        ->and($result)->toContain('global middleware: 0')
+        ->and($result)->toContain('sections: none');
+
+    fclose($setup['stream']);
+    discoveryCacheTestCleanup($dir);
+});
+
 it(
     'returns a non-zero exit code and a helpful message (catching DiscoveryCacheException::notWritable) when the cache cannot be written',
     function (): void {
         $dir = sys_get_temp_dir() . '/marko_cache_cmd_test_' . uniqid('', true);
         // Create a read-only directory so the write will fail
         mkdir($dir, 0555, true);
+
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0 || is_writable($dir)) {
+            chmod($dir, 0755);
+            discoveryCacheTestCleanup($dir);
+            $this->markTestSkipped('Directory permissions are not enforced for this user (e.g. root).');
+        }
+
         $cachePath = $dir . '/discovery.php';
         $_ENV['DISCOVERY_CACHE_PATH'] = $cachePath;
         $paths = new ProjectPaths($dir);
         $env = new DiscoveryEnvironment();
         $cache = new DiscoveryCache($paths, $env);
-        $compiler = new DiscoveryCompiler();
+        $compiler = new DiscoveryCompiler(new Container());
         $moduleRepository = new class () implements ModuleRepositoryInterface
         {
             public function all(): array
@@ -147,17 +174,19 @@ it(
         $input = new Input([]);
         $output = new Output($stream);
 
-        $exitCode = $command->execute($input, $output);
+        try {
+            $exitCode = $command->execute($input, $output);
 
-        rewind($stream);
-        $result = stream_get_contents($stream);
+            rewind($stream);
+            $result = stream_get_contents($stream);
 
-        expect($exitCode)->not->toBe(0)
-            ->and($result)->not->toBeEmpty();
-
-        fclose($stream);
-        chmod($dir, 0755);
-        discoveryCacheTestCleanup($dir);
+            expect($exitCode)->not->toBe(0)
+                ->and($result)->toMatch('/Permission denied|Failed to open stream/i');
+        } finally {
+            fclose($stream);
+            chmod($dir, 0755);
+            discoveryCacheTestCleanup($dir);
+        }
     },
 );
 

@@ -103,7 +103,7 @@ Create a directory in `app/` with a `composer.json`:
 app/
   mymodule/
     composer.json    # Required: name, autoload
-    module.php       # Optional: enabled, bindings
+    module.php       # Optional: enabled, sequence, bindings, singletons, boot, globalMiddleware, discovery
     src/
       MyService.php
 ```
@@ -132,18 +132,81 @@ return [
 ];
 ```
 
+Boot callbacks run in module load order. A callback can't see what a module that boots later sets up in its own `boot` callback. To check the finished setup, observe `Marko\Core\Event\ApplicationBooted`. `Application` dispatches it once per boot, on live and cached boots, after every `boot` callback has run:
+
+```php
+use Marko\Core\Attributes\Observer;
+use Marko\Core\Discovery\CachedDiscovery;
+use Marko\Core\Event\ApplicationBooted;
+
+#[Observer(event: ApplicationBooted::class)]
+readonly class CheckWidgetSetup
+{
+    public function __construct(
+        private CachedDiscovery $cachedDiscovery,
+    ) {}
+
+    public function handle(
+        ApplicationBooted $event,
+    ): void {
+        if ($this->cachedDiscovery->isCached()) {
+            return; // checked when the discovery cache was compiled
+        }
+
+        // validate, and throw a MarkoException naming what is missing
+    }
+}
+```
+
+Under PHP-FPM every request is a boot, so keep these observers cheap. `marko/authorization` uses this event to [check `#[Can]` routes at boot](/docs/packages/authorization/#cost-on-routes-without-can).
+
+### Application Environment
+
+`AppEnvironment` is the single answer to "which environment is this application running in?". `Application` registers one shared instance in the container at boot, so any class or boot callback can type-hint it:
+
+```php
+use Marko\Core\Environment\AppEnvironment;
+
+class ReportMailer
+{
+    public function __construct(
+        private AppEnvironment $appEnvironment,
+    ) {}
+
+    public function recipients(): array
+    {
+        return $this->appEnvironment->isProduction()
+            ? ['finance@example.com']
+            : ['dev@example.com'];
+    }
+}
+```
+
+It reads `MARKO_ENV` first, then `APP_ENV`, from `$_ENV` with a `getenv()` fallback, so it works whether or not [marko/env](/docs/packages/env/) is installed and regardless of PHP's `variables_order` setting. Values are compared case-insensitively:
+
+| Method | Returns `true` for |
+|---|---|
+| `isProduction()` | `production`, `prod`, or no value at all |
+| `isDevelopment()` | `development`, `dev`, `local` |
+| `isTesting()` | `testing`, `test` |
+
+Any other name (for example `staging`) is none of these. Code that should only act on a disposable environment checks for one by name rather than for the absence of production: [marko/database](/docs/packages/database/#environment-behaviour)'s destructive commands run freely only when `isDevelopment()` or `isTesting()` is true. `name()` returns the trimmed, lowercased value, or `production` when neither variable is set (or both are empty). Defaulting to production means a deployment that forgets to set the environment fails safe instead of exposing development behavior.
+
 ### Environment-Specific Bindings
 
 When different environments need different implementations (e.g., a mock service in development vs the real one in production), use the `boot` callback to conditionally override bindings:
 
 ```php title="module.php"
+use Marko\Core\Container\Container;
+use Marko\Core\Environment\AppEnvironment;
+
 return [
     'bindings' => [
         // Default binding — used in all environments
         PaymentGatewayInterface::class => StripePaymentGateway::class,
     ],
-    'boot' => function (Container $container): void {
-        if (($_ENV['APP_ENV'] ?? 'production') === 'development') {
+    'boot' => function (Container $container, AppEnvironment $appEnvironment): void {
+        if ($appEnvironment->isDevelopment()) {
             $container->bind(
                 PaymentGatewayInterface::class,
                 MockPaymentGateway::class,
@@ -160,9 +223,11 @@ Since boot callbacks run after all static bindings are registered, `$container->
 **Use config instead when** the difference is just values (API URLs, credentials, feature flags). Keep the same class everywhere and let [config](/docs/packages/config/) drive the behavior:
 
 ```php title="config/payments.php"
+use Marko\Config\Env;
+
 return [
-    'gateway_url' => $_ENV['PAYMENT_GATEWAY_URL'] ?? 'https://sandbox.stripe.com',
-    'dry_run' => (bool) ($_ENV['PAYMENT_DRY_RUN'] ?? true),
+    'gateway_url' => Env::string('PAYMENT_GATEWAY_URL', 'https://sandbox.stripe.com'),
+    'dry_run' => Env::bool('PAYMENT_DRY_RUN', true),
 ];
 ```
 
@@ -203,15 +268,108 @@ foreach ($container->resolvedInstances(ResettableInterface::class) as $resettabl
 }
 ```
 
-`resolvedInstances()` is declared on the concrete `Container` class, not on `ContainerInterface` --- code that needs it must type-hint `Container` or check `instanceof Container` rather than relying on the interface.
+`Marko\Core\RequestStateResetter` wraps that loop: `new RequestStateResetter($container)->reset()` resets every resolved `ResettableInterface` instance in ascending binding-id order, and lets a failing `reset()` propagate. Pass instances to `reset(ResettableInterface ...$except)` to leave them alone (matched by identity); the testing database helpers use this to keep a test transaction open. The RoadRunner worker and the [marko/testing](/docs/packages/testing/) HTTP test client both call it before each request.
+
+`resolvedInstances()` is declared on `ContainerInterface` and implemented by `Container`.
 
 Current implementors: `Session` ([marko/session](/docs/packages/session/)), `SessionGuard` ([marko/authentication](/docs/packages/authentication/)), and `ReadWriteConnection` ([marko/database-readwrite](/docs/packages/database-readwrite/)).
 
+### Registering Console Commands
+
+Mark a class implementing `CommandInterface` with `#[Command]` and it is discovered automatically. Declare value-less boolean options in `flags` so they never swallow the positional argument that follows them:
+
+```php title="app/billing/src/Command/RefundCommand.php"
+use Marko\Core\Attributes\Command;
+use Marko\Core\Command\CommandInterface;
+use Marko\Core\Command\Input;
+use Marko\Core\Command\Output;
+
+#[Command(name: 'billing:refund', description: 'Refund an order', flags: ['force'])]
+class RefundCommand implements CommandInterface
+{
+    public function execute(Input $input, Output $output): int
+    {
+        $orderId = $input->getArgument(0);           // positional --- options are never included
+        $reason = $input->getOption('reason');       // --reason "late" or --reason=late
+        $force = $input->hasOption('force');         // declared flag
+
+        // ...
+
+        return 0;
+    }
+}
+```
+
+`marko billing:refund --force 1001 --reason late` and `marko billing:refund 1001 --reason=late --force` are equivalent. Arguments and options can come in any order, `--` ends option parsing, and repeated options are read with `getOptionValues()`. See [marko/cli](/docs/packages/cli/#arguments-and-options) for the full option syntax.
+
+The running command's `Input` and `Output` are also registered in the container, so a console service the command depends on reads the same options and writes to the same stream.
+
+To report a warning without mixing it into the command's regular output, inject `ErrorOutput`. It is an `Output` that writes to STDERR (`new ErrorOutput($stream)` writes elsewhere, which is how tests capture it), so the warning stays visible when STDOUT is piped or captured by a deploy script.
+
+### Asking for Confirmation
+
+Inject `ConfirmationPrompterInterface` to ask the person running the command a yes/no question. The prompter writes the question with a `[y/N]` or `[Y/n]` hint through the command's `Output` and reads the answer from standard input:
+
+```php title="app/billing/src/Command/PurgeCommand.php"
+use Marko\Core\Attributes\Command;
+use Marko\Core\Command\CommandInterface;
+use Marko\Core\Command\ConfirmationPrompterInterface;
+use Marko\Core\Command\Input;
+use Marko\Core\Command\Output;
+
+#[Command(name: 'billing:purge', description: 'Delete archived invoices', flags: ['force'])]
+class PurgeCommand implements CommandInterface
+{
+    public function __construct(
+        private ConfirmationPrompterInterface $confirmationPrompter,
+    ) {}
+
+    public function execute(Input $input, Output $output): int
+    {
+        if (!$input->hasOption('force')) {
+            if (!$this->confirmationPrompter->isInteractive()) {
+                $output->writeLine('Error: Refusing to purge without confirmation. Re-run with --force.');
+
+                return 1;
+            }
+
+            if (!$this->confirmationPrompter->confirm('Delete all archived invoices?')) {
+                return 0;
+            }
+        }
+
+        // ...
+
+        return 0;
+    }
+}
+```
+
+| Answer | Result |
+|--------|--------|
+| `y`, `yes` (any case) | `true` |
+| `n`, `no` (any case) | `false` |
+| Empty, end of input, anything else | `$default` (`false` unless you pass `default: true`) |
+
+**`--no-interaction`** is accepted by every command; you don't declare it. When it is passed, `isInteractive()` is `false`, `$input->isInteractive()` is `false`, and `confirm()` asks nothing and returns `$default`. `isInteractive()` is also `false` when standard input is not a terminal (CI, a pipe), although `confirm()` still reads a piped answer such as `echo y | marko billing:purge`.
+
+A command that must not go ahead without a person (a destructive action) checks `isInteractive()` first and refuses loudly with a flag such as `--force`, as above. Relying on the default is for optional offers that are safe to skip.
+
+`StdinConfirmationPrompter` is the default implementation, bound by `Application`. To replace it, bind `ConfirmationPrompterInterface` in your module's `module.php`. In tests, use [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) from `marko/testing`.
+
 ### Discovery Cache
 
-On every boot, Marko scans all module PHP files to discover `#[Preference]`, `#[Plugin]`, `#[Observer]`, and `#[Command]` attributes. In production this scan can be eliminated by compiling its results into a single PHP file --- the discovery cache.
+Without a cache, every boot discovers the application from scratch: it scans every `vendor/*/*` package and parses its `composer.json` to find modules, sorts them by dependency, scans every module PHP file for `#[Preference]`, `#[Plugin]`, `#[Observer]`, `#[Command]` and route attributes, resolves global middleware, and (with `marko/database`) scans for entities. Boot cost grows with every class in the app. In production all of this is compiled once into a single PHP file --- the discovery cache --- so a request skips every scan.
 
-**Routes are deliberately not part of the discovery cache.** `Application::initialize()` always runs route discovery live on every boot, in every environment --- so adding or changing a `#[Get]`, `#[Post]`, or any other route attribute takes effect on the next request with no rebuild, ever. The cache covers only the four attribute types listed above.
+The cache holds:
+
+- the resolved module list, in load order (the `composer.json` fields only --- each `module.php` is still loaded, so its bindings and `boot` closures stay live)
+- preferences, plugins, observers and commands
+- the global middleware order
+- one section per [discovery contributor](#adding-a-section-to-the-discovery-cache): routes from [`marko/routing`](/docs/packages/routing/#route-cache), entities from [`marko/database`](/docs/packages/database/#entity-discovery-cache)
+- a fingerprint of the installed packages and module directories, so a stale cache fails loudly
+
+On a cached boot no `vendor/` directory is scanned, no `composer.json` is parsed and no PHP file is tokenized. Controllers and other classes load only when a request needs them.
 
 #### Compiling the cache
 
@@ -228,7 +386,12 @@ preferences: 4
 plugins: 12
 observers: 7
 commands: 9
+modules: 31
+global middleware: 3
+sections: routes (48), entities (12)
 ```
+
+`discovery:cache` and `discovery:clear` always boot from live discovery, so they work even when the existing cache is stale, corrupt or from an older version.
 
 #### Clearing the cache
 
@@ -240,50 +403,110 @@ Deletes the compiled cache file. Idempotent --- safe to run when no cache exists
 
 #### How boot uses the cache
 
-At boot, `Application::initialize()` reads three environment variables directly (not via `marko/config`, so the gate works before any config package is loaded):
+At boot, `Application::initialize()` reads these environment variables directly from `$_ENV`, falling back to `getenv()` (not via `marko/config`, so the gate works before any config package is loaded):
 
 | Variable | Default | Description |
 |---|---|---|
-| `APP_ENV` | `production` | Application environment. Set to `development` to disable the cache. |
-| `DISCOVERY_CACHE_ENABLED` | `true` | Set to `0`, `false`, `no`, `off`, or empty to disable. |
+| `MARKO_ENV` / `APP_ENV` | `production` | Application environment, read through [`AppEnvironment`](#application-environment). `development`, `dev`, or `local` disable the cache. `MARKO_ENV` wins when both are set. |
+| `DISCOVERY_CACHE_ENABLED` | `true` | `1`, `true`, `yes`, `on` enable; `0`, `false`, `no`, `off`, or empty disable. Case-insensitive and trimmed. Any other value (`enabled`, `ture`) throws `DiscoveryCacheException`. |
 | `DISCOVERY_CACHE_PATH` | `storage/cache/discovery.php` | Path to the cache file. Relative paths resolve from the project root; absolute paths are used as-is. |
 
 The cache is used when **all three conditions** are true:
 
-1. `DISCOVERY_CACHE_ENABLED` is truthy
-2. `APP_ENV` is not `development`
+1. `DISCOVERY_CACHE_ENABLED` is enabled
+2. `AppEnvironment::isDevelopment()` is false (the environment is not `development`, `dev`, or `local`)
 3. The cache file exists at `DISCOVERY_CACHE_PATH`
 
 If the cache file is **missing**, boot falls back to a normal full rescan --- no error.
 
-If the cache file is **corrupt, malformed, or version-mismatched**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback. Run `marko discovery:clear` then `marko discovery:cache` to rebuild.
+If the cache file is **corrupt, malformed, version-mismatched or stale**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback and the cache is never rebuilt behind your back. Run `marko discovery:cache` to rebuild it, or `marko discovery:clear` to go back to live discovery.
 
-In **`development`** environment the cache is always bypassed, so adding or editing a `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
+In a **development** environment (`development`, `dev`, or `local` --- the skeleton ships `APP_ENV=local`) the cache is always bypassed, so adding or editing a module, route, `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
 
-#### Configuration via `marko/config`
+#### Stale cache detection
 
-When `marko/config` is installed, the same keys are available as a config file:
+The cache stores a fingerprint of:
 
-```php title="config/discovery.php"
-return [
-    'enabled'    => true,   // mirrors DISCOVERY_CACHE_ENABLED
-    'environment' => 'production', // mirrors APP_ENV
-    'cache_path' => 'storage/cache/discovery.php', // mirrors DISCOVERY_CACHE_PATH
-];
-```
+- the contents of `vendor/composer/installed.json` --- any `composer install`, `update`, `require` or `remove` changes it
+- every directory holding a `composer.json` under `modules/` (recursively, stopping at a module) and `app/` (one level), with a hash of that `composer.json`
 
-The core-owned `config/discovery.php` is shipped with `marko/core` and populates these values from `$_ENV` automatically. The boot gate reads `DiscoveryEnvironment` directly and does not depend on `marko/config`.
+Each boot recomputes the fingerprint (one file hash plus a directory listing of `modules/` and `app/`) and throws a stale `DiscoveryCacheException` when it differs. Each module's `module.php` is loaded on every boot anyway, so a module whose `module.php` now disables it, or changes its `sequence` or `globalMiddleware`, is also reported as stale.
 
-#### Deploy requirement
+The fingerprint does not cover the PHP files inside a module: a new route, plugin, observer, preference, command or entity in an existing module is only picked up by recompiling. Enabling a module that was disabled when the cache was compiled is not detected either.
 
-There is no file-modification-time invalidation. Whenever code changes (new modules, updated attributes), regenerate the cache as part of your deploy:
+#### Deploying to production
+
+`marko discovery:cache` is a required deploy step. Run it after installing dependencies, every time:
 
 ```bash
 composer install --no-dev --optimize-autoloader
 marko discovery:cache
 ```
 
-Serving stale discovery results in missing preferences, plugins, observers, or commands until the cache is recompiled.
+Recompiling on every deploy covers new code in existing modules (which the fingerprint cannot see) and framework upgrades that change the cache format: a cache written by an older version fails boot with a version-mismatch `DiscoveryCacheException` rather than loading incomplete data. Module paths are stored relative to the project root, so a cache compiled during a build step stays valid when the build is moved to its final location.
+
+Under a long-running worker such as [`marko/roadrunner`](/docs/packages/roadrunner/) the application boots once per worker, so the cache only shortens worker start-up.
+
+#### Adding a section to the discovery cache
+
+A package that runs its own discovery at boot can store the result in the cache. Implement `DiscoveryCacheContributorInterface` and declare the class under the `discovery` key of `module.php`:
+
+```php title="src/Discovery/WidgetCacheContributor.php"
+use Acme\Widgets\WidgetScanner;
+use Marko\Core\Discovery\DiscoveryCacheContributorInterface;
+
+class WidgetCacheContributor implements DiscoveryCacheContributorInterface
+{
+    public function __construct(
+        private WidgetScanner $widgetScanner,
+    ) {}
+
+    public function key(): string
+    {
+        return 'widgets';
+    }
+
+    public function compile(array $modules): array
+    {
+        return $this->widgetScanner->scan($modules); // scalars, null and arrays only
+    }
+}
+```
+
+```php title="module.php"
+use Acme\Widgets\Discovery\WidgetCacheContributor;
+use Acme\Widgets\WidgetRegistry;
+use Acme\Widgets\WidgetScanner;
+use Marko\Core\Discovery\CachedDiscovery;
+
+return [
+    'discovery' => [WidgetCacheContributor::class],
+    'boot' => function (CachedDiscovery $cachedDiscovery, WidgetScanner $widgetScanner, WidgetRegistry $widgetRegistry): void {
+        $widgets = $cachedDiscovery->section('widgets') ?? $widgetScanner->scan(/* ... */);
+        $widgetRegistry->register($widgets);
+    },
+];
+```
+
+`discovery:cache` resolves each contributor through the container and stores its result under `key()`. At boot, `Marko\Core\Discovery\CachedDiscovery::section()` returns `null` when the boot did not use the cache (run your own discovery) and the stored array when it did. A contributor class that does not exist or does not implement the interface, two contributors with the same key, or data that `var_export()` cannot write as plain arrays (objects, closures) fails `discovery:cache` with a `DiscoveryCacheException`.
+
+#### Configuration via `marko/config`
+
+When `marko/config` is installed, the same keys are available as a config file:
+
+```php title="config/discovery.php"
+use Marko\Core\Discovery\DiscoveryEnvironment;
+
+$discoveryEnvironment = new DiscoveryEnvironment();
+
+return [
+    'enabled' => $discoveryEnvironment->enabled(),
+    'environment' => $discoveryEnvironment->environment(),
+    'cache_path' => $discoveryEnvironment->cachePath(),
+];
+```
+
+The core-owned `config/discovery.php` is shipped with `marko/core` and mirrors the boot gate by delegating to `DiscoveryEnvironment`, the single parser for these variables. `enabled` follows `DISCOVERY_CACHE_ENABLED` with the strict values above, `environment` follows `MARKO_ENV` then `APP_ENV` (lowercased, default `production`), and `cache_path` follows `DISCOVERY_CACHE_PATH`. An invalid `DISCOVERY_CACHE_ENABLED` value fails here the same way it fails at boot. The boot gate reads `DiscoveryEnvironment` directly and does not depend on `marko/config`.
 
 #### Not the same as the code index
 
@@ -291,10 +514,11 @@ Marko has **two separate caches** that are easy to confuse --- different files, 
 
 | Cache | File | Built by | Consumed by | Rebuild when |
 |---|---|---|---|---|
-| **Discovery cache** | `storage/cache/discovery.php` | `marko discovery:cache` | the **running app** at boot | deploying to a non-`development` environment after plugins, observers, preferences, or commands changed |
+| **Discovery cache** | `storage/cache/discovery.php` | `marko discovery:cache` | the **running app** at boot | every deploy to a non-`development` environment |
 | **Code index** | `.marko/index.cache` | `marko indexer:rebuild` | **MCP / LSP tooling** ([`marko/codeindexer`](/docs/packages/codeindexer/)) | the AI tools show stale or missing symbols |
 
-The discovery cache makes the **app** boot faster in production. The code index lets **AI tooling** answer questions about your code. Rebuilding one has no effect on the other. Neither is required for routes or newly-added modules to work at runtime --- see [the routing note above](#discovery-cache) and the codeindexer page.
+The discovery cache makes the **app** boot faster in production. The code index lets **AI tooling** answer questions about your code. Rebuilding one has no effect on the other.
+
 
 ### Throwing Rich Exceptions
 
@@ -310,6 +534,20 @@ throw new MarkoException(
 );
 ```
 
+### Capturing PHP Warning Reasons
+
+Many PHP functions (`mkdir()`, `rename()`, `file_put_contents()`, `stream_socket_client()`, `unserialize()`) report failure by returning `false` and raising a warning that holds the only explanation. Don't hide that warning with `@`. Run the call through `Marko\Core\Support\ErrorCapture::run()`, which captures the message instead of emitting it, and put the reason into your exception:
+
+```php
+use Marko\Core\Support\ErrorCapture;
+
+if (!ErrorCapture::run($reason, fn (): bool => rename($tmp, $path))) {
+    throw ExportException::notWritable($path, $reason); // e.g. "rename(...): Permission denied"
+}
+```
+
+`run()` returns the call's result and sets `$reason` to the message, or to `null` when nothing was raised. When the call raises several messages, they're joined with `; `. It always restores the previous error handler, even if the call throws. It captures every error level, so wrap only the one call that can fail.
+
 ## API Reference
 
 ### Attributes
@@ -320,8 +558,8 @@ throw new MarkoException(
 #[Before]                                       // Run before target method
 #[After]                                        // Run after target method
 #[Observer(event: EventClass::class)]           // React to events (synchronous)
-#[Observer(event: EventClass::class, async: true)] // Push to queue and handle in background
-#[Command(name: 'cmd:name', description: '')] // Register CLI command
+#[Observer(event: EventClass::class, async: true)] // Queue it (needs marko/queue; throws EventException without it)
+#[Command(name: 'cmd:name', description: '', aliases: [], flags: [])] // Register CLI command; flags never take a value
 ```
 
 ### Container
@@ -337,7 +575,47 @@ interface ContainerInterface extends PsrContainerInterface
 }
 ```
 
+`has()` returns `true` for existing classes, interface bindings and instances registered with `instance()`, so it works for an interface that only has a pre-built instance and no binding.
+
 The concrete `Container` class additionally provides `resolvedInstances(?string $interface = null): array` --- not part of `ContainerInterface`. It returns only instances already built, optionally filtered to those implementing `$interface`, and never triggers resolution as a side effect. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
+
+### Console
+
+```php
+interface ConfirmationPrompterInterface
+{
+    public function isInteractive(): bool;
+    public function confirm(string $question, bool $default = false): bool;
+}
+
+readonly class Input
+{
+    public const string NO_INTERACTION = 'no-interaction';
+
+    public function isInteractive(): bool; // false when --no-interaction is passed
+    // getCommand(), getArguments(), getArgument(), hasOption(), getOption(), getOptionValues(), withFlags()
+}
+```
+
+`StdinConfirmationPrompter(Input $input, Output $output, mixed $stream = null)` is the default binding for `ConfirmationPrompterInterface`. See [Asking for Confirmation](#asking-for-confirmation) above.
+
+### AppEnvironment
+
+```php
+use Marko\Core\Environment\AppEnvironment;
+
+class AppEnvironment
+{
+    public function __construct(?array $variables = null);
+
+    public function name(): string;
+    public function isProduction(): bool;
+    public function isDevelopment(): bool;
+    public function isTesting(): bool;
+}
+```
+
+Registered as a shared container instance by `Application`. Pass `$variables` (for example `['APP_ENV' => 'local']`) to read from that array only, instead of the real environment --- useful in tests. See [Application Environment](#application-environment) above.
 
 ### Contracts
 
@@ -350,6 +628,25 @@ interface ResettableInterface
 
 Implemented by services that hold request-scoped state which must be cleared between requests in a long-running process. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
 
+```php
+interface UploadedFileInterface
+{
+    public function clientFilename(): string;
+    public function clientMediaType(): string;
+    public function size(): int;
+    public function error(): int;
+    public function isValid(): bool;
+    public function isMoved(): bool;
+    public function moveTo(string $targetPath): void;
+    public function stream(): mixed; // resource
+    public function contents(): string;
+    public function mimeType(): string;
+    public function guessExtension(): ?string;
+}
+```
+
+A file uploaded with a request. [`marko/routing`](/docs/packages/routing/#uploadedfile) implements it as `Marko\Routing\Http\UploadedFile`; packages that only inspect uploads, such as the [file rules in `marko/validation`](/docs/packages/validation/#validating-file-uploads), depend on this contract instead of on routing. Methods that read or move the file throw a `MarkoException` subclass when the upload failed or was moved.
+
 ### Events
 
 ```php
@@ -358,6 +655,8 @@ interface EventDispatcherInterface
     public function dispatch(Event $event): void;
 }
 ```
+
+`Marko\Core\Event\ApplicationBooted` is the one event core dispatches itself: once per boot, after every module `boot` callback. It carries no data. See [Creating Modules](#creating-modules).
 
 ### MarkoException
 
@@ -391,7 +690,7 @@ Implements `Psr\Container\ContainerExceptionInterface`.
 use Marko\Core\Exceptions\DiscoveryCacheException;
 ```
 
-Thrown by `Application::initialize()` when the discovery cache file is corrupt, structurally invalid, or carries a version number that does not match the running core version. There is no silent fallback --- a bad cache is a loud error.
+Thrown by `Application::initialize()` when the discovery cache file is corrupt, structurally invalid, stale, or carries a version number that does not match the running core version, and by `discovery:cache` when a contributor is invalid. There is no silent fallback --- a bad cache is a loud error.
 
 Named constructors:
 
@@ -400,6 +699,12 @@ Named constructors:
 | `DiscoveryCacheException::unreadable($path)` | Cache file exists but cannot be read |
 | `DiscoveryCacheException::malformed($path, $reason)` | Cache file structure is invalid or missing required keys |
 | `DiscoveryCacheException::versionMismatch($path, $found, $expected)` | Cache was compiled by a different core version |
-| `DiscoveryCacheException::notWritable($path)` | Cache directory or file is not writable (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::stale($path, $reason)` | Installed packages, module directories or a module's `module.php` changed since the cache was compiled |
+| `DiscoveryCacheException::missingSection($path, $key)` | A cached boot asked for a contributor section the cache does not hold |
+| `DiscoveryCacheException::malformedSection($key, $reason)` | A contributor section has the wrong shape when hydrated |
+| `DiscoveryCacheException::invalidContributor($module, $class, $reason)` | A `discovery` entry in `module.php` is not an existing `DiscoveryCacheContributorInterface` (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::duplicateContributorKey($key, $first, $second)` | Two contributors use the same `key()` (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::unexportableSection($key, $class, $reason)` | A contributor returned objects or closures (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::notWritable($path, $reason)` | Cache directory or file is not writable (thrown by `discovery:cache`); the context carries the operating system's reason, such as `Permission denied` |
 
-Fix in all cases: `marko discovery:clear && marko discovery:cache`.
+Fix for a bad cache file: `marko discovery:cache` (or `marko discovery:clear` to fall back to live discovery). Both commands boot without the cache, so they work while it is broken.

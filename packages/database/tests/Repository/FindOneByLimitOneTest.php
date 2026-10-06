@@ -110,6 +110,17 @@ function makeFobConnection(array $rows = []): ConnectionInterface
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -167,6 +178,17 @@ function makeFobRecordingConnection(array $rows, array &$queries): ConnectionInt
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }
@@ -366,6 +388,34 @@ function makeFobQbFactory(array $relatedRows = []): QueryBuilderFactoryInterface
             return [];
         }
 
+        public function lockForUpdate(): static
+        {
+            return $this;
+        }
+
+        public function sharedLock(): static
+        {
+            return $this;
+        }
+
+        public function skipLocked(): static
+        {
+            return $this;
+        }
+
+        public function noWait(): static
+        {
+            return $this;
+        }
+
+        public function upsert(
+            array $rows,
+            array $uniqueBy,
+            ?array $update = null,
+        ): int {
+            return count($rows);
+        }
+
         public function groupBy(string ...$columns): static
         {
             return $this;
@@ -482,7 +532,7 @@ describe('findOneBy LIMIT 1', function (): void {
         // 'status' maps to column 'status'; verify the WHERE clause uses the column name
         $repo->findOneBy(['status' => 'pending']);
 
-        expect($queries[0]['sql'])->toContain('status = ?')
+        expect($queries[0]['sql'])->toContain('"status" = ?')
             ->and($queries[0]['bindings'])->toBe(['pending']);
     });
 

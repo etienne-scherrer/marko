@@ -60,4 +60,31 @@ interface ConnectionInterface
      * @return string Driver name
      */
     public function driverName(): string;
+
+    /**
+     * Whether this connection can read values back from an INSERT with
+     * `INSERT ... RETURNING <columns>` through query().
+     *
+     * The repository uses it to read database-generated primary keys back,
+     * just before it runs the INSERT. The answer may depend on the server
+     * (MariaDB 10.5+ has RETURNING, MySQL has none), so a driver may connect
+     * and ask the server once to answer it. Call it only when about to run SQL.
+     */
+    public function supportsReturning(): bool;
+
+    /**
+     * Quote a table or column name for this connection's SQL dialect.
+     *
+     * Wraps the name in the driver's identifier delimiter (a backtick for MySQL and MariaDB, a double quote for
+     * PostgreSQL) and doubles any delimiter inside it, so reserved words (`key`, `group`, `order`), mixed case
+     * and unusual characters are all safe. A `table.column` name has each part quoted. The repository, data
+     * migrations and the test helper quote every name they interpolate through it. Like driverName(), it must
+     * not require a live database connection.
+     *
+     * @param string $identifier The table or column name, optionally `table.column`
+     * @return string The quoted identifier
+     */
+    public function quoteIdentifier(
+        string $identifier,
+    ): string;
 }

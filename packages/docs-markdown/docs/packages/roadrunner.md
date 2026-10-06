@@ -54,7 +54,7 @@ http:
 ```
 
 | Key | Why it's set |
-| --- | --- |
+| — | — |
 | `http.static.dir: public` | Serves files under `public/` directly from RoadRunner instead of routing every asset request through PHP — the same role `.htaccess`/nginx static-file rules play in front of PHP-FPM. `.php` and `.htaccess` are explicitly forbidden from static serving so a request can never fetch application source. |
 | `pool.max_jobs: 64` | Recycles each worker after 64 requests. A safety net for any per-request state that isn't cleaned up — including a leak in a third-party package this driver has no visibility into — bounding how many requests a single leaking worker can affect before it is replaced. |
 | `pool.supervisor.max_worker_memory: 128` | Kills and replaces a worker once its RSS passes 128 MB. Same rationale as `max_jobs`: bound the blast radius of an undetected leak rather than let one worker grow unbounded for the life of the server. |
@@ -77,7 +77,7 @@ Use instead:
 
 **Request-scoped state held in a singleton is a cross-user leak under this worker.** PHP-FPM makes this rule invisible: every request gets a fresh process, so a singleton that caches "the current session" or "the currently authenticated user" quietly starts over each time. Under one long-running worker process, the same singleton instance serves every request, so anything it caches from request A is still sitting there when request B — a different user — is handled next, unless something explicitly clears it.
 
-Before handling each request, `Marko\Roadrunner\Worker\WorkerRequestHandler` resets every already-resolved instance implementing `Marko\Core\Contracts\ResettableInterface`, discovered via `ContainerInterface::resolvedInstances(ResettableInterface::class)` — never a hardcoded per-package list, and never forcing a service to be constructed just to reset it. Instances are reset in a fixed, deterministic order (`ksort()`ed by container binding identifier), so reset behavior never depends on which services happened to be resolved first for a given request.
+Before handling each request, `Marko\Roadrunner\Worker\WorkerRequestHandler` calls `Marko\Core\RequestStateResetter`, which resets every already-resolved instance implementing `Marko\Core\Contracts\ResettableInterface`, discovered via `ContainerInterface::resolvedInstances(ResettableInterface::class)` — never a hardcoded per-package list, and never forcing a service to be constructed just to reset it. Instances are reset in a fixed, deterministic order (`ksort()`ed by container binding identifier), so reset behavior never depends on which services happened to be resolved first for a given request.
 
 The reset runs **before** each request, not after: a request that throws, or a worker that is killed mid-request, must never be allowed to hand stale state forward into the *next* request. If a `reset()` call itself throws, that failure propagates and fails the current request with a 500 rather than being swallowed — silently continuing past a failed reset would itself be the cross-user leak this mechanism exists to prevent.
 
@@ -98,6 +98,14 @@ For the full mechanical audit behind this section — every container singleton,
 
 This means the `Response` object is **not** a complete picture of session state on a repeat request — the absence of a `Set-Cookie` header does not mean the session is empty or unused, only that its id did not change during this request. Anything inspecting session state from the response alone (a test assertion, a debugging tool, custom middleware) must account for this instead of treating a missing cookie as "no session."
 
+## File Uploads
+
+Multipart uploads work the same as under PHP-FPM. `Marko\Roadrunner\Http\Psr7RequestBridge` maps every PSR-7 uploaded file on the incoming request to a `Marko\Routing\Http\UploadedFile`, keeping nested and multi-file (`name="photos[]"`) fields, so controllers read them with `$request->file()` / `$request->files()` — see [Handling File Uploads](/docs/packages/routing/#handling-file-uploads).
+
+RoadRunner writes each upload to its own temporary file and hands the worker a stream opened on it; the bridge reuses that file path directly, with no copy. A stream that is not backed by a local file is copied to a temporary file the bridge owns, and `WorkerRequestHandler` calls the bridge's `removeTemporaryFiles()` after every request — including one that throws — so a long-running worker never accumulates upload files. Move an upload with `moveTo()` during the request if you want to keep it. Under the worker SAPI (`cli`), `moveTo()` uses `rename()` rather than `move_uploaded_file()`.
+
+An upload RoadRunner rejected (for example, larger than its `http.uploads` limits) arrives as an `UploadedFile` whose `isValid()` is `false`, with the PSR-7 error code in `error()`.
+
 ## What Is Not Supported
 
 ### `marko/sse`
@@ -116,10 +124,6 @@ Acknowledging the package downgrades the boot-time refusal to a warning on STDER
 
 A dev-only tool that reads `$_SERVER` directly (stale under a worker — those values are frozen at whatever the worker process started with, not per-request) and calls `ob_start()` once at boot without a matching per-request `ob_end_*()`, which then captures output from every request that follows in the same worker process. `UnsafePackageChecker` only warns for `marko/debugbar` (never refuses) — do not enable it in a worker-served production environment.
 
-### File Uploads
-
-`Marko\Routing\Http\Request` has no equivalent of PHP's `$_FILES`, so PSR-7 uploaded files bridged from an incoming request have nowhere to map. `Marko\Roadrunner\Http\Psr7RequestBridge` throws `UploadedFilesNotSupportedException` immediately when a request carries uploaded files, rather than silently dropping them. Do not submit `multipart/form-data` uploads to a route served through this driver.
-
 ## API Reference
 
 ### `Marko\Roadrunner\Worker\WorkerRequestHandler`
@@ -132,22 +136,22 @@ Resolves the project's base path for the packaged `worker.php`, in order: the `M
 
 ### `Marko\Roadrunner\Http\Psr7RequestBridge` / `Psr7ResponseBridge`
 
-Convert between PSR-7 messages and `Marko\Routing\Http\Request`/`Response`. `Psr7ResponseBridge` consumes `Response::headerLines()` and uses `withAddedHeader()` for `Set-Cookie` so multiple cookies on one response are preserved rather than overwritten.
+Convert between PSR-7 messages and `Marko\Routing\Http\Request`/`Response`. `Psr7RequestBridge` maps PSR-7 uploaded files to `Marko\Routing\Http\UploadedFile`; `removeTemporaryFiles()` deletes any temporary upload files it had to write. `Psr7ResponseBridge` consumes `Response::headerLines()` and uses `withAddedHeader()` for `Set-Cookie` so multiple cookies on one response are preserved rather than overwritten.
 
 ### `Marko\Roadrunner\GuardRails\UnsafePackageChecker`
 
 | Method | Description |
-| --- | --- |
+| — | — |
 | `check(): array` | Reads `ModuleRepositoryInterface`; throws `UnsafePackageException` if `marko/sse` is installed and not acknowledged via `roadrunner.acknowledged_unsafe_packages`; returns warning strings for an acknowledged `marko/sse` or an installed `marko/debugbar`. |
 
 ### `Marko\Roadrunner\Config\RrYamlTemplate`
 
 | Method | Description |
-| --- | --- |
+| — | — |
 | `render(string $basePath): string` | Renders the default `.rr.yaml` contents documented above, with `$basePath` interpolated into `server.env.MARKO_BASE_PATH`. |
 
 ### `rr:serve`
 
 | Option | Default | Description |
-| --- | --- | --- |
+| — | — | — |
 | `--config` | `.rr.yaml` | Path to the RoadRunner config file. Generated from `RrYamlTemplate` on first run if it doesn't already exist. |

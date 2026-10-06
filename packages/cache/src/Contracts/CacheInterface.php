@@ -109,6 +109,9 @@ interface CacheInterface
      * resetting on every call would turn a fixed rate-limit window into a
      * never-closing window.
      *
+     * The counter is a plain integer: for every driver, get(), getItem() and
+     * getMultiple() on an incremented key return an `int`.
+     *
      * @throws InvalidKeyException
      */
     public function increment(

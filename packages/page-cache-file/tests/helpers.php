@@ -6,7 +6,9 @@ use Marko\Core\Path\ProjectPaths;
 use Marko\PageCache\Config\PageCacheConfig;
 use Marko\PageCache\File\Driver\FilePageCacheDriver;
 use Marko\Routing\Http\Request;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
+use Psr\Clock\ClockInterface;
 
 function createPageCacheConfig(string $path, int $defaultTtl = 3600): PageCacheConfig
 {
@@ -27,14 +29,21 @@ function createTestRequest(string $method = 'GET', string $path = '/test', array
     );
 }
 
-function createPageCacheFileDriver(string $tmpDir, int $defaultTtl = 3600): FilePageCacheDriver
-{
-    return new FilePageCacheDriver(createPageCacheConfig($tmpDir, $defaultTtl), new ProjectPaths($tmpDir));
+function createPageCacheFileDriver(
+    string $tmpDir,
+    int $defaultTtl = 3600,
+    ?ClockInterface $clock = null,
+): FilePageCacheDriver {
+    return new FilePageCacheDriver(
+        createPageCacheConfig($tmpDir, $defaultTtl),
+        new ProjectPaths($tmpDir),
+        $clock ?? new FakeClock(),
+    );
 }
 
 function createPageCacheFileDriverWithPaths(string $path, int $defaultTtl, ProjectPaths $paths): FilePageCacheDriver
 {
-    return new FilePageCacheDriver(createPageCacheConfig($path, $defaultTtl), $paths);
+    return new FilePageCacheDriver(createPageCacheConfig($path, $defaultTtl), $paths, new FakeClock());
 }
 
 function cleanupPageCacheDir(string $dir): void
@@ -59,21 +68,27 @@ function cleanupPageCacheDir(string $dir): void
     rmdir($dir);
 }
 
-function writeExpiredPageCacheEntry(string $tmpDir, string $hash): void
+function writeExpiredPageCacheEntry(string $tmpDir, string $hash, int $now): void
+{
+    writePageCachePayload($tmpDir, $hash, [
+        'status_code' => 200,
+        'body' => 'expired body',
+        'headers' => [],
+        'tags' => [],
+        'expires_at' => $now - 10,
+        'created_at' => $now - 20,
+    ]);
+}
+
+/**
+ * @param array<string, mixed> $data
+ */
+function writePageCachePayload(string $tmpDir, string $hash, array $data): void
 {
     $pagesDir = $tmpDir . '/pages';
     if (!is_dir($pagesDir)) {
         mkdir($pagesDir, 0755, true);
     }
-
-    $data = [
-        'status_code' => 200,
-        'body' => 'expired body',
-        'headers' => [],
-        'tags' => [],
-        'expires_at' => time() - 10,
-        'created_at' => time() - 20,
-    ];
 
     file_put_contents($pagesDir . '/' . $hash . '.cache', serialize($data));
 }

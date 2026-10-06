@@ -333,6 +333,34 @@ function makeSpecStubBuilder(array $rows = []): QueryBuilderInterface
         ): array {
             return [];
         }
+
+        public function lockForUpdate(): static
+        {
+            return $this;
+        }
+
+        public function sharedLock(): static
+        {
+            return $this;
+        }
+
+        public function skipLocked(): static
+        {
+            return $this;
+        }
+
+        public function noWait(): static
+        {
+            return $this;
+        }
+
+        public function upsert(
+            array $rows,
+            array $uniqueBy,
+            ?array $update = null,
+        ): int {
+            return count($rows);
+        }
     };
 }
 
@@ -569,6 +597,34 @@ function makeCountingBuilder(array $rows = []): QueryBuilderInterface
         ): array {
             return [];
         }
+
+        public function lockForUpdate(): static
+        {
+            return $this;
+        }
+
+        public function sharedLock(): static
+        {
+            return $this;
+        }
+
+        public function skipLocked(): static
+        {
+            return $this;
+        }
+
+        public function noWait(): static
+        {
+            return $this;
+        }
+
+        public function upsert(
+            array $rows,
+            array $uniqueBy,
+            ?array $update = null,
+        ): int {
+            return count($rows);
+        }
     };
 }
 
@@ -614,6 +670,17 @@ function makeSpecConnection(array $rows = []): ConnectionInterface
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }
@@ -903,6 +970,34 @@ it('lets a spec call $builder->with(\'relation\') inside apply() to declare eage
             array $bindings = [],
         ): array {
             return [];
+        }
+
+        public function lockForUpdate(): static
+        {
+            return $this;
+        }
+
+        public function sharedLock(): static
+        {
+            return $this;
+        }
+
+        public function skipLocked(): static
+        {
+            return $this;
+        }
+
+        public function noWait(): static
+        {
+            return $this;
+        }
+
+        public function upsert(
+            array $rows,
+            array $uniqueBy,
+            ?array $update = null,
+        ): int {
+            return count($rows);
         }
     };
 

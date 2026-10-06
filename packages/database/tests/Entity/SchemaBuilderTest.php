@@ -10,6 +10,7 @@ use Marko\Database\Attributes\Table;
 use Marko\Database\Entity\Entity;
 use Marko\Database\Entity\EntityMetadataFactory;
 use Marko\Database\Entity\SchemaBuilder;
+use Marko\Database\Exceptions\EntityException;
 use Marko\Database\Schema\Column as SchemaColumn;
 use Marko\Database\Schema\Index as SchemaIndex;
 use Marko\Database\Schema\IndexType;
@@ -116,6 +117,40 @@ it('converts IndexMetadata to Schema Index', function (): void {
         ->and($table->indexes[1]->type)->toBe(IndexType::Unique);
 });
 
+it('builds a schema Index carrying the where predicate', function (): void {
+    $entity = new #[Table('shows')]
+    #[Index('shows_live_idx', ['status'], where: "status = 'live'")]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true)]
+        public int $id;
+
+        #[Column]
+        public string $status;
+    };
+
+    $metadata = $this->metadataFactory->parse($entity::class);
+    $table = $this->schemaBuilder->build($metadata);
+
+    expect($metadata->indexes[0]->where)->toBe("status = 'live'")
+        ->and($table->indexes[0]->where)->toBe("status = 'live'");
+});
+
+it('carries unmanagedIndexes from the Table attribute to the schema Table', function (): void {
+    $entity = new #[Table('shows', unmanagedIndexes: ['shows_live_partial_idx'])]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true)]
+        public int $id;
+    };
+
+    $metadata = $this->metadataFactory->parse($entity::class);
+    $table = $this->schemaBuilder->build($metadata);
+
+    expect($metadata->unmanagedIndexes)->toBe(['shows_live_partial_idx'])
+        ->and($table->unmanagedIndexes)->toBe(['shows_live_partial_idx']);
+});
+
 it('preserves foreign key references in Schema Column', function (): void {
     $entity = new #[Table('posts')] class () extends Entity
     {
@@ -156,4 +191,156 @@ it('builds ForeignKey objects from column references', function (): void {
         ->and($table->foreignKeys[0]->referencedColumns)->toBe(['id'])
         ->and($table->foreignKeys[0]->onDelete)->toBe('CASCADE')
         ->and($table->foreignKeys[0]->onUpdate)->toBe('SET NULL');
+});
+
+it('canonicalizes the int, bool and string type synonyms', function (): void {
+    $entity = new #[Table('synonyms')] class () extends Entity
+    {
+        #[Column(type: 'int', primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(type: 'BOOL')]
+        public bool $active;
+
+        #[Column(type: 'string', length: 100)]
+        public string $name;
+    };
+
+    $columns = $this->schemaBuilder->build($this->metadataFactory->parse($entity::class))->columns;
+
+    expect(array_map(static fn (SchemaColumn $column): string => $column->type, $columns))
+        ->toBe(['integer', 'boolean', 'varchar']);
+});
+
+it('keeps other types as declared', function (): void {
+    $entity = new #[Table('declared_types')] class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(type: 'bigint')]
+        public int $views;
+
+        #[Column(type: 'text')]
+        public string $body;
+    };
+
+    $columns = $this->schemaBuilder->build($this->metadataFactory->parse($entity::class))->columns;
+
+    expect(array_map(static fn (SchemaColumn $column): string => $column->type, $columns))
+        ->toBe(['integer', 'bigint', 'text']);
+});
+
+it('keeps a foreign key name that fits unchanged', function (): void {
+    $entity = new #[Table('posts')] class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(references: 'users.id')]
+        public int $userId;
+    };
+
+    $table = $this->schemaBuilder->build($this->metadataFactory->parse($entity::class));
+
+    expect($table->foreignKeys[0]->name)->toBe('fk_posts_user_id');
+});
+
+it('shortens a foreign key name over 63 bytes', function (): void {
+    $entity = new #[Table('customer_subscription_events')] class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(references: 'billing_accounts.id')]
+        public int $billingAccountReferenceNumber;
+    };
+
+    $table = $this->schemaBuilder->build($this->metadataFactory->parse($entity::class));
+    $full = 'fk_customer_subscription_events_billing_account_reference_number';
+
+    expect($table->foreignKeys[0]->name)
+        ->toBe('fk_customer_subscription_events_billing_account_refere_' . hash('crc32b', $full))
+        ->and(strlen($table->foreignKeys[0]->name))->toBeLessThanOrEqual(63);
+});
+
+it('throws EntityException when a declared index name is longer than 63 bytes', function (): void {
+    $entity = new #[Table('products')]
+    #[Index('idx_products_warehouse_location_code_and_supplier_reference_lookup_key', ['sku'])]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(length: 100)]
+        public string $sku;
+    };
+
+    expect(fn () => $this->schemaBuilder->build($this->metadataFactory->parse($entity::class)))
+        ->toThrow(EntityException::class);
+});
+
+it('names the entity, the index and its byte length in the over-long index name error', function (): void {
+    $entity = new #[Table('products')]
+    #[Index('idx_products_warehouse_location_code_and_supplier_reference_lookup_key', ['sku'])]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(length: 100)]
+        public string $sku;
+    };
+
+    $exception = null;
+
+    try {
+        $this->schemaBuilder->build($this->metadataFactory->parse($entity::class));
+    } catch (EntityException $caught) {
+        $exception = $caught;
+    }
+
+    expect($exception)->toBeInstanceOf(EntityException::class)
+        ->and($exception->getMessage())
+        ->toContain('idx_products_warehouse_location_code_and_supplier_reference_lookup_key')
+        ->toContain('70 bytes')
+        ->toContain('63 bytes')
+        ->and($exception->getContext())->toContain($entity::class)
+        ->toContain("'products'")
+        ->and($exception->getSuggestion())->toContain('#[Index(name:');
+});
+
+it('measures a declared multibyte index name in bytes', function (): void {
+    // 32 characters, 64 bytes
+    $entity = new #[Table('products')]
+    #[Index('éééééééééééééééééééééééééééééééé', ['sku'])]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(length: 100)]
+        public string $sku;
+    };
+
+    expect(fn () => $this->schemaBuilder->build($this->metadataFactory->parse($entity::class)))
+        ->toThrow(EntityException::class, '64 bytes');
+});
+
+it('accepts a declared index name of exactly 63 bytes', function (): void {
+    $entity = new #[Table('products')]
+    #[Index('idx_products_warehouse_location_code_and_supplier_reference_key', ['sku'])]
+    class () extends Entity
+    {
+        #[Column(primaryKey: true, autoIncrement: true)]
+        public int $id;
+
+        #[Column(length: 100)]
+        public string $sku;
+    };
+
+    $table = $this->schemaBuilder->build($this->metadataFactory->parse($entity::class));
+
+    expect($table->indexes[0]->name)->toBe('idx_products_warehouse_location_code_and_supplier_reference_key')
+        ->and(strlen($table->indexes[0]->name))->toBe(63);
 });

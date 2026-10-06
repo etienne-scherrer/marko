@@ -1,0 +1,333 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Marko\Database\MySql\Tests\Integration;
+
+use Marko\Database\Exceptions\LockTimeoutException;
+use Marko\Database\Exceptions\UniqueConstraintViolationException;
+use Marko\Database\MySql\Connection\MySqlConnection;
+use Marko\Database\MySql\Query\MySqlQueryBuilder;
+use Marko\Database\MySql\Tests\Fixtures\IntegrationDatabase;
+use RuntimeException;
+
+/*
+ * Savepoints, after-commit callbacks, row locks and upsert against a real
+ * MySQL server. Uses the same MARKO_TEST_MYSQL_* variables as
+ * SharedConnectionTransactionTest and skips when they are unset. Creates and
+ * drops the primitives_items table.
+ *
+ * Settings come from tests/Fixtures/IntegrationDatabase. With
+ * MARKO_INTEGRATION_REQUIRED set (CI), a missing host fails instead of
+ * skipping. Part of the integration-services group.
+ */
+
+/**
+ * @return list<string>
+ */
+function mysqlPrimitiveNames(
+    MySqlConnection $connection,
+): array {
+    return array_column($connection->query('SELECT name FROM primitives_items ORDER BY id'), 'name');
+}
+
+function mysqlInsertItem(
+    MySqlConnection $connection,
+    int $id,
+    string $name,
+): void {
+    $connection->execute('INSERT INTO primitives_items (id, name) VALUES (?, ?)', [$id, $name]);
+}
+
+pest()->group('integration-services');
+
+beforeEach(function (): void {
+    $config = IntegrationDatabase::config();
+
+    if ($config === null) {
+        $this->markTestSkipped(
+            IntegrationDatabase::SKIP_REASON,
+        );
+    }
+
+    $this->connection = new MySqlConnection($config);
+    $this->contender = new MySqlConnection($config);
+    $this->connection->execute('DROP TABLE IF EXISTS primitives_items');
+    $this->connection->execute(
+        'CREATE TABLE primitives_items (id INT PRIMARY KEY, name VARCHAR(255) NOT NULL, '
+        . 'email VARCHAR(255) UNIQUE, visits INT NOT NULL DEFAULT 0)',
+    );
+});
+
+afterEach(function (): void {
+    if (isset($this->connection)) {
+        $this->contender->disconnect();
+        $this->connection->reset();
+        $this->connection->execute('DROP TABLE IF EXISTS primitives_items');
+        $this->connection->disconnect();
+    }
+});
+
+describe('MySQL nested transactions', function (): void {
+    it('commits nested transaction() calls together', function (): void {
+        $this->connection->transaction(function (): void {
+            mysqlInsertItem($this->connection, 1, 'outer');
+            $this->connection->transaction(fn () => mysqlInsertItem($this->connection, 2, 'inner'));
+        });
+
+        expect(mysqlPrimitiveNames($this->contender))->toBe(['outer', 'inner']);
+    });
+
+    it('rolls back only the inner work when an inner failure is caught', function (): void {
+        $this->connection->transaction(function (): void {
+            mysqlInsertItem($this->connection, 1, 'outer');
+
+            try {
+                $this->connection->transaction(function (): void {
+                    mysqlInsertItem($this->connection, 2, 'inner');
+                    // A real SQL error inside the savepoint; rolling back to
+                    // it must undo the inner insert and keep the outer one.
+                    mysqlInsertItem($this->connection, 1, 'duplicate key');
+                });
+            } catch (UniqueConstraintViolationException) {
+                // Handled: only the savepoint is rolled back.
+            }
+
+            mysqlInsertItem($this->connection, 3, 'after inner failure');
+        });
+
+        expect(mysqlPrimitiveNames($this->contender))->toBe(['outer', 'after inner failure']);
+    });
+
+    it('rolls back everything when the outer transaction fails', function (): void {
+        $run = fn () => $this->connection->transaction(function (): void {
+            mysqlInsertItem($this->connection, 1, 'outer');
+            $this->connection->transaction(fn () => mysqlInsertItem($this->connection, 2, 'inner'));
+
+            throw new RuntimeException('Outer failure');
+        });
+
+        expect($run)->toThrow(RuntimeException::class, 'Outer failure')
+            ->and(mysqlPrimitiveNames($this->contender))->toBe([])
+            ->and($this->connection->transactionLevel())->toBe(0);
+    });
+
+    it('runs after-commit callbacks after the outermost commit, when the data is visible', function (): void {
+        $seenByCallback = null;
+
+        $this->connection->transaction(function () use (&$seenByCallback): void {
+            mysqlInsertItem($this->connection, 1, 'outer');
+            $this->connection->transaction(function () use (&$seenByCallback): void {
+                $this->connection->afterCommit(function () use (&$seenByCallback): void {
+                    $seenByCallback = mysqlPrimitiveNames($this->contender);
+                });
+            });
+        });
+
+        expect($seenByCallback)->toBe(['outer']);
+    });
+
+    it('does not run after-commit callbacks when the transaction rolls back', function (): void {
+        $ran = false;
+
+        try {
+            $this->connection->transaction(function () use (&$ran): void {
+                $this->connection->afterCommit(function () use (&$ran): void {
+                    $ran = true;
+                });
+
+                throw new RuntimeException('Rollback');
+            });
+        } catch (RuntimeException) {
+            // Expected.
+        }
+
+        expect($ran)->toBeFalse();
+    });
+});
+
+describe('MySQL row locks', function (): void {
+    it('lets a second connection skip a row locked with lockForUpdate', function (): void {
+        mysqlInsertItem($this->connection, 1, 'first');
+        mysqlInsertItem($this->connection, 2, 'second');
+
+        $this->connection->beginTransaction();
+        $locked = new MySqlQueryBuilder($this->connection)
+            ->table('primitives_items')
+            ->where('id', '=', 1)
+            ->lockForUpdate()
+            ->get();
+
+        $visible = $this->contender->transaction(
+            fn (): array => new MySqlQueryBuilder($this->contender)
+                ->table('primitives_items')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->skipLocked()
+                ->get(),
+        );
+        $this->connection->rollback();
+
+        expect(array_column($locked, 'name'))->toBe(['first'])
+            ->and(array_column($visible, 'name'))->toBe(['second']);
+    });
+
+    it('makes a second connection fail fast with noWait on a locked row', function (): void {
+        mysqlInsertItem($this->connection, 1, 'first');
+
+        $this->connection->beginTransaction();
+        new MySqlQueryBuilder($this->connection)
+            ->table('primitives_items')
+            ->where('id', '=', 1)
+            ->lockForUpdate()
+            ->get();
+
+        $contend = fn () => $this->contender->transaction(
+            fn (): array => new MySqlQueryBuilder($this->contender)
+                ->table('primitives_items')
+                ->where('id', '=', 1)
+                ->lockForUpdate()
+                ->noWait()
+                ->get(),
+        );
+
+        // MySQL reports NOWAIT with 3572; MariaDB has no such error and reports 1205
+        expect($contend)->toThrow(
+            LockTimeoutException::class,
+            IntegrationDatabase::isMariaDb($this->connection) ? 'Lock wait timeout exceeded' : 'NOWAIT is set',
+        );
+
+        $this->connection->rollback();
+    });
+
+    it('lets a second connection share-lock a row that is share-locked', function (): void {
+        mysqlInsertItem($this->connection, 1, 'first');
+
+        $this->connection->beginTransaction();
+        new MySqlQueryBuilder($this->connection)->table('primitives_items')->sharedLock()->get();
+
+        $shared = $this->contender->transaction(
+            fn (): array => new MySqlQueryBuilder($this->contender)
+                ->table('primitives_items')
+                ->sharedLock()
+                ->noWait()
+                ->get(),
+        );
+        $this->connection->rollback();
+
+        expect(array_column($shared, 'name'))->toBe(['first']);
+    });
+
+    it('fails fast with a shared lock and noWait on a row locked for update', function (): void {
+        mysqlInsertItem($this->connection, 1, 'first');
+
+        $this->connection->beginTransaction();
+        new MySqlQueryBuilder($this->connection)
+            ->table('primitives_items')
+            ->where('id', '=', 1)
+            ->lockForUpdate()
+            ->get();
+
+        $contend = fn () => $this->contender->transaction(
+            fn (): array => new MySqlQueryBuilder($this->contender)
+                ->table('primitives_items')
+                ->where('id', '=', 1)
+                ->sharedLock()
+                ->noWait()
+                ->get(),
+        );
+
+        // MySQL reports NOWAIT with 3572; MariaDB has no such error and reports 1205
+        expect($contend)->toThrow(
+            LockTimeoutException::class,
+            IntegrationDatabase::isMariaDb($this->connection) ? 'Lock wait timeout exceeded' : 'NOWAIT is set',
+        );
+
+        $this->connection->rollback();
+    });
+
+    it('skips a row locked for update with a shared lock and skipLocked', function (): void {
+        mysqlInsertItem($this->connection, 1, 'first');
+        mysqlInsertItem($this->connection, 2, 'second');
+
+        $this->connection->beginTransaction();
+        new MySqlQueryBuilder($this->connection)
+            ->table('primitives_items')
+            ->where('id', '=', 1)
+            ->lockForUpdate()
+            ->get();
+
+        $visible = $this->contender->transaction(
+            fn (): array => new MySqlQueryBuilder($this->contender)
+                ->table('primitives_items')
+                ->orderBy('id')
+                ->sharedLock()
+                ->skipLocked()
+                ->get(),
+        );
+        $this->connection->rollback();
+
+        expect(array_column($visible, 'name'))->toBe(['second']);
+    });
+});
+
+describe('MySQL upsert', function (): void {
+    it('inserts new rows', function (): void {
+        new MySqlQueryBuilder($this->connection)->table('primitives_items')->upsert(
+            [
+                ['id' => 1, 'name' => 'Ada', 'email' => 'ada@example.com', 'visits' => 1],
+                ['id' => 2, 'name' => 'Alan', 'email' => 'alan@example.com', 'visits' => 1],
+            ],
+            ['email'],
+        );
+
+        expect(mysqlPrimitiveNames($this->contender))->toBe(['Ada', 'Alan']);
+    });
+
+    it('updates existing rows', function (): void {
+        $this->connection->execute(
+            "INSERT INTO primitives_items (id, name, email, visits) VALUES (1, 'Ada', 'ada@example.com', 1)",
+        );
+
+        new MySqlQueryBuilder($this->connection)->table('primitives_items')->upsert(
+            [['id' => 1, 'name' => 'Ada Lovelace', 'email' => 'ada@example.com', 'visits' => 2]],
+            ['email'],
+            ['name', 'visits'],
+        );
+
+        expect($this->contender->query('SELECT name, visits FROM primitives_items'))
+            ->toBe([['name' => 'Ada Lovelace', 'visits' => 2]]);
+    });
+
+    it('inserts and updates in one mixed batch', function (): void {
+        $this->connection->execute(
+            "INSERT INTO primitives_items (id, name, email, visits) VALUES (1, 'Ada', 'ada@example.com', 1)",
+        );
+
+        new MySqlQueryBuilder($this->connection)->table('primitives_items')->upsert(
+            [
+                ['id' => 1, 'name' => 'Ada Lovelace', 'email' => 'ada@example.com', 'visits' => 2],
+                ['id' => 2, 'name' => 'Alan', 'email' => 'alan@example.com', 'visits' => 1],
+            ],
+            ['email'],
+            ['name', 'visits'],
+        );
+
+        expect($this->contender->query('SELECT name, visits FROM primitives_items ORDER BY id'))
+            ->toBe([['name' => 'Ada Lovelace', 'visits' => 2], ['name' => 'Alan', 'visits' => 1]]);
+    });
+
+    it('leaves existing rows untouched when the update list is empty', function (): void {
+        $this->connection->execute(
+            "INSERT INTO primitives_items (id, name, email, visits) VALUES (1, 'Ada', 'ada@example.com', 1)",
+        );
+
+        new MySqlQueryBuilder($this->connection)->table('primitives_items')->upsert(
+            [['id' => 1, 'name' => 'Changed', 'email' => 'ada@example.com', 'visits' => 9]],
+            ['email'],
+            [],
+        );
+
+        expect(mysqlPrimitiveNames($this->contender))->toBe(['Ada']);
+    });
+});

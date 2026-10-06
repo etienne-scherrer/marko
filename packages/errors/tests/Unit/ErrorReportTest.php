@@ -15,7 +15,7 @@ describe('ErrorReport', function (): void {
     it('creates report from throwable with message and code', function (): void {
         $exception = new Exception('Test error message', 42);
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->message)->toBe('Test error message');
         expect($report->code)->toBe(42);
@@ -24,7 +24,7 @@ describe('ErrorReport', function (): void {
     it('captures the throwable instance', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->throwable)->toBe($exception);
     });
@@ -32,7 +32,7 @@ describe('ErrorReport', function (): void {
     it('captures the stack trace as array', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->trace)->toBeArray();
         expect($report->trace)->toBe($exception->getTrace());
@@ -41,7 +41,7 @@ describe('ErrorReport', function (): void {
     it('captures the file and line where error occurred', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->file)->toBe($exception->getFile());
         expect($report->line)->toBe($exception->getLine());
@@ -50,22 +50,17 @@ describe('ErrorReport', function (): void {
     it('captures the severity level', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Warning);
+        $report = ErrorReport::fromThrowable($exception, Severity::Warning, new DateTimeImmutable());
 
         expect($report->severity)->toBe(Severity::Warning);
     });
 
-    it('captures the timestamp of when error occurred', function (): void {
-        $before = new DateTimeImmutable();
-        $exception = new Exception('Test error');
+    it('uses the given timestamp for the report', function (): void {
+        $timestamp = new DateTimeImmutable('2026-01-01 12:00:00 UTC');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable(new Exception('Test error'), Severity::Error, $timestamp);
 
-        $after = new DateTimeImmutable();
-
-        expect($report->timestamp)->toBeInstanceOf(DateTimeImmutable::class);
-        expect($report->timestamp >= $before)->toBeTrue();
-        expect($report->timestamp <= $after)->toBeTrue();
+        expect($report->timestamp)->toBe($timestamp);
     });
 
     it('extracts context from MarkoException', function (): void {
@@ -74,7 +69,7 @@ describe('ErrorReport', function (): void {
             context: 'This happened during module loading',
         );
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->context)->toBe('This happened during module loading');
     });
@@ -85,7 +80,7 @@ describe('ErrorReport', function (): void {
             suggestion: 'Try restarting the server',
         );
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->suggestion)->toBe('Try restarting the server');
     });
@@ -93,7 +88,7 @@ describe('ErrorReport', function (): void {
     it('returns empty context for non-MarkoException', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->context)->toBe('');
     });
@@ -101,7 +96,7 @@ describe('ErrorReport', function (): void {
     it('returns empty suggestion for non-MarkoException', function (): void {
         $exception = new Exception('Test error');
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->suggestion)->toBe('');
     });
@@ -110,7 +105,7 @@ describe('ErrorReport', function (): void {
         $previous = new Exception('Previous error');
         $exception = new Exception('Test error', 0, $previous);
 
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report->previous)->toBe($previous);
     });
@@ -118,8 +113,8 @@ describe('ErrorReport', function (): void {
     it('provides unique identifier for the error report', function (): void {
         $exception = new Exception('Test error');
 
-        $report1 = ErrorReport::fromThrowable($exception, Severity::Error);
-        $report2 = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report1 = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
+        $report2 = ErrorReport::fromThrowable($exception, Severity::Error, new DateTimeImmutable());
 
         expect($report1->id)->toBeString();
         expect($report1->id)->not->toBeEmpty();

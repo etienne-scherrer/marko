@@ -3,15 +3,29 @@
 declare(strict_types=1);
 
 use Marko\Core\Container\ContainerInterface;
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Errors\Contracts\ErrorHandlerInterface;
 use Marko\ErrorsAdvanced\AdvancedErrorHandler;
+use Marko\ErrorsSimple\Environment;
+use Psr\Clock\ClockInterface;
 
 // Marko-specific configuration for this module.
 // Name and version come from composer.json.
 
 return [
     'bindings' => [
-        ErrorHandlerInterface::class => AdvancedErrorHandler::class,
+        // Closure: the constructor's optional FormatterInterface cannot be
+        // autowired, and the handler must be built with the application's
+        // AppEnvironment so any non-development environment (including an
+        // unset one) renders the safe generic page.
+        ErrorHandlerInterface::class => function (ContainerInterface $container): ErrorHandlerInterface {
+            return new AdvancedErrorHandler(
+                clock: $container->get(ClockInterface::class),
+                environment: new Environment(
+                    appEnvironment: $container->get(AppEnvironment::class),
+                ),
+            );
+        },
     ],
     'boot' => function (ContainerInterface $container) {
         // Get the error handler and register it

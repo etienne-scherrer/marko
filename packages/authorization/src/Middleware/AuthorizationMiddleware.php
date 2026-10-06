@@ -4,40 +4,79 @@ declare(strict_types=1);
 
 namespace Marko\Authorization\Middleware;
 
-use JsonException;
+use Closure;
 use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Exceptions\UnauthenticatedException;
 use Marko\Authorization\Attributes\Can;
 use Marko\Authorization\Contracts\GateInterface;
+use Marko\Authorization\Exceptions\AuthorizationException;
+use Marko\Authorization\Exceptions\PolicyException;
+use Marko\Authorization\Routing\CanAttributeReader;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use Marko\Routing\Middleware\MiddlewareInterface;
 use ReflectionException;
-use ReflectionMethod;
 
-readonly class AuthorizationMiddleware implements MiddlewareInterface
+/**
+ * Enforces #[Can] on the matched controller action.
+ *
+ * Reads the matched route from the request (set by the Router before the
+ * pipeline runs). A method-level #[Can] overrides a class-level one. Routes
+ * without #[Can] pass straight through.
+ *
+ * The Gate and the guard are built lazily, the first time a route with
+ * #[Can] is matched. Routes without #[Can] (and unmatched requests) never
+ * construct them, so they cost nothing and need no authentication or
+ * session configuration.
+ *
+ * Failures are thrown, never rendered here: a guest gets an
+ * UnauthenticatedException (401), which carries the guard's WWW-Authenticate
+ * challenge when the guard is stateless (e.g. the token guard), and a denied
+ * user an AuthorizationException (403). The routing
+ * pipeline renders both through ExceptionRenderer, with content negotiation
+ * and any app-level renderer Preference.
+ */
+class AuthorizationMiddleware implements MiddlewareInterface
 {
+    /**
+     * Resolved #[Can] per "controller::action". Holds only immutable attribute
+     * data, so it is safe to keep across requests in long-running workers.
+     *
+     * @var array<string, ?Can>
+     */
+    private array $resolved = [];
+
+    private ?GateInterface $resolvedGate = null;
+
+    private ?GuardInterface $resolvedGuard = null;
+
+    /**
+     * @param Closure(): GateInterface $gate Called once, on the first route with #[Can]
+     * @param Closure(): GuardInterface $guard Called once, on the first route with #[Can]
+     */
     public function __construct(
-        private GateInterface $gate,
-        private GuardInterface $guard,
-        private ?string $controller = null,
-        private ?string $action = null,
+        private readonly Closure $gate,
+        private readonly Closure $guard,
+        private readonly CanAttributeReader $canAttributeReader = new CanAttributeReader(),
     ) {}
 
     /**
-     * @throws ReflectionException|JsonException
+     * @throws AuthorizationException|PolicyException|ReflectionException|UnauthenticatedException
      */
     public function handle(
         Request $request,
         callable $next,
     ): Response {
-        $canAttribute = $this->getCanAttribute();
+        $canAttribute = $this->resolveCanAttribute($request);
 
         if ($canAttribute === null) {
             return $next($request);
         }
 
-        if (!$this->guard->check()) {
-            return $this->unauthorizedResponse($request);
+        $guard = $this->guard();
+
+        if (!$guard->check()) {
+            throw UnauthenticatedException::forGuard($guard);
         }
 
         $arguments = [];
@@ -46,75 +85,45 @@ readonly class AuthorizationMiddleware implements MiddlewareInterface
             $arguments[] = $canAttribute->entityClass;
         }
 
-        if ($this->gate->allows($canAttribute->ability, ...$arguments)) {
+        if ($this->gate()->allows($canAttribute->ability, ...$arguments)) {
             return $next($request);
         }
 
-        return $this->forbiddenResponse($request);
+        throw AuthorizationException::forbidden(
+            ability: $canAttribute->ability,
+            resource: $canAttribute->entityClass ?? $request->controller() . '::' . $request->action(),
+        );
+    }
+
+    private function gate(): GateInterface
+    {
+        return $this->resolvedGate ??= ($this->gate)();
+    }
+
+    private function guard(): GuardInterface
+    {
+        return $this->resolvedGuard ??= ($this->guard)();
     }
 
     /**
      * @throws ReflectionException
      */
-    private function getCanAttribute(): ?Can
-    {
-        if ($this->controller === null || $this->action === null) {
+    private function resolveCanAttribute(
+        Request $request,
+    ): ?Can {
+        $controller = $request->controller();
+        $action = $request->action();
+
+        if ($controller === null || $action === null) {
             return null;
         }
 
-        $reflection = new ReflectionMethod($this->controller, $this->action);
-        $attributes = $reflection->getAttributes(Can::class);
+        $key = $controller . '::' . $action;
 
-        if (empty($attributes)) {
-            return null;
+        if (!array_key_exists($key, $this->resolved)) {
+            $this->resolved[$key] = $this->canAttributeReader->read($controller, $action);
         }
 
-        return $attributes[0]->newInstance();
-    }
-
-    /**
-     * @throws JsonException
-     */
-    private function unauthorizedResponse(
-        Request $request,
-    ): Response {
-        if ($this->isJsonRequest($request)) {
-            return Response::json(
-                data: ['error' => 'Unauthorized'],
-                statusCode: 401,
-            );
-        }
-
-        return new Response(
-            body: 'Unauthorized',
-            statusCode: 401,
-        );
-    }
-
-    /**
-     * @throws JsonException
-     */
-    private function forbiddenResponse(
-        Request $request,
-    ): Response {
-        if ($this->isJsonRequest($request)) {
-            return Response::json(
-                data: ['error' => 'Forbidden'],
-                statusCode: 403,
-            );
-        }
-
-        return new Response(
-            body: 'Forbidden',
-            statusCode: 403,
-        );
-    }
-
-    private function isJsonRequest(
-        Request $request,
-    ): bool {
-        $accept = $request->header('Accept');
-
-        return $accept !== null && str_contains($accept, 'application/json');
+        return $this->resolved[$key];
     }
 }

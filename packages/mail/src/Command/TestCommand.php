@@ -37,7 +37,7 @@ readonly class TestCommand implements CommandInterface
 
         $output->writeLine("Sending test email to $email...");
 
-        $subject = $this->parseSubjectOption($input) ?? 'Test Email from Marko';
+        $subject = $input->getOption('subject') ?? 'Test Email from Marko';
 
         $message = Message::create()
             ->to($email)
@@ -59,17 +59,5 @@ readonly class TestCommand implements CommandInterface
         $output->writeLine('Email sent successfully!');
 
         return 0;
-    }
-
-    private function parseSubjectOption(
-        Input $input,
-    ): ?string {
-        foreach ($input->getArguments() as $arg) {
-            if (str_starts_with($arg, '--subject=')) {
-                return substr($arg, 10);
-            }
-        }
-
-        return null;
     }
 }

@@ -9,6 +9,7 @@ use Marko\Core\Command\CommandRunner;
 use Marko\Core\Container\PreferenceRecord;
 use Marko\Core\Discovery\DiscoveryCache;
 use Marko\Core\Discovery\DiscoveryEnvironment;
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Core\Event\ObserverDefinition;
 use Marko\Core\Exceptions\DiscoveryCacheException;
 use Marko\Core\Path\ProjectPaths;
@@ -19,25 +20,33 @@ use Marko\Core\Plugin\PluginDefinition;
 // ---------------------------------------------------------------------------
 
 /**
- * Snapshot + restore the three env keys used by the cache gate.
+ * Snapshot + restore the env keys used by the cache gate, in both $_ENV and
+ * the real (getenv) environment. The real environment values are cleared for
+ * the duration of the test so host env vars cannot flip results.
  * Returns a closure that restores the original values.
  */
 function cacheTestSnapshotEnv(): Closure
 {
-    $keys = ['APP_ENV', 'DISCOVERY_CACHE_ENABLED', 'DISCOVERY_CACHE_PATH'];
+    $keys = ['MARKO_ENV', 'APP_ENV', 'DISCOVERY_CACHE_ENABLED', 'DISCOVERY_CACHE_PATH'];
     $saved = [];
+    $savedReal = [];
 
     foreach ($keys as $key) {
         $saved[$key] = array_key_exists($key, $_ENV) ? $_ENV[$key] : null;
+        $savedReal[$key] = getenv($key);
+        unset($_ENV[$key]);
+        putenv($key);
     }
 
-    return function () use ($keys, $saved): void {
+    return function () use ($keys, $saved, $savedReal): void {
         foreach ($keys as $key) {
             if ($saved[$key] === null) {
                 unset($_ENV[$key]);
             } else {
                 $_ENV[$key] = $saved[$key];
             }
+
+            putenv($savedReal[$key] === false ? $key : "$key=$savedReal[$key]");
         }
     };
 }
@@ -45,8 +54,9 @@ function cacheTestSnapshotEnv(): Closure
 /**
  * Recursively delete a directory and all its contents.
  */
-function cacheTestCleanupDirectory(string $dir): void
-{
+function cacheTestCleanupDirectory(
+    string $dir,
+): void {
     if (!is_dir($dir)) {
         return;
     }
@@ -69,21 +79,28 @@ function cacheTestCleanupDirectory(string $dir): void
 /**
  * Write a valid discovery cache file at the default path under $basePath.
  *
+ * The routing package is autoloadable in this monorepo, so a cached boot bootstraps
+ * routing and reads its 'routes' section; an empty one stands in for a project
+ * without routes.
+ *
  * @param array{preferences: PreferenceRecord[], plugins: PluginDefinition[], observers: ObserverDefinition[], commands: CommandDefinition[]} $payload
  */
-function cacheTestWriteCache(string $basePath, array $payload): void
-{
+function cacheTestWriteCache(
+    string $basePath,
+    array $payload,
+): void {
     $projectPaths = new ProjectPaths($basePath);
     $env = new DiscoveryEnvironment();
     $cache = new DiscoveryCache($projectPaths, $env);
-    $cache->write($payload);
+    $cache->write($payload + ['sections' => ['routes' => []]]);
 }
 
 /**
  * Write a corrupt (non-PHP-return-array) cache file so DiscoveryCache::load() throws.
  */
-function cacheTestWriteCorruptCache(string $basePath): void
-{
+function cacheTestWriteCorruptCache(
+    string $basePath,
+): void {
     $cachePath = $basePath . '/storage/cache/discovery.php';
     $dir = dirname($cachePath);
     if (!is_dir($dir)) {
@@ -95,8 +112,10 @@ function cacheTestWriteCorruptCache(string $basePath): void
 /**
  * Create a minimal Marko module directory (composer.json only, no src/).
  */
-function cacheTestCreateModule(string $path, string $name): void
-{
+function cacheTestCreateModule(
+    string $path,
+    string $name,
+): void {
     mkdir($path, 0755, true);
     file_put_contents($path . '/composer.json', json_encode([
         'name' => $name,
@@ -111,8 +130,11 @@ function cacheTestCreateModule(string $path, string $name): void
  *
  * @return array{class: string, commandName: string}
  */
-function cacheTestCreateCommandModule(string $modulePath, string $moduleName, string $uniqueId): array
-{
+function cacheTestCreateCommandModule(
+    string $modulePath,
+    string $moduleName,
+    string $uniqueId,
+): array {
     cacheTestCreateModule($modulePath, $moduleName);
     mkdir($modulePath . '/src', 0755, true);
 
@@ -458,6 +480,117 @@ it(
             $app->initialize();
 
             expect($app->commandRegistry->has($info['commandName']))->toBeTrue();
+
+            cacheTestCleanupDirectory($baseDir);
+        } finally {
+            $restore();
+        }
+    },
+);
+
+it(
+    'does not use the discovery cache when APP_ENV is local',
+    function (): void {
+        $restore = cacheTestSnapshotEnv();
+
+        try {
+            $uniqueId = bin2hex(random_bytes(8));
+            $baseDir = sys_get_temp_dir() . '/marko-cache-test-' . $uniqueId;
+            $vendorDir = $baseDir . '/vendor';
+
+            $info = cacheTestCreateCommandModule(
+                $vendorDir . '/acme/core',
+                'acme/core',
+                $uniqueId,
+            );
+
+            // An EMPTY cache — the command is on disk but absent from the cache
+            cacheTestWriteCache($baseDir, cacheTestEmptyPayload());
+
+            // The skeleton ships APP_ENV=local; local is a development environment
+            $_ENV['APP_ENV'] = 'local';
+            $_ENV['DISCOVERY_CACHE_ENABLED'] = '1';
+
+            $app = new Application(
+                vendorPath: $vendorDir,
+                modulesPath: '',
+                appPath: '',
+            );
+            $app->initialize();
+
+            expect($app->commandRegistry->has($info['commandName']))->toBeTrue();
+
+            cacheTestCleanupDirectory($baseDir);
+        } finally {
+            $restore();
+        }
+    },
+);
+
+it(
+    'does not use the discovery cache when MARKO_ENV is dev even if APP_ENV is production',
+    function (): void {
+        $restore = cacheTestSnapshotEnv();
+
+        try {
+            $uniqueId = bin2hex(random_bytes(8));
+            $baseDir = sys_get_temp_dir() . '/marko-cache-test-' . $uniqueId;
+            $vendorDir = $baseDir . '/vendor';
+
+            $info = cacheTestCreateCommandModule(
+                $vendorDir . '/acme/core',
+                'acme/core',
+                $uniqueId,
+            );
+
+            cacheTestWriteCache($baseDir, cacheTestEmptyPayload());
+
+            $_ENV['MARKO_ENV'] = 'dev';
+            $_ENV['APP_ENV'] = 'production';
+            $_ENV['DISCOVERY_CACHE_ENABLED'] = '1';
+
+            $app = new Application(
+                vendorPath: $vendorDir,
+                modulesPath: '',
+                appPath: '',
+            );
+            $app->initialize();
+
+            expect($app->commandRegistry->has($info['commandName']))->toBeTrue();
+
+            cacheTestCleanupDirectory($baseDir);
+        } finally {
+            $restore();
+        }
+    },
+);
+
+it(
+    'registers AppEnvironment as a shared container instance',
+    function (): void {
+        $restore = cacheTestSnapshotEnv();
+
+        try {
+            $uniqueId = bin2hex(random_bytes(8));
+            $baseDir = sys_get_temp_dir() . '/marko-cache-test-' . $uniqueId;
+            $vendorDir = $baseDir . '/vendor';
+
+            cacheTestCreateModule($vendorDir . '/acme/core', 'acme/core');
+
+            $_ENV['APP_ENV'] = 'local';
+
+            $app = new Application(
+                vendorPath: $vendorDir,
+                modulesPath: '',
+                appPath: '',
+            );
+            $app->initialize();
+
+            $environment = $app->container->get(AppEnvironment::class);
+
+            expect($environment)->toBeInstanceOf(AppEnvironment::class)
+                ->and($app->container->get(AppEnvironment::class))->toBe($environment)
+                ->and($environment->isDevelopment())->toBeTrue();
 
             cacheTestCleanupDirectory($baseDir);
         } finally {

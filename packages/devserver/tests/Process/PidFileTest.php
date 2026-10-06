@@ -161,20 +161,22 @@ it('detects a process group as running when parent died but child lives', functi
         [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
         $pipes,
     );
-    $status = proc_get_status($proc);
-    $parentPid = $status['pid'];
+    $parentPid = proc_get_status($proc)['pid'];
 
-    // Wait for parent to exit
-    usleep(200000);
+    // The parent exits right after forking, so once it has exited the child exists.
+    // proc_get_status() reaps the parent, so it is not counted as a zombie group member.
+    expect(devserverWaitUntil(fn (): bool => !proc_get_status($proc)['running']))->toBeTrue('parent exited');
     proc_close($proc);
 
     // Parent is dead, but child is still alive in the same process group
     // isRunning now checks both individual PID and process group
-    expect($pidFile->isProcessGroupRunning($parentPid))->toBeTrue('process group has alive members')
+    expect(posix_kill($parentPid, 0))->toBeFalse('parent is gone')
+        ->and($pidFile->isProcessGroupRunning($parentPid))->toBeTrue('process group has alive members')
         ->and($pidFile->isRunning($parentPid))->toBeTrue('isRunning detects group members');
 
-    // Clean up: kill the process group
-    posix_kill(-$parentPid, SIGTERM);
+    // Clean up: kill the process group and wait for it to go
+    posix_kill(-$parentPid, SIGKILL);
+    expect(devserverWaitUntil(fn (): bool => !$pidFile->isProcessGroupRunning($parentPid)))->toBeTrue();
     removeDir($tmpDir);
 });
 
@@ -213,6 +215,42 @@ it('reads process entries from JSON file', function (): void {
         ->and($entries[0]->command)->toBe('php -S localhost:8000')
         ->and($entries[0]->port)->toBe(8000)
         ->and($entries[0]->startedAt)->toBe('2026-02-25T00:00:00+00:00');
+
+    removeDir($tmpDir);
+});
+
+it('stores and reads the host of a process entry', function (): void {
+    $tmpDir = sys_get_temp_dir() . '/pid-file-test-' . uniqid();
+    mkdir($tmpDir, 0755, true);
+    $pidFile = new PidFile($tmpDir);
+
+    $pidFile->write([
+        new ProcessEntry('php', 1234, 'php -S [::1]:8000', 8000, '2026-02-25T12:30:00+00:00', '::1'),
+        new ProcessEntry('vite', 5678, 'npm run dev', 0, '2026-02-25T12:30:00+00:00'),
+    ]);
+    $entries = $pidFile->read();
+
+    expect($entries[0]->host)->toBe('::1')
+        ->and($entries[1]->host)->toBeNull();
+
+    removeDir($tmpDir);
+});
+
+it('reads entries written without a host', function (): void {
+    $tmpDir = sys_get_temp_dir() . '/pid-file-test-' . uniqid();
+    mkdir($tmpDir . '/.marko', 0755, true);
+    file_put_contents($tmpDir . '/.marko/dev.json', json_encode(['processes' => [[
+        'name' => 'php',
+        'pid' => 1234,
+        'command' => 'php -S localhost:8000',
+        'port' => 8000,
+        'startedAt' => '2026-02-25T12:30:00+00:00',
+    ]]]));
+
+    $entries = new PidFile($tmpDir)->read();
+
+    expect($entries[0]->name)->toBe('php')
+        ->and($entries[0]->host)->toBeNull();
 
     removeDir($tmpDir);
 });

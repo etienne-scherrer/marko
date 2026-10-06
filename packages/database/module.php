@@ -3,32 +3,61 @@
 declare(strict_types=1);
 
 use Marko\Core\Container\ContainerInterface;
+use Marko\Core\Discovery\CachedDiscovery;
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Core\Path\ProjectPaths;
+use Marko\Database\Config\DatabaseConfig;
+use Marko\Database\Connection\SleeperInterface;
+use Marko\Database\Connection\TransactionBackoff;
 use Marko\Database\Connection\TransactionInterface;
+use Marko\Database\Connection\UsleepSleeper;
+use Marko\Database\Diff\DiffCalculator;
+use Marko\Database\Entity\EntityCacheContributor;
 use Marko\Database\Entity\EntityDiscovery;
+use Marko\Database\Entity\EntityHydrator;
 use Marko\Database\Entity\EntityMetadataFactory;
 use Marko\Database\Seed\SeederDiscovery;
 use Marko\Database\Seed\SeederDiscoveryInterface;
 use Marko\Database\Seed\SeederRunner;
+use Random\Randomizer;
 
 return [
     'singletons' => [
         EntityMetadataFactory::class,
+        // Shared so the dirty-check snapshot taken when one repository loads an
+        // entity is still there when another repository or service saves it.
+        EntityHydrator::class,
+    ],
+    'discovery' => [
+        EntityCacheContributor::class,
     ],
     'boot' => function (
+        CachedDiscovery $cachedDiscovery,
         EntityDiscovery $discovery,
         EntityMetadataFactory $metadataFactory,
         ProjectPaths $paths,
     ): void {
-        $entityClasses = array_merge(
-            $discovery->discoverInVendor($paths->vendor),
-            $discovery->discoverInModules($paths->modules),
-            $discovery->discoverInApp($paths->app),
-        );
+        // The discovery cache holds the entity list on a cached boot; otherwise scan.
+        $entityClasses = $cachedDiscovery->section(EntityCacheContributor::KEY)
+            ?? $discovery->discoverAll($paths->vendor, $paths->modules, $paths->app);
         $metadataFactory->linkExtendersFrom($entityClasses);
     },
     'bindings' => [
         SeederDiscoveryInterface::class => SeederDiscovery::class,
+        SleeperInterface::class => UsleepSleeper::class,
+        // A closure, because Random\Randomizer cannot be autowired (its Engine
+        // parameter is an interface); bind SleeperInterface to change the wait.
+        TransactionBackoff::class => function (ContainerInterface $container): TransactionBackoff {
+            return new TransactionBackoff(
+                sleeper: $container->get(SleeperInterface::class),
+                randomizer: new Randomizer(),
+            );
+        },
+        DiffCalculator::class => function (ContainerInterface $container): DiffCalculator {
+            return new DiffCalculator(
+                ignoredIndexes: $container->get(DatabaseConfig::class)->ignoreIndexes,
+            );
+        },
         SeederRunner::class => function (ContainerInterface $container): SeederRunner {
             $discovery = $container->get(SeederDiscoveryInterface::class);
             $paths = $container->get(ProjectPaths::class);
@@ -53,6 +82,7 @@ return [
 
             return new SeederRunner(
                 seeders: $seeders,
+                appEnvironment: $container->get(AppEnvironment::class),
                 transaction: $transaction,
             );
         },

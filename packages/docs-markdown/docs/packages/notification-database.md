@@ -54,6 +54,8 @@ $this->notificationRepository->markAsRead($notificationId);
 $this->notificationRepository->markAllAsRead($user);
 ```
 
+`read_at` is read from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/) and written in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default), the same zone `DatabaseChannel` writes `created_at` in. In tests, construct `DatabaseNotificationRepository` with a [`FakeClock`](/docs/packages/testing/#fakeclock) and `DatabaseTimezoneConfig::fromName('UTC')` to get a known timestamp.
+
 ### Fetching Unread Notifications
 
 ```php
@@ -125,5 +127,5 @@ Entity mapped to the `notifications` table.
 | `$notifiableType` | `string` | Notifiable entity class name. |
 | `$notifiableId` | `string` | Notifiable entity ID. |
 | `$data` | `string` | JSON-encoded notification data. |
-| `$readAt` | `?string` | Timestamp when read, or `null` if unread. |
-| `$createdAt` | `string` | Timestamp when the notification was created. |
+| `$readAt` | `?string` | Timestamp when read (database timezone), or `null` if unread. |
+| `$createdAt` | `string` | Timestamp when the notification was created (database timezone). |

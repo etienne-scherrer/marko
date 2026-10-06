@@ -1,6 +1,6 @@
 # marko/testing
 
-Testing utilities for Marko---reusable fakes with built-in assertions that eliminate test boilerplate.
+Testing utilities for Marko---reusable fakes with built-in assertions, and an in-process HTTP test client for feature tests.
 
 ## Overview
 
@@ -26,9 +26,47 @@ uses(TestCase::class)->in(__DIR__);
 
 After that, every Pest test in the project can reference module and app classes directly---no additional Composer path repos or classmaps required.
 
+## HTTP Tests
+
+`TestClient` sends requests through your application in process (real router, middleware and controllers) and boots the application once for many requests:
+
+```php
+use Marko\Testing\Http\TestClient;
+
+$client = TestClient::boot(dirname(__DIR__));
+
+$client->postJson('/api/shows/42/events', ['type' => 'view'])
+    ->assertStatus(202)
+    ->assertJsonPath('data.type', 'view');
+
+$client->actingAs($user)->get('/dashboard')->assertOk();
+```
+
+Cookies persist across requests like a browser's, so session-backed flows work. Assertions on the returned `TestResponse` throw `AssertionFailedException` with the status and a body excerpt. See the [HTTP tests docs](https://marko.build/docs/packages/testing/#http-tests).
+
+## Database Tests
+
+With `marko/database` and a driver installed, `TestDatabase` boots and migrates your application once per process, and `RefreshDatabase` wraps each test in a transaction that is rolled back afterwards:
+
+```php
+use Marko\Testing\Database\RefreshDatabase;
+use Marko\Testing\Database\TestDatabase;
+
+beforeEach(function () {
+    $this->database = TestDatabase::boot(dirname(__DIR__));
+    $this->refresh = new RefreshDatabase($this->database);
+    $this->refresh->begin();
+    $this->http = $this->database->client(); // shares the test transaction
+});
+
+afterEach(fn () => $this->refresh->rollback());
+```
+
+`TruncateDatabase` empties the entity tables instead, for code that must see committed data. Both refuse to run in production, and `TruncateDatabase` runs only in a testing environment (`testing`, `test`); set `APP_ENV=testing`. See the [database tests docs](https://marko.build/docs/packages/testing/#database-tests).
+
 ## Available Fakes
 
-`FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`
+`FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`, `FakeSleeper`, `FakeConfirmationPrompter`
 
 
 ## Usage
@@ -168,6 +206,23 @@ $guard->assertGuest();
 $guard->assertLoggedOut();
 ```
 
+### FakeHttpClient
+
+```php
+use Marko\Http\HttpResponse;
+use Marko\Testing\Fake\FakeHttpClient;
+use Marko\Testing\Fake\Http\RecordedRequest;
+
+$http = new FakeHttpClient();
+$http->stub('https://api.example.com/orders/*', new HttpResponse(200, '{"id":1}'));
+
+$service = new OrderSync($http);
+$service->push($order);
+
+$http->assertSent(fn (RecordedRequest $r) => $r->method === 'POST');
+$http->assertSentCount(1);
+```
+
 ### KnownDriversValidator
 
 ```php
@@ -233,6 +288,35 @@ KnownDriversValidator::assertSkeletonSuggestContainsAll(
 - `assertNotAttempted(): void` — Assert attempt() was never called
 - `assertLoggedOut(): void` — Assert logout() was called
 
+### FakeHttpClient
+
+- `stub(string $urlPattern, HttpResponse|HttpException $response): self` — Respond to matching URLs (`*` wildcard)
+- `queue(HttpResponse|HttpException ...$responses): self` — Sequential responses for unmatched URLs
+- `preventStrayRequests(bool $prevent = true): self` — Throw on unmatched requests (default on)
+- `assertSent(?callable $callback = null): void`, `assertNotSent(callable $callback): void`, `assertSentCount(int $expected): void`, `assertNothingSent(): void`
+
+### TestClient
+
+- `TestClient::boot(string $basePath): self`, `TestClient::forApplication(Application $app): self` — Boot once, serve many requests
+- `get()`, `post()`, `put()`, `patch()`, `delete()`, `options()`, `head()`, `getJson()`, `postJson()`, `putJson()`, `patchJson()`, `deleteJson()`, `call()` — Send a request, return a `TestResponse`
+- `withHeaders()`, `withServerVariables()`, `withCookie()`, `withoutCookies()`, `withFile()`, `withFiles()`, `actingAs($user, ?string $guard = null)` — Client state for later requests
+- `cookies()`, `cookieJar()` — The cookie jar, scoped by path, domain, `Secure`, expiry and `SameSite` like a browser
+- `withoutResetting(ResettableInterface ...$services): static` — Services the client must not reset between requests
+
+### TestDatabase, RefreshDatabase, TruncateDatabase
+
+- `TestDatabase::boot(string $basePath, bool $fresh = false): self` — Boot and migrate once per process; refuses production, and `fresh: true` runs only in a testing environment
+- `application()`, `connection()`, `transaction()`, `client()`, `seedTable()`, `getTableRowCount()`, `appliedMigrations()`
+- `new RefreshDatabase(TestDatabase $database)` — `begin()`, `rollback()`, `runAfterCommitCallbacks()`
+- `new TruncateDatabase(TestDatabase $database)` — `truncate()`, `tables()`
+
+### TestResponse
+
+- `assertStatus()`, `assertOk()`, `assertCreated()`, `assertNoContent()`, `assertNotFound()`, `assertForbidden()`, `assertUnauthorized()`, `assertUnprocessable()`, `assertRedirect(?string $to = null)`
+- `assertHeader()`, `assertHeaderMissing()`, `assertCookie()`, `assertCookieMissing()`, `assertSee()`, `assertDontSee()`
+- `assertJson()`, `assertExactJson()`, `assertJsonPath()`, `assertJsonCount()`, `assertJsonMissingPath()`
+- `status()`, `body()`, `header()`, `json()`, `response()`
+
 ### KnownDriversValidator
 
 - `assertDocsUrlsResolveToValidPattern(string $knownDriversPath): void` — Assert every key in `known-drivers.php` follows the `marko/*` prefix pattern
@@ -240,7 +324,7 @@ KnownDriversValidator::assertSkeletonSuggestContainsAll(
 
 ## Pest Expectations
 
-`marko/testing` ships Pest custom expectations that are auto-loaded via `autoload.files`.
+`marko/testing` ships Pest custom expectations. They register automatically through a Pest plugin (`extra.pest.plugins`), so `Pest.php` needs no `require`. Pest 4 is required for the expectations; the fakes and their `assert*()` methods work without it.
 
 ```php
 use Marko\Testing\Fake\FakeEventDispatcher;
@@ -266,6 +350,13 @@ expect($logger)->toHaveLogged('User logged in');
 expect($guard)->toHaveAttempted();
 expect($guard)->toHaveAttempted(fn ($creds) => $creds['email'] === 'user@example.com');
 expect($guard)->toBeAuthenticated();
+
+// FakeHttpClient
+expect($http)->toHaveSentRequest(fn ($request) => $request->method === 'POST');
+
+// TestResponse
+expect($response)->toHaveStatus(201);
+expect($response)->toHaveJsonPath('data.status', 'live');
 ```
 
 ## Documentation

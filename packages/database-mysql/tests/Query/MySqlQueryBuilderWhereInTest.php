@@ -59,6 +59,17 @@ class WhereInMockConnection implements ConnectionInterface
     {
         return 'mysql';
     }
+
+    public function supportsReturning(): bool
+    {
+        return false;
+    }
+
+    public function quoteIdentifier(
+        string $identifier,
+    ): string {
+        return '"' . str_replace('"', '""', $identifier) . '"';
+    }
 }
 
 describe('MySqlQueryBuilder whereIn empty array', function (): void {

@@ -11,6 +11,24 @@ Routes live on the methods they handle. Conflicts are caught at boot time with c
 composer require marko/routing
 ```
 
+## Configuration
+
+The only setting is the base URL used for absolute URLs from the [URL generator](#named-routes-and-url-generation). It reads `APP_URL`:
+
+```php title="config/routing.php"
+use Marko\Config\Env;
+
+return [
+    'url' => Env::string('APP_URL', ''),
+];
+```
+
+```bash title=".env"
+APP_URL=https://example.com
+```
+
+The base URL is never guessed from the request's `Host` header: that header is client-controlled, and it does not exist in CLI commands or queue jobs.
+
 ## Usage
 
 ### Defining Routes
@@ -55,7 +73,176 @@ Route parameters, POST body values, and query string values are automatically re
 #[Put('/path')]
 #[Patch('/path')]
 #[Delete('/path')]
+#[Head('/path')]
+#[Options('/path')]
 ```
+
+You rarely need `#[Head]` or `#[Options]` --- the router answers both automatically (see [HEAD and OPTIONS](#head-and-options)). Declare them only when a route needs custom behaviour.
+
+### Route Parameters
+
+A `{name}` placeholder matches one path segment (anything except `/`). Two variants change what it matches:
+
+| Placeholder | Matches | Example |
+|---|---|---|
+| `{id}` | One segment | `/shows/{id}` matches `/shows/42` and `/shows/abc` |
+| `{id:\d+}` | A value matching the regex | `/shows/{id:\d+}` matches `/shows/42`, not `/shows/abc` |
+| `{path*}` | The rest of the path, slashes included | `/docs/{path*}` matches `/docs/guides/routing` with `path` = `guides/routing` |
+
+```php title="DocsController.php"
+#[Get('/shows/{id:\d+}')]
+public function show(int $id): Response { /* ... */ }
+
+#[Get('/archive/{year:\d{4}}/{slug:[a-z0-9-]+}')]
+public function archived(int $year, string $slug): Response { /* ... */ }
+
+#[Get('/docs/{path*}')]
+public function page(string $path): Response { /* ... */ }
+```
+
+A value that fails a constraint doesn't match the route, so the router tries the next route (and answers 404 if none matches). Constraints are PCRE patterns without delimiters. Use non-capturing groups such as `{format:(?:json|xml)}`. A catch-all needs at least one character, so `/docs/{path*}` doesn't match `/docs`; add a separate `#[Get('/docs')]` route for that.
+
+These mistakes fail at boot with a `RouteException` that names the path:
+
+- an invalid regex (`{id:[0-9}`)
+- a capturing group in a constraint (`{id:(\d+)}`)
+- a catch-all that is not the whole final segment (`/docs/{path*}/edit`, `/files/v-{path*}`)
+- a parameter name that is not an identifier, or the same name used twice in one path
+
+### Route Precedence
+
+Which route handles a URL never depends on registration order, module order or file layout. For each HTTP method the router tries routes in this order:
+
+1. **Static paths** (no parameters), matched by exact lookup. `/shows/live` always beats `/shows/{id}`.
+2. **Catch-all paths come last.** A route with `{path*}` is tried only after every other dynamic route.
+3. **Dynamic paths with more static segments.** `/a/{x}/c` (2 static segments) beats `/a/{x}/{y}` (1).
+4. **More constrained parameters.** At equal static segments, `/shows/{id:\d+}` is tried before `/shows/{slug}`, so `/shows/42` reaches the first and `/shows/the-wire` falls through to the second.
+5. **Dynamic paths with a longer static prefix** (the text before the first `{`). `/api/{version}/list` beats `/{tenant}/users/list`.
+6. **Registration order** breaks any remaining tie.
+
+A trailing slash is ignored (`/shows/live/` matches `/shows/live`). `marko route:list` prints routes in this effective order.
+
+### Named Routes and URL Generation
+
+Give a route a `name` so links and redirects don't hard-code its path:
+
+```php title="ShowController.php"
+#[Get('/shows/{id:\d+}', name: 'shows.show')]
+public function show(int $id): Response { /* ... */ }
+```
+
+Inject `UrlGeneratorInterface` to build URLs. There is no global `route()` helper:
+
+```php title="ShowController.php"
+use Marko\Routing\UrlGeneratorInterface;
+
+class ShowController
+{
+    public function __construct(
+        private UrlGeneratorInterface $urlGenerator,
+    ) {}
+
+    #[Post('/shows')]
+    public function store(): Response
+    {
+        $show = $this->showService->create(/* ... */);
+
+        return Response::redirect($this->urlGenerator->route('shows.show', ['id' => $show->id]));
+    }
+}
+```
+
+```php
+$urlGenerator->route('shows.show', ['id' => 42]);                  // /shows/42
+$urlGenerator->route('shows.show', ['id' => 42, 'tab' => 'cast']); // /shows/42?tab=cast
+$urlGenerator->route('docs', ['path' => 'guides/routing']);        // /docs/guides/routing
+$urlGenerator->route('shows.show', ['id' => 42], absolute: true);  // https://example.com/shows/42
+```
+
+- Values are URL-encoded with `rawurlencode()`. A `/` in a normal parameter becomes `%2F`. In a catch-all, each segment is encoded and the slashes are kept.
+- Parameters the path doesn't use are appended as a query string.
+- `absolute: true` prefixes the [configured](#configuration) base URL.
+
+Each of these throws a `UrlGenerationException`:
+
+- an unknown route name (the message suggests close matches)
+- a missing or empty parameter
+- a non-scalar parameter value
+- a value that fails the parameter's constraint
+- an absolute URL when no base URL is configured
+
+Templates get the same generator through `route()` in [Latte](/docs/packages/view-latte/) and [Twig](/docs/packages/view-twig/).
+
+Route names must be unique across the application. A duplicate name throws `RouteConflictException` at boot, naming both `Controller::action()` locations.
+
+### Route Prefixes
+
+`#[RoutePrefix]` on a controller prefixes every route the class declares. The optional `namePrefix` is prepended to each route name:
+
+```php title="app/api/src/Controller/ShowController.php"
+use Marko\Routing\Attributes\RoutePrefix;
+
+#[RoutePrefix('/api/v1', namePrefix: 'api.v1.')]
+class ShowController
+{
+    #[Get('/shows', name: 'shows.index')]       // GET /api/v1/shows, name api.v1.shows.index
+    public function index(): Response { /* ... */ }
+
+    #[Get('/shows/{id:\d+}', name: 'shows.show')] // GET /api/v1/shows/{id:\d+}, name api.v1.shows.show
+    public function show(int $id): Response { /* ... */ }
+}
+```
+
+Slashes are normalised when joining, so `#[RoutePrefix('/api/')]` with `#[Get('shows')]` gives `/api/shows`, and `#[Get('/')]` gives `/api`. A prefix must start with `/`; anything else throws at boot. Unnamed routes stay unnamed.
+
+The prefix belongs to the class that declares the method. A [`#[Preference]`](#overriding-vendor-routes) subclass without its own `#[RoutePrefix]` keeps the parent's prefix, including on methods it overrides. If the subclass declares its own prefix, that prefix applies only to the methods the subclass declares. Inherited routes keep the parent's prefix.
+
+### Unmatched Requests: 404 and 405
+
+When a request matches no route, the router responds with:
+
+- **`405 Method Not Allowed`** when the path matches a route of another method. The `Allow` header lists the methods that would work, e.g. `Allow: GET, HEAD, OPTIONS`.
+- **`404 Not Found`** otherwise.
+
+Both are thrown as `HttpException` and rendered by `ExceptionRenderer` --- JSON when the client asks for it, a minimal HTML page otherwise (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)).
+
+#### Which middleware runs
+
+Only global middleware marked `#[RunsOnUnmatched]` runs for unmatched requests (404, 405 and the automatic OPTIONS response). Route middleware (`#[Middleware]`) never runs, because there is no route. Every other global middleware is skipped. That means no session start, no CSRF check, no authentication and no authorization. A scanner hitting `/wp-login.php` creates no session, and a `POST` to a typo'd URL gets a 404, not a CSRF 419.
+
+| Global middleware | Runs on unmatched requests |
+|---|---|
+| `CorsMiddleware` ([`marko/cors`](/docs/packages/cors/)) | Yes --- preflights and CORS headers on 404/405 |
+| `SessionMiddleware` (`marko/session-file`, `marko/session-database`) | No |
+| `CsrfMiddleware` ([`marko/security`](/docs/packages/security/)) | No |
+| Authentication and `AuthorizationMiddleware` | No |
+| `TokenRequestMiddleware` ([`marko/authentication-token`](/docs/packages/authentication-token/)) | No --- nothing authenticates a token without a route |
+| `LayoutMiddleware`, `PageCacheMiddleware` | No (they only act on matched routes anyway) |
+| Your own global middleware | No, unless it declares `#[RunsOnUnmatched]` |
+
+Because no session and no authentication run, the 404 and 405 pages are rendered without a session or an authenticated user. A custom `ExceptionRenderer` or error template must not depend on them: calling `$guard->check()` or reading the session there throws, since nothing prepared the session. For the same reason `QueuedCookiesMiddleware` ([`marko/authentication`](/docs/packages/authentication/)) does not run either: only the session guard queues cookies, and it never runs on an unmatched request.
+
+To run your own global middleware on 404/405 responses (request logging, security headers), opt in on the class:
+
+```php title="app/web/src/Http/Middleware/SecurityHeadersMiddleware.php"
+use Marko\Routing\Attributes\RunsOnUnmatched;
+use Marko\Routing\Middleware\MiddlewareInterface;
+
+#[RunsOnUnmatched]
+class SecurityHeadersMiddleware implements MiddlewareInterface
+{
+    // ...
+}
+```
+
+The attribute is read from the class listed under `globalMiddleware`, not from a `#[Preference]` that replaces it. Opt in only for middleware that does not depend on a route or on session state. In middleware that opts in, `$request->controller()` and `$request->action()` are `null`.
+
+Because session and auth middleware do not run, a custom error page (an `ExceptionRenderer` Preference) must not read the session, the logged-in user, flash messages or a CSRF token when rendering a 404 or 405. The session is not started there, so the read throws `SessionNotStartedException` and the 404 becomes a 500.
+
+### HEAD and OPTIONS
+
+- **HEAD**: when no `#[Head]` route matches, the GET route for the same path handles the request. The response keeps its status, headers and cookies, but the router always removes the body of a response to a HEAD request (including 404/405 pages). `Response::withoutBody()` does this and preserves the concrete response class; a `StreamingResponse` sends its headers and never opens the stream.
+- **OPTIONS**: when no `#[Options]` route matches but the path matches other routes, the router answers `204 No Content` with an `Allow` header (always including `HEAD` when `GET` is allowed, and `OPTIONS`). This automatic response goes through the global middleware marked `#[RunsOnUnmatched]`, so [`marko/cors`](/docs/packages/cors/) turns a browser preflight into a full CORS response. An OPTIONS request to an unknown path gets a 404.
 
 ### Adding Middleware
 
@@ -94,6 +281,28 @@ class AuthMiddleware implements MiddlewareInterface
     }
 }
 ```
+
+`#[Middleware]` on a class applies to every route in the class, and to the routes a subclass (such as a `#[Preference]`) inherits. Class-level middleware and exclusions are collected from the class and all its ancestors.
+
+### Skipping Middleware
+
+Modules register **global** middleware that runs on every route. `marko/session-file` and `marko/session-database` register the session middleware, for example. `#[WithoutMiddleware]` removes middleware from one route, or from every route in a class. It accepts a class name or an array, and it works on global and route middleware alike:
+
+```php title="app/api/src/Controller/WebhookController.php"
+use Marko\Routing\Attributes\WithoutMiddleware;
+use Marko\Session\Middleware\SessionMiddleware;
+
+#[WithoutMiddleware(SessionMiddleware::class)]
+class WebhookController
+{
+    #[Post('/webhooks/stripe')]
+    public function stripe(): Response { /* ... */ }
+}
+```
+
+The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) have no route to exclude anything; they run only the global middleware marked `#[RunsOnUnmatched]` (see [Which middleware runs](#which-middleware-runs)).
+
+If a route excludes middleware that is neither global nor on the route, boot fails with a `RouteException`. That catches a typo in the class name, and it catches a driver package that isn't installed. A silent no-op would leave the middleware running. The [stateless API recipe](/docs/packages/session/#stateless-routes) shows the session case in full.
 
 ### Decorating Responses
 
@@ -146,10 +355,117 @@ public function login(): Response
 
 `expires: null` or `expires: 0` omits the `Expires` attribute entirely, producing a browser-session cookie instead of a persistent one. Cookie values are `rawurlencode()`d automatically, so a value containing `;` cannot inject a second attribute. An invalid cookie name throws `CookieException`, as does `sameSite: 'None'` without `secure: true` --- browsers silently drop such cookies, so Marko fails loudly instead.
 
+To give a cookie a lifetime instead of a timestamp, pass `maxAge` in seconds. Browsers count it from when they receive the cookie, so it is unaffected by clock skew between server and client, and it wins over `Expires` when both are sent:
+
+```php
+// Remember the user for 30 days
+$response = $response->withCookie(new Cookie(
+    name: 'remember',
+    value: $token,
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'Lax',
+    maxAge: 60 * 60 * 24 * 30,
+));
+
+// Delete the cookie: Max-Age=0 expires it immediately
+$response = $response->withCookie(new Cookie(name: 'remember', path: '/', maxAge: 0));
+```
+
+`maxAge` emits only `Max-Age=`; no `Expires` is derived from it. Pass `expires` as well if you need to support clients that predate `Max-Age`. A zero or negative `maxAge` is sent as `Max-Age=0`, which deletes the cookie.
+
 Read cookies sent by the client with `Request::cookie()`, which mirrors `query()` and `post()`:
 
 ```php
 $sessionId = $request->cookie('session');
+```
+
+### Reading JSON Bodies
+
+A request whose `Content-Type` is `application/json` (or any `+json` type, such as `application/vnd.api+json`) has its body decoded once, when the `Request` is built. Read it with `json()`, using dot-notation for nested keys:
+
+```php
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+#[Post('/api/users')]
+public function store(Request $request): Response
+{
+    $email = $request->json('user.email');
+    $roles = $request->json('user.roles', []);
+
+    return Response::json(['email' => $email], 201);
+}
+```
+
+JSON fields also bind straight to typed controller parameters, the same way form fields do:
+
+```php
+#[Post('/api/shows')]
+public function create(string $title, int $count): Response
+{
+    // POST {"title": "Live at Five", "count": 7}
+    return Response::json(['title' => $title, 'count' => $count], 201);
+}
+```
+
+`input()` reads from whichever body the request carries (the JSON body for JSON requests, form data otherwise) and falls back to the query string, so one controller can serve both kinds of client:
+
+```php
+$title = $request->input('title', 'Untitled');
+```
+
+A malformed JSON body throws `MalformedJsonException` when it is read, never silently returning an empty payload. It implements `HttpExceptionInterface`, so the pipeline renders it as a `400` wherever it is thrown --- while binding controller parameters or inside your controller. `wantsJson()` checks the `Accept` header, so you can pick a response format for the client:
+
+```php
+if ($request->wantsJson()) {
+    return Response::json(['ok' => true]);
+}
+```
+
+### Handling File Uploads
+
+Uploaded files arrive as `Marko\Routing\Http\UploadedFile` objects, keyed like the form fields that sent them. `file()` returns one file, `files()` returns a list for multi-file inputs (`name="photos[]"`), and nested fields use dot-notation (`user.avatar`):
+
+```php
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+#[Post('/profile/avatar')]
+public function upload(Request $request): Response
+{
+    $avatar = $request->file('avatar');
+
+    if ($avatar === null || !$avatar->isValid()) {
+        return new Response('Upload an image', 422);
+    }
+
+    $extension = $avatar->guessExtension() ?? 'bin';
+    $avatar->moveTo("/var/app/storage/avatars/" . bin2hex(random_bytes(16)) . ".$extension");
+
+    return new Response('Saved', 201);
+}
+```
+
+The client filename and media type are untrusted: `mimeType()` and `guessExtension()` inspect the file contents with `finfo` instead. Inputs submitted without a file are left out, so `hasFile()` is `false` for them. An upload that failed (for example, larger than `upload_max_filesize`) is still present but not valid; moving it, or moving any file twice, throws `UploadedFileException` naming the reason. Calling `file()` on a multi-file input also throws --- use `files()` there.
+
+To check type and size with 422 errors in the same shape as the rest of the form, use the file rules in [`marko/validation`](/docs/packages/validation/#validating-file-uploads) (`file`, `image`, `mimes`, `mimetypes`, `max_size`, `min_size`) instead of hand-written checks. `UploadedFile` implements `Marko\Core\Contracts\UploadedFileInterface`, the contract those rules depend on.
+
+To store an upload through [`marko/media`](/docs/packages/media/), build a `Marko\Media\Value\UploadedFile` from it:
+
+```php
+use Marko\Media\Value\UploadedFile as MediaUpload;
+
+$media = $mediaManager->upload(new MediaUpload(
+    name: $avatar->clientFilename(),
+    tmpPath: $avatar->tempPath(),
+    mimeType: $avatar->mimeType(),
+    size: $avatar->size(),
+    extension: $avatar->guessExtension() ?? 'bin',
+));
 ```
 
 ### Overriding Vendor Routes
@@ -171,6 +487,8 @@ class MyPostController extends PostController
     }
 }
 ```
+
+Inherited routes keep everything the parent declared: path, `#[RoutePrefix]`, name, class-level `#[Middleware]` and `#[WithoutMiddleware]`. They dispatch to your class.
 
 ### Disabling Routes
 
@@ -206,6 +524,119 @@ Resolution: Use #[Preference] to extend one controller,
 or use #[DisableRoute] to remove one route.
 ```
 
+Two routes with the same name fail the same way. The error lists both `Controller::action()` locations.
+
+### Errors and HTTP Exceptions
+
+Throw `HttpException` from a controller or middleware to respond with an error status. There is no global `abort()` helper --- throw the exception explicitly:
+
+```php title="app/blog/src/Controller/PostController.php"
+use Marko\Routing\Exceptions\HttpException;
+
+#[Get('/posts/{id}')]
+public function show(int $id): Response
+{
+    $post = $this->postRepository->findById($id)
+        ?? throw HttpException::notFound('Post not found.');
+
+    return Response::json(['title' => $post->title]);
+}
+```
+
+Named constructors cover the common cases: `badRequest()`, `unauthorized()`, `forbidden()`, `notFound()`, `methodNotAllowed(['GET', 'HEAD'])` (sets `Allow`), `conflict()`, and `tooManyRequests(retryAfter: 60)` (sets `Retry-After`). For anything else use the constructor, which accepts any `400`--`599` status plus headers and extra client-safe data:
+
+```php
+throw new HttpException(
+    statusCode: 409,
+    message: 'That slug is already taken.',
+    data: ['field' => 'slug'],
+);
+```
+
+The message is client-facing: it is sent as `message` in the response body. When omitted it defaults to the status reason phrase (`Not Found`, `Conflict`, ...).
+
+#### Where errors are rendered
+
+The middleware pipeline catches any exception implementing `Marko\Core\Exceptions\HttpExceptionInterface` **at the depth it was thrown** and turns it into a `Response`. Every middleware outside that point still runs, so CORS headers, security headers, session saving and similar decorations apply to error responses too. (A 404 or 405 from the router itself only passes through the global middleware marked `#[RunsOnUnmatched]`; see [Which middleware runs](#which-middleware-runs).) This works the same under PHP-FPM and [RoadRunner](/docs/packages/roadrunner/).
+
+Any other throwable is not caught: it propagates out of `Router::handle()` to the installed error handler ([`marko/errors-simple`](/docs/packages/errors-simple/) or [`marko/errors-advanced`](/docs/packages/errors-advanced/)), which renders a `500`.
+
+#### Framework exceptions
+
+These framework exceptions implement `HttpExceptionInterface`, so they render without any glue code:
+
+| Exception | Status | Body |
+|---|---|---|
+| `Marko\Routing\Exceptions\InvalidRouteParameterException` | `400` | `{"message": "Missing required parameter 'id' of type 'int'"}` |
+| `Marko\Security\Exceptions\CsrfTokenMismatchException` | `419` | `{"message": "CSRF token mismatch."}` |
+| `Marko\Validation\Exceptions\ValidationException` | `422` | `{"message": "The given data was invalid.", "errors": {"email": ["..."]}}` |
+| `Marko\Database\Exceptions\EntityNotFoundException` | `404` | `{"message": "Not found."}` (never the entity class or ID) |
+| `Marko\Database\Exceptions\UniqueConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
+| `Marko\Database\Exceptions\ForeignKeyConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
+| `Marko\Authorization\Exceptions\AuthorizationException` | `403` | `{"message": "Forbidden."}` (never the ability or resource) |
+
+Your own exceptions can implement the interface too --- useful for domain exceptions in packages that should not depend on `marko/routing`:
+
+```php
+use Marko\Core\Exceptions\HttpExceptionInterface;
+
+class SubscriptionExpiredException extends RuntimeException implements HttpExceptionInterface
+{
+    public function getStatusCode(): int
+    {
+        return 402;
+    }
+
+    public function getHeaders(): array
+    {
+        return [];
+    }
+
+    public function getResponseData(): array
+    {
+        return ['message' => 'Your subscription has expired.'];
+    }
+}
+```
+
+Only `getResponseData()` reaches the client. The exception message, file, and trace are never rendered, in any environment.
+
+#### JSON or HTML
+
+`ExceptionRenderer` renders JSON when the request's `Accept` header contains `application/json` or a `+json` type (for example `application/problem+json`), or when there is no `Accept` header and the `Content-Type` is JSON. The body is the response data with a `message` key guaranteed. Otherwise it renders a minimal HTML page showing the status and message. The exception's headers are added in both cases.
+
+#### Custom error pages
+
+Replace `ExceptionRenderer` with a `#[Preference]` to render branded pages. Override `renderHtml()` to change only the HTML output, `renderJson()` for JSON, or `render()` for both:
+
+```php title="app/web/src/Http/BrandedExceptionRenderer.php"
+use Marko\Core\Attributes\Preference;
+use Marko\Routing\Http\ExceptionRenderer;
+use Marko\Routing\Http\Response;
+
+#[Preference(replaces: ExceptionRenderer::class)]
+class BrandedExceptionRenderer extends ExceptionRenderer
+{
+    protected function renderHtml(
+        int $statusCode,
+        array $data,
+    ): Response {
+        return Response::html(
+            "<h1>Oops ($statusCode)</h1><p>" . htmlspecialchars($data['message']) . '</p>',
+            $statusCode,
+        );
+    }
+}
+```
+
+### Route Cache
+
+Without a cache, every boot finds routes by reading, tokenizing and loading every PHP file under every module's `src/` --- controllers or not. `marko/routing` declares `RouteCacheContributor` as a [discovery cache contributor](/docs/packages/core/#adding-a-section-to-the-discovery-cache), so `marko discovery:cache` also stores every route: method, path (with any `#[RoutePrefix]` applied), controller, action, middleware, name and `#[WithoutMiddleware]` exclusions, including routes a `#[Preference]` inherits from the controller it replaces.
+
+A production boot from the cache rebuilds the same routes in the same order, so [precedence](#route-precedence), names and URL generation are unchanged. No source file is scanned, and a controller class loads only when a request matches one of its routes. Excluded middleware is still checked against each route's stack at boot.
+
+In a development environment (`APP_ENV=local`, `development` or `dev`) routes are always discovered live, so a new or changed route attribute takes effect on the next request. In production, run `marko discovery:cache` on every deploy --- see [Deploying to production](/docs/packages/core/#deploying-to-production). Until you do, a route added to an existing controller is not served.
+
 ## CLI
 
 Requires [`marko/cli`](/docs/packages/cli/) for the `marko` binary.
@@ -219,13 +650,15 @@ marko route:list
 ```
 
 ```
-METHOD  PATH            ACTION                    MIDDLEWARE
-GET     /               HelloController::index
-GET     /blog           PostController::index
-GET     /blog/{id}      PostController::show
-GET     /products       ProductController::index
-GET     /products/{id}  ProductController::show
+METHOD  PATH                    NAME               ACTION                     MIDDLEWARE
+GET     /                       home               HelloController::index
+GET     /blog                   blog.index         PostController::index
+GET     /api/v1/shows/{id:\d+}  api.v1.shows.show  ShowController::show       -SessionMiddleware
+GET     /blog/{id}                                 PostController::show
+POST    /webhooks/stripe                           WebhookController::stripe  VerifySignature, -SessionMiddleware
 ```
+
+Paths include any `#[RoutePrefix]`. The MIDDLEWARE column lists route middleware, then excluded middleware prefixed with `-`. Routes are grouped by method (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, then any others) and listed in the order the router tries them --- see [Route Precedence](#route-precedence). Automatic HEAD and OPTIONS responses are not listed.
 
 Filter by HTTP method or path:
 
@@ -240,14 +673,48 @@ marko route:list --method=GET --path=blog
 ### Route Attributes
 
 ```php
-#[Get(path: '/path', middleware: [])]
-#[Post(path: '/path')]
+#[Get(path: '/path', middleware: [], name: null)]
+#[Post(path: '/path', name: 'route.name')]
 #[Put(path: '/path')]
 #[Patch(path: '/path')]
 #[Delete(path: '/path')]
+#[Head(path: '/path')]
+#[Options(path: '/path')]
 #[DisableRoute]
-#[Middleware(MiddlewareClass::class)]
+#[Middleware(MiddlewareClass::class)]               // class or method; class-string or array
+#[WithoutMiddleware(MiddlewareClass::class)]        // class or method; class-string or array
+#[RoutePrefix(prefix: '/api', namePrefix: 'api.')] // class only
+#[RunsOnUnmatched]                                  // middleware class only; runs on 404/405/automatic OPTIONS
 ```
+
+### UrlGeneratorInterface
+
+```php
+interface UrlGeneratorInterface
+{
+    /** @throws UrlGenerationException */
+    public function route(string $name, array $parameters = [], bool $absolute = false): string;
+}
+```
+
+Bound to `UrlGenerator` as a singleton.
+
+### RouteCollection
+
+```php
+class RouteCollection
+{
+    public function named(string $name): ?RouteDefinition;
+    public function names(): array;
+    public function inMatchOrder(): array;
+    public function byMethod(string $method): array;
+    public function all(): array;
+}
+```
+
+### RouteDefinition
+
+Each route is a `readonly` value object. Every constructor argument is a string or a list of strings (`method`, `path`, `controller`, `action`, `middleware`, `name`, `withoutMiddleware`). The path already includes any prefix. Everything else (`parameters`, `constraints`, `catchAll`, `regex`) is derived from the path.
 
 ### Request
 
@@ -260,6 +727,13 @@ class Request
     public function post(?string $key = null, mixed $default = null): mixed;
     public function cookie(?string $key = null, mixed $default = null): mixed;
     public function body(): string;
+    public function isJson(): bool;
+    public function wantsJson(): bool;
+    public function json(?string $key = null, mixed $default = null): mixed;
+    public function input(?string $key = null, mixed $default = null): mixed;
+    public function file(string $key): ?UploadedFile;
+    public function files(?string $key = null): array;
+    public function hasFile(string $key): bool;
     public function header(string $name, ?string $default = null): ?string;
     public function headers(): array;
     public function server(string $key): ?string;
@@ -271,7 +745,48 @@ class Request
 }
 ```
 
-`ip()` returns `REMOTE_ADDR` from the server bag (equivalent to `server('REMOTE_ADDR')`). `cookie()` reads from the request's `$_COOKIE` bag and mirrors the signature of `query()` and `post()`. `withRoute()` returns a new immutable `Request` with the matched controller class and action method attached; `controller()` and `action()` retrieve them. The router attaches route context before invoking middleware, which allows middleware (such as `AdminAuthMiddleware`) to inspect which controller method is handling the request.
+`ip()` returns `REMOTE_ADDR` from the server bag (equivalent to `server('REMOTE_ADDR')`). `cookie()` reads from the request's `$_COOKIE` bag and mirrors the signature of `query()` and `post()`. `withRoute()` returns a new immutable `Request` with the matched controller class and action method attached; `controller()` and `action()` retrieve them. The router attaches route context before invoking middleware, which allows middleware (such as `AdminAuthMiddleware`) to inspect which controller method is handling the request. `withRoute()` carries the uploaded files and the decoded JSON body through unchanged.
+
+| Method | Description |
+| --- | --- |
+| `isJson()` | `true` when `Content-Type` is `application/json` or ends in `+json` (e.g. `application/vnd.api+json`) |
+| `wantsJson()` | `true` when the `Accept` header lists `application/json` or a `+json` type |
+| `json($key, $default)` | The decoded JSON body, or one value from it by dot-notation key (`user.email`). Returns `[]` / `$default` for non-JSON requests and empty bodies. Throws `MalformedJsonException` for a malformed body |
+| `input($key, $default)` | The JSON body for JSON requests, form data otherwise, then the query string. With no key, the query string merged with the body (body values win) |
+| `file($key)` | One `UploadedFile`, or `null`. Dot-notation for nested fields. Throws `UploadedFileException` when the field holds several files |
+| `files($key)` | With no key, every uploaded file keyed like its form field. With a key, that field's files as a list |
+| `hasFile($key)` | Whether at least one file was uploaded for the field (check `isValid()` before using it) |
+
+The constructor accepts a `files` argument (`array<string, UploadedFile|array>`), so a request with uploads can be built without superglobals. `fromGlobals()` normalizes `$_FILES`, including PHP's inverted `name[]` / `name[key]` layout for multi-file and nested inputs, and leaves out inputs submitted without a file (`UPLOAD_ERR_NO_FILE`).
+
+### UploadedFile
+
+```php
+use Marko\Routing\Http\UploadedFile; // implements Marko\Core\Contracts\UploadedFileInterface
+
+public function __construct(
+    string $tempPath,
+    string $clientFilename,
+    string $clientMediaType,
+    int $size,
+    int $error = UPLOAD_ERR_OK,
+)
+
+public function clientFilename(): string;
+public function clientMediaType(): string;
+public function size(): int;
+public function error(): int;
+public function tempPath(): string;
+public function isValid(): bool;
+public function isMoved(): bool;
+public function moveTo(string $targetPath): void;
+public function stream(): mixed; // resource
+public function contents(): string;
+public function mimeType(): string;
+public function guessExtension(): ?string;
+```
+
+`clientFilename()` and `clientMediaType()` are whatever the client sent --- never use them as a storage path or to decide what a file is. `mimeType()` detects the real type from the contents with `finfo`, and `guessExtension()` maps it to an extension (`null` when unknown). `isValid()` is `true` only for a successful upload (`UPLOAD_ERR_OK`) that has not been moved yet. `moveTo()` uses `move_uploaded_file()` under a web SAPI (PHP-FPM, Apache) and `rename()` elsewhere (CLI, tests, RoadRunner workers), and can be called once. Moving twice, moving a failed upload, moving into a missing directory, or reading a moved file throws `UploadedFileException` with the reason and a fix (for a failed upload, the `UPLOAD_ERR_*` name and the `php.ini` setting to change).
 
 ### Response
 
@@ -297,8 +812,12 @@ class Response
     public function withHeaders(array $headers): static;
     public function withStatus(int $statusCode): static;
     public function withCookie(Cookie $cookie): static;
+    public function withoutBody(): static;
+    public function isBodyOmitted(): bool;
 }
 ```
+
+`withoutBody()` empties the body and marks it omitted, keeping status, headers, cookies and the concrete class; the router applies it to every HEAD response. A subclass that writes its own output in `send()` should check `isBodyOmitted()` and send headers only.
 
 `cookies()` returns the `Cookie` instances attached to the response; `headerLines()` returns the raw `"Name: value"` lines followed by one `Set-Cookie:` line per cookie, without making any SAPI calls --- `send()` uses it internally, and it's also useful for testing. `withHeader()` and `withHeaders()` merge into the existing headers (`withHeaders()` merges its argument over the current set). `withCookie()` replaces an existing cookie that matches on `(name, path, domain)`, or appends a new one otherwise. Every `with*()` method is marked `#[\NoDiscard]` and returns a clone via PHP's `clone` operator rather than `new static(...)`, so a `Response` subclass such as `StreamingResponse` survives decoration intact --- see [Decorating Responses](#decorating-responses). `Response` is deliberately not a `readonly class` for this reason: immutability is enforced by API design (private properties, no setters) rather than the `readonly` keyword.
 
@@ -318,15 +837,24 @@ public function __construct(
     bool $secure = false,
     bool $httpOnly = false,
     ?string $sameSite = null,
+    ?int $maxAge = null,
 )
 
 public function name(): string;
+public function value(): string;
+public function expires(): ?int;
 public function path(): ?string;
 public function domain(): ?string;
+public function secure(): bool;
+public function httpOnly(): bool;
+public function sameSite(): ?string;
+public function maxAge(): ?int;
 public function toSetCookieString(): string;
 ```
 
-`expires: null` or `expires: 0` omits the `Expires` attribute, producing a browser-session cookie. The value passed to `toSetCookieString()` is `rawurlencode()`d. The constructor throws `CookieException` for an invalid cookie name (control characters, whitespace, or separator characters such as `( ) < > @ , ; : \ " / [ ] ? = { }`), and also throws when `sameSite` is `'None'` without `secure: true`.
+`value()` returns the raw value, before the URL-encoding applied in the `Set-Cookie` line.
+
+`expires: null` or `expires: 0` omits the `Expires` attribute, producing a browser-session cookie. `maxAge` (seconds) adds `Max-Age=` after `Expires`; `maxAge()` returns it as given, and a zero or negative value is sent as `Max-Age=0`, which deletes the cookie. No `Expires` is derived from `maxAge`. The value passed to `toSetCookieString()` is `rawurlencode()`d. The constructor throws `CookieException` for an invalid cookie name (control characters, whitespace, or separator characters such as `( ) < > @ , ; : \ " / [ ] ? = { }`), and also throws when `sameSite` is `'None'` without `secure: true`.
 
 ### MiddlewareInterface
 
@@ -337,6 +865,54 @@ interface MiddlewareInterface
 }
 ```
 
+### HttpException
+
+```php
+use Marko\Routing\Exceptions\HttpException;
+
+public function __construct(
+    int $statusCode,             // 400-599, otherwise InvalidArgumentException
+    string $message = '',        // defaults to the reason phrase
+    array $headers = [],
+    array $data = [],            // extra client-safe body fields
+    string $context = '',
+    string $suggestion = '',
+    ?Throwable $previous = null,
+)
+
+public static function badRequest(string $message = ''): self;
+public static function unauthorized(string $message = ''): self;
+public static function forbidden(string $message = ''): self;
+public static function notFound(string $message = ''): self;
+public static function methodNotAllowed(array $allowedMethods, string $message = ''): self;
+public static function conflict(string $message = ''): self;
+public static function tooManyRequests(?int $retryAfter = null, string $message = ''): self;
+```
+
+`HttpException` implements `Marko\Core\Exceptions\HttpExceptionInterface`:
+
+```php
+interface HttpExceptionInterface extends Throwable
+{
+    public function getStatusCode(): int;
+    public function getHeaders(): array;       // array<string, string>
+    public function getResponseData(): array;  // client-safe; `message` is the human-readable text
+}
+```
+
+### ExceptionRenderer
+
+```php
+use Marko\Routing\Http\ExceptionRenderer;
+
+public function render(HttpExceptionInterface $exception, Request $request): Response;
+public function wantsJson(Request $request): bool;
+protected function renderJson(int $statusCode, array $data): Response;
+protected function renderHtml(int $statusCode, array $data): Response;
+```
+
+`Marko\Routing\Http\HttpStatus::reasonPhrase(int $statusCode): string` returns the standard reason phrase (`419` → `Page Expired`).
+
 ### Parameter Resolution
 
-The router resolves controller method parameters in priority order: route path params → POST body → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, which the router catches and converts to a `400` response. Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router resolves controller method parameters in priority order: route path params → request body (the JSON body for JSON requests, form data otherwise, via `Request::input()`) → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.

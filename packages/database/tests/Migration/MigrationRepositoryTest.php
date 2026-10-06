@@ -54,7 +54,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('returns list of applied migrations', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturn([
                 ['name' => '2024_01_01_000000_create_users_table', 'batch' => 1],
@@ -73,7 +73,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('returns list of applied migrations with batch numbers', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturn([
                 ['name' => '2024_01_01_000000_create_users_table', 'batch' => 1],
@@ -92,7 +92,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('gets next batch number', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturn([
                 ['max_batch' => 3],
@@ -105,7 +105,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('returns batch 1 when no migrations exist', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturn([
                 ['max_batch' => null],
@@ -118,7 +118,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('gets migrations for last batch', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturnOnConsecutiveCalls(
                 // First call: get max batch
@@ -140,7 +140,7 @@ describe('MigrationRepository', function (): void {
     });
 
     it('returns empty array when no migrations to rollback', function (): void {
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
         $connection->method('query')
             ->willReturn([
                 ['max_batch' => null],
@@ -151,4 +151,32 @@ describe('MigrationRepository', function (): void {
 
         expect($lastBatch)->toBe([]);
     });
+
+    it('quotes the migrations table in every statement through the connection', function (): void {
+        $statements = [];
+        $connection = $this->createStub(ConnectionInterface::class);
+        $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "`$name`");
+        $connection->method('execute')->willReturnCallback(function (string $sql) use (&$statements): int {
+            $statements[] = $sql;
+
+            return 1;
+        });
+        $connection->method('query')->willReturnCallback(function (string $sql) use (&$statements): array {
+            $statements[] = $sql;
+
+            return [['max_batch' => 1, 'name' => 'm1', 'batch' => 1]];
+        });
+        $repository = new MigrationRepository();
+
+        $repository->createTable($connection);
+        $repository->record($connection, 'm1', 1);
+        $repository->delete($connection, 'm1');
+        $repository->getApplied($connection);
+        $repository->getAppliedWithBatch($connection);
+        $repository->getNextBatchNumber($connection);
+        $repository->getLastBatchMigrations($connection);
+
+        expect($statements)->toHaveCount(8)
+            ->and(array_filter($statements, fn (string $sql): bool => !str_contains($sql, '`migrations`')))->toBe([]);
+    })->issue(338);
 });

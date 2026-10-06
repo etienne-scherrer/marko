@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Database\Tests\Feature;
 
+use Closure;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
@@ -77,6 +78,17 @@ final class Helpers
                 return 'sqlite';
             }
 
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+
             public function beginTransaction(): void
             {
                 $this->inTransaction = true;
@@ -102,6 +114,8 @@ final class Helpers
 
             public function transaction(
                 callable $callback,
+                int $attempts = 1,
+                int|Closure|null $backoff = null,
             ): mixed {
                 $this->beginTransaction();
 
@@ -116,6 +130,15 @@ final class Helpers
                     throw $e;
                 }
             }
+
+            public function transactionLevel(): int
+            {
+                return 0;
+            }
+
+            public function afterCommit(callable $callback): void {}
+
+            public function afterRollback(callable $callback): void {}
         };
     }
 }

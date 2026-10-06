@@ -20,18 +20,20 @@ This automatically installs `marko/mail`.
 Set the mail driver to `smtp` in your config:
 
 ```php title="config/mail.php"
+use Marko\Config\Env;
+
 return [
     'driver' => 'smtp',
     'from' => [
-        'address' => $_ENV['MAIL_FROM_ADDRESS'] ?? 'noreply@example.com',
-        'name' => $_ENV['MAIL_FROM_NAME'] ?? 'My App',
+        'address' => Env::string('MAIL_FROM_ADDRESS', 'noreply@example.com'),
+        'name' => Env::string('MAIL_FROM_NAME', 'My App'),
     ],
     'smtp' => [
-        'host' => $_ENV['MAIL_HOST'] ?? 'localhost',
-        'port' => (int) ($_ENV['MAIL_PORT'] ?? 587),
-        'encryption' => $_ENV['MAIL_ENCRYPTION'] ?? 'tls',
-        'username' => $_ENV['MAIL_USERNAME'] ?? null,
-        'password' => $_ENV['MAIL_PASSWORD'] ?? null,
+        'host' => Env::string('MAIL_HOST', 'localhost'),
+        'port' => Env::int('MAIL_PORT', 587, min: 1, max: 65535),
+        'encryption' => Env::nullableString('MAIL_ENCRYPTION', 'tls'),
+        'username' => Env::nullableString('MAIL_USERNAME'),
+        'password' => Env::nullableString('MAIL_PASSWORD'),
         'auth_mode' => 'login', // 'login' or 'plain'
         'timeout' => 30,
     ],
@@ -132,6 +134,19 @@ Low-level SMTP protocol transport --- manages the socket connection, TLS negotia
 | `rcptTo(string $address): void` | Add an envelope recipient address |
 | `data(string $content): void` | Send the message content |
 | `quit(): void` | Close the SMTP session and disconnect |
+
+### Connection and TLS Errors
+
+Connection and STARTTLS failures throw `TransportException` (from [`marko/mail`](/docs/packages/mail/)). The context includes the operating system's or OpenSSL's reason, so you can tell the causes apart. No raw PHP warning is emitted.
+
+```text
+Failed to connect to mail server.
+Could not establish connection to smtp.example.com:587 (Connection refused)
+```
+
+Typical reasons are `Connection refused` (nothing listening on that port), `Connection timed out` (a firewall dropping packets), `getaddrinfo ... failed` (the host name doesn't resolve) and, with `ssl://`, `certificate verify failed`. A failed STARTTLS handshake throws `TransportException::tlsFailed()`, and its context includes the OpenSSL error, for example `SSL routines::wrong version number` when the port doesn't speak TLS.
+
+`TransportException::connectionFailed($host, $port, ?string $reason = null)` and `tlsFailed($host, ?string $reason = null)` take the reason as an optional last argument, so custom transports can pass one too.
 
 ### SmtpConfig
 

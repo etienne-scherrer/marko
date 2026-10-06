@@ -82,10 +82,11 @@ function createMockApplicationFactory(
                 public object $commandRunner,
             ) {}
 
-            public function initialize(): void
-            {
+            public function initialize(
+                bool $useDiscoveryCache = true,
+            ): void {
                 if ($this->onBoot !== null) {
-                    ($this->onBoot)();
+                    ($this->onBoot)($useDiscoveryCache);
                 }
             }
         };
@@ -191,6 +192,35 @@ it('boots project Application', function () {
         $kernel->run(['marko', 'list']);
 
         expect($bootCalled)->toBeTrue();
+    } finally {
+        cleanupTempDir($projectRoot);
+    }
+});
+
+it('runs discovery:cache and discovery:clear with the cache bypassed in the CLI', function () {
+    $projectRoot = createTempProjectDir();
+    file_put_contents($projectRoot . '/vendor/autoload.php', '<?php return null;');
+
+    try {
+        $projectFinder = new TestProjectFinder();
+        $projectFinder->findResult = $projectRoot;
+
+        $useCache = [];
+        $kernel = new CliKernel(
+            projectFinder: $projectFinder,
+            applicationFactory: createMockApplicationFactory(
+                onBoot: function (bool $useDiscoveryCache) use (&$useCache): void {
+                    $useCache[] = $useDiscoveryCache;
+                },
+            ),
+        );
+
+        $kernel->run(['marko', 'discovery:cache']);
+        $kernel->run(['marko', 'discovery:clear']);
+        $kernel->run(['marko', 'list']);
+        $kernel->run(['marko']);
+
+        expect($useCache)->toBe([false, false, true, true]);
     } finally {
         cleanupTempDir($projectRoot);
     }

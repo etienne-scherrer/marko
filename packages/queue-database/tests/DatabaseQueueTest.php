@@ -2,26 +2,42 @@
 
 declare(strict_types=1);
 
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
+use Marko\Database\Exceptions\LockException;
+use Marko\Database\PgSql\Query\PgSqlQueryBuilderFactory;
 use Marko\Encryption\Config\EncryptionConfig;
 use Marko\Queue\Database\DatabaseQueue;
+use Marko\Queue\Database\Tests\Fixtures\InMemoryFailedJobRepository;
+use Marko\Queue\Database\Tests\Fixtures\SqliteConnection;
 use Marko\Queue\Database\Tests\Fixtures\TestJob;
 use Marko\Queue\Exceptions\SerializationException;
 use Marko\Queue\JobEnvelope;
 use Marko\Queue\QueueInterface;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
+use PHPUnit\Framework\MockObject\Stub;
+use Psr\Clock\ClockInterface;
 
 function createTestQueue(
     ConnectionInterface $connection,
     ?JobEnvelope $envelope = null,
     int $retryAfter = 90,
+    ClockInterface $clock = new FakeClock('2026-10-05 12:00:00'),
+    int $maxAttempts = 3,
+    ?InMemoryFailedJobRepository $failedJobRepository = null,
 ): DatabaseQueue {
     return new DatabaseQueue(
         connection: $connection,
+        queryBuilderFactory: new PgSqlQueryBuilderFactory($connection),
         jobEnvelope: $envelope ?? createTestEnvelope(),
+        failedJobRepository: $failedJobRepository ?? new InMemoryFailedJobRepository(),
+        clock: $clock,
+        databaseTimezoneConfig: DatabaseTimezoneConfig::fromName('UTC'),
         retryAfter: $retryAfter,
+        maxAttempts: $maxAttempts,
     );
 }
 
@@ -31,20 +47,32 @@ function createTestEnvelope(
     return new JobEnvelope(new EncryptionConfig(new FakeConfigRepository(['encryption.key' => $key])));
 }
 
+/**
+ * Make a connection mock behave like a driver connection inside transaction():
+ * it reports an open transaction and runs the callback.
+ */
+function runsTransactions(
+    Stub $connection,
+): void {
+    $connection->method('inTransaction')->willReturn(true);
+    $connection->method('transaction')->willReturnCallback(fn (callable $callback): mixed => $callback());
+}
+
 test('DatabaseQueue implements QueueInterface', function () {
-    $connection = $this->createMock(ConnectionInterface::class);
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $connection = $this->createStub(ConnectionInterface::class);
+    $queue = createTestQueue($connection);
 
     expect($queue)->toBeInstanceOf(QueueInterface::class);
 });
 
 test('DatabaseQueue push stores job in database', function () {
     $connection = $this->createMock(ConnectionInterface::class);
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
 
     $connection->expects($this->once())
         ->method('execute')
         ->with(
-            $this->stringContains('INSERT INTO jobs'),
+            $this->stringContains('INSERT INTO "jobs"'),
             $this->callback(function (array $bindings) {
                 return isset($bindings['id'])
                     && isset($bindings['queue'])
@@ -60,17 +88,17 @@ test('DatabaseQueue push stores job in database', function () {
 
     $job = new TestJob('test message');
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $queue->push($job);
 });
 
 test('DatabaseQueue push returns job ID', function () {
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStub(ConnectionInterface::class);
     $connection->method('execute')->willReturn(1);
 
     $job = new TestJob('test message');
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $id = $queue->push($job);
 
     expect($id)->toBeString()
@@ -80,12 +108,13 @@ test('DatabaseQueue push returns job ID', function () {
 
 test('DatabaseQueue later stores job with future available_at', function () {
     $connection = $this->createMock(ConnectionInterface::class);
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
 
     $capturedBindings = [];
     $connection->expects($this->once())
         ->method('execute')
         ->with(
-            $this->stringContains('INSERT INTO jobs'),
+            $this->stringContains('INSERT INTO "jobs"'),
             $this->callback(function (array $bindings) use (&$capturedBindings) {
                 $capturedBindings = $bindings;
 
@@ -96,25 +125,20 @@ test('DatabaseQueue later stores job with future available_at', function () {
 
     $job = new TestJob('delayed job');
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
-    $delay = 60; // 60 seconds
-    $beforeTime = new DateTimeImmutable();
-    $id = $queue->later($delay, $job);
-    $afterTime = new DateTimeImmutable();
+    $queue = createTestQueue($connection, clock: new FakeClock('2026-10-05 12:00:00'));
+    $id = $queue->later(60, $job);
 
-    expect($id)->toBeString();
-
-    $availableAt = new DateTimeImmutable($capturedBindings['available_at']);
-    $expectedMin = $beforeTime->modify('+59 seconds');
-    $expectedMax = $afterTime->modify('+61 seconds');
-
-    expect($availableAt >= $expectedMin)->toBeTrue('available_at should be at least 59 seconds in future')
-        ->and($availableAt <= $expectedMax)->toBeTrue('available_at should be at most 61 seconds in future');
+    expect($id)->toBeString()
+        ->and($capturedBindings['available_at'])->toBe('2026-10-05 12:01:00')
+        ->and($capturedBindings['created_at'])->toBe('2026-10-05 12:00:00');
 });
 
 test('DatabaseQueue pop retrieves and reserves next job', function () {
     $envelope = createTestEnvelope();
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createMockForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     $job = new TestJob('pop test');
     $wrappedPayload = $envelope->wrap($job->serialize());
@@ -126,7 +150,7 @@ test('DatabaseQueue pop retrieves and reserves next job', function () {
         ->with(
             $this->stringContains('SELECT'),
             $this->callback(function (array $bindings) {
-                return isset($bindings['queue']);
+                return $bindings[0] === 'default';
             }),
         )
         ->willReturn([
@@ -153,7 +177,7 @@ test('DatabaseQueue pop retrieves and reserves next job', function () {
         )
         ->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue($connection, $envelope);
     $poppedJob = $queue->pop();
 
     expect($poppedJob)->toBeInstanceOf(TestJob::class)
@@ -162,7 +186,10 @@ test('DatabaseQueue pop retrieves and reserves next job', function () {
 });
 
 test('DatabaseQueue pop returns null when empty', function () {
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createMockForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     $connection->expects($this->once())
         ->method('query')
@@ -171,7 +198,7 @@ test('DatabaseQueue pop returns null when empty', function () {
     $connection->expects($this->never())
         ->method('execute');
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $result = $queue->pop();
 
     expect($result)->toBeNull();
@@ -190,7 +217,7 @@ test('DatabaseQueue size returns pending job count', function () {
         )
         ->willReturn([['count' => 5]]);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $size = $queue->size();
 
     expect($size)->toBe(5);
@@ -209,7 +236,7 @@ test('DatabaseQueue clear removes all jobs', function () {
         )
         ->willReturn(10);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $cleared = $queue->clear();
 
     expect($cleared)->toBe(10);
@@ -228,7 +255,7 @@ test('DatabaseQueue delete removes specific job', function () {
         )
         ->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $deleted = $queue->delete('job-123');
 
     expect($deleted)->toBeTrue();
@@ -241,7 +268,7 @@ test('DatabaseQueue delete returns false when job not found', function () {
         ->method('execute')
         ->willReturn(0);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $deleted = $queue->delete('nonexistent-job');
 
     expect($deleted)->toBeFalse();
@@ -249,6 +276,10 @@ test('DatabaseQueue delete returns false when job not found', function () {
 
 test('DatabaseQueue release updates job availability', function () {
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('query')->willReturn([
+        ['payload' => createTestEnvelope()->wrap(new TestJob()->serialize()), 'attempts' => 1],
+    ]);
 
     $capturedBindings = [];
     $connection->expects($this->once())
@@ -267,23 +298,19 @@ test('DatabaseQueue release updates job availability', function () {
         )
         ->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
-    $beforeTime = new DateTimeImmutable();
+    $queue = createTestQueue($connection, clock: new FakeClock('2026-10-05 12:00:00'));
     $released = $queue->release('job-123', 30);
-    $afterTime = new DateTimeImmutable();
 
-    expect($released)->toBeTrue();
-
-    $availableAt = new DateTimeImmutable($capturedBindings['available_at']);
-    $expectedMin = $beforeTime->modify('+29 seconds');
-    $expectedMax = $afterTime->modify('+31 seconds');
-
-    expect($availableAt >= $expectedMin)->toBeTrue()
-        ->and($availableAt <= $expectedMax)->toBeTrue();
+    expect($released)->toBeTrue()
+        ->and($capturedBindings['available_at'])->toBe('2026-10-05 12:00:30');
 });
 
 test('DatabaseQueue release with zero delay makes job immediately available', function () {
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('query')->willReturn([
+        ['payload' => createTestEnvelope()->wrap(new TestJob()->serialize()), 'attempts' => 1],
+    ]);
 
     $capturedBindings = [];
     $connection->expects($this->once())
@@ -298,28 +325,21 @@ test('DatabaseQueue release with zero delay makes job immediately available', fu
         )
         ->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
-    $beforeTime = new DateTimeImmutable();
+    $queue = createTestQueue($connection, clock: new FakeClock('2026-10-05 12:00:00'));
     $released = $queue->release('job-123');
-    $afterTime = new DateTimeImmutable();
 
-    expect($released)->toBeTrue();
-
-    $availableAt = new DateTimeImmutable($capturedBindings['available_at']);
-
-    // Allow 1 second tolerance for timing differences
-    expect($availableAt->getTimestamp())->toBeGreaterThanOrEqual($beforeTime->getTimestamp() - 1)
-        ->and($availableAt->getTimestamp())->toBeLessThanOrEqual($afterTime->getTimestamp() + 1);
+    expect($released)->toBeTrue()
+        ->and($capturedBindings['available_at'])->toBe('2026-10-05 12:00:00');
 });
 
 test('DatabaseQueue release returns false when job not found', function () {
     $connection = $this->createMock(ConnectionInterface::class);
 
-    $connection->expects($this->once())
-        ->method('execute')
-        ->willReturn(0);
+    $connection->method('query')->willReturn([]);
+    $connection->expects($this->never())
+        ->method('execute');
 
-    $queue = new DatabaseQueue($connection, createTestEnvelope());
+    $queue = createTestQueue($connection);
     $released = $queue->release('nonexistent-job');
 
     expect($released)->toBeFalse();
@@ -396,6 +416,17 @@ test('DatabaseQueue uses transactions for pop', function () {
             return 'sqlite';
         }
 
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
+
         public function beginTransaction(): void
         {
             $this->transactionCalls[] = ['operation' => 'beginTransaction'];
@@ -421,6 +452,8 @@ test('DatabaseQueue uses transactions for pop', function () {
 
         public function transaction(
             callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
         ): mixed {
             $this->beginTransaction();
             try {
@@ -433,9 +466,18 @@ test('DatabaseQueue uses transactions for pop', function () {
                 throw $e;
             }
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue($connection, $envelope);
     $poppedJob = $queue->pop();
 
     expect($poppedJob)->not->toBeNull();
@@ -455,14 +497,15 @@ test('DatabaseQueue uses transactions for pop', function () {
 
 test('DatabaseQueue respects available_at for delayed jobs', function () {
     $envelope = createTestEnvelope();
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createMockForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     $job = new TestJob('delayed job test');
     $wrappedPayload = $envelope->wrap($job->serialize());
 
-    // Create two jobs: one immediately available, one delayed (future available_at)
-    $now = new DateTimeImmutable();
-    $pastTime = $now->modify('-1 minute')->format('Y-m-d H:i:s');
+    $pastTime = '2026-10-05 11:59:00';
 
     // Capture the query bindings to verify the available_at condition
     $capturedQuery = [];
@@ -473,13 +516,13 @@ test('DatabaseQueue respects available_at for delayed jobs', function () {
                 $capturedQuery['sql'] = $sql;
 
                 // Must filter by available_at <= now to exclude delayed jobs
-                return str_contains($sql, 'available_at') && str_contains($sql, '<=');
+                return str_contains($sql, '"available_at" <= ?');
             }),
             $this->callback(function (array $bindings) use (&$capturedQuery) {
                 $capturedQuery['bindings'] = $bindings;
 
-                // Must have a 'now' binding to compare against available_at
-                return isset($bindings['now']);
+                // Must bind the clock's current time to compare against available_at
+                return in_array('2026-10-05 12:00:00', $bindings, true);
             }),
         )
         ->willReturn([
@@ -496,21 +539,23 @@ test('DatabaseQueue respects available_at for delayed jobs', function () {
 
     $connection->method('execute')->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue($connection, $envelope);
     $poppedJob = $queue->pop();
 
     expect($poppedJob)->not->toBeNull()
         ->and($poppedJob->id)->toBe('available-job');
 
     // Verify the SQL query filters by available_at
-    expect($capturedQuery['sql'])->toContain('available_at')
-        ->toContain('<=')
-        ->and($capturedQuery['bindings'])->toHaveKey('now');
+    expect($capturedQuery['sql'])->toContain('"available_at" <= ?')
+        ->and($capturedQuery['bindings'])->toHaveCount(3);
 });
 
 test('it verifies the envelope before unserializing in DatabaseQueue::pop()', function (): void {
     $envelope = createTestEnvelope();
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStubForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     $job = new TestJob('envelope verify test');
     $wrappedPayload = $envelope->wrap($job->serialize());
@@ -528,7 +573,7 @@ test('it verifies the envelope before unserializing in DatabaseQueue::pop()', fu
     ]);
     $connection->method('execute')->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue($connection, $envelope);
 
     /** @var TestJob $popped */
     $popped = $queue->pop();
@@ -539,7 +584,10 @@ test('it verifies the envelope before unserializing in DatabaseQueue::pop()', fu
 
 test('it rejects a tampered DatabaseQueue payload before unserializing', function (): void {
     $envelope = createTestEnvelope();
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStubForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     // Build a tampered payload: valid HMAC prefix but different body
     $fakeHmac = str_repeat('a', 64);
@@ -558,66 +606,19 @@ test('it rejects a tampered DatabaseQueue payload before unserializing', functio
     ]);
     $connection->method('execute')->willReturn(1);
 
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue($connection, $envelope);
 
     expect(fn () => $queue->pop())->toThrow(SerializationException::class);
 });
 
 it(
-    'reaches maxAttempts after exactly maxAttempts executions (job moves to failed store on the Nth, not the (N-1)th, failure)',
-    function (): void {
-        $envelope = createTestEnvelope();
-        $connection = $this->createMock(ConnectionInterface::class);
-
-        $job = new TestJob('maxAttempts test');
-        $job->setId('job-max');
-        $wrappedPayload = $envelope->wrap($job->serialize());
-
-        $connection->method('query')->willReturn([
-            [
-                'id' => 'job-max',
-                'queue' => 'default',
-                'payload' => $wrappedPayload,
-                'attempts' => 0,
-                'reserved_at' => null,
-                'available_at' => '2024-01-01 00:00:00',
-                'created_at' => '2024-01-01 00:00:00',
-            ],
-        ]);
-        $connection->method('execute')->willReturn(1);
-
-        $queue = createTestQueue($connection, $envelope);
-
-        /** @var TestJob $poppedJob */
-        $poppedJob = $queue->pop();
-        $maxAttempts = $poppedJob->maxAttempts;
-
-        expect($poppedJob)->not->toBeNull()
-            ->and($poppedJob->attempts)->toBe(0, 'Fresh pop should have attempts=0 (DB no longer increments)');
-
-        // Simulate Worker calling incrementAttempts() on each execution failure
-        for ($execution = 1; $execution <= $maxAttempts - 1; $execution++) {
-            $poppedJob->incrementAttempts();
-            // Before the Nth execution, job.attempts < maxAttempts → should not fail permanently
-            expect($poppedJob->attempts < $poppedJob->maxAttempts)->toBeTrue(
-                "After $execution execution(s), should not yet reach maxAttempts",
-            );
-        }
-
-        // On the Nth execution, Worker increments to maxAttempts → store as failed
-        $poppedJob->incrementAttempts();
-        expect($poppedJob->attempts)->toBe($maxAttempts)
-            ->and($poppedJob->attempts >= $poppedJob->maxAttempts)->toBeTrue(
-                'After maxAttempts executions, job should be stored as failed (not on N-1)',
-            );
-    },
-);
-
-it(
     'counts exactly one attempt per execution (popping then processing a job once yields attempts == 1, not 2)',
     function (): void {
         $envelope = createTestEnvelope();
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStubForIntersectionOfInterfaces(
+            [ConnectionInterface::class, TransactionInterface::class],
+        );
+        runsTransactions($connection);
 
         $job = new TestJob('attempt count test');
         $wrappedPayload = $envelope->wrap($job->serialize());
@@ -653,146 +654,53 @@ it(
 );
 
 it('does not reclaim a job whose reservation is within the retry_after window', function (): void {
-    $envelope = createTestEnvelope();
+    $connection = SqliteConnection::withQueueTables();
+    $clock = new FakeClock('2026-10-05 12:00:00');
+    $queue = createTestQueue($connection, retryAfter: 90, clock: $clock);
+    $queue->push(new TestJob('recent reservation'));
+    $queue->pop();
+    $clock->travel('+89 seconds');
 
-    $retryAfter = 90;
-    // reserved_at just 1 second ago — well within the retry_after window
-    $recentReservedAt = (new DateTimeImmutable())->modify('-1 second')->format('Y-m-d H:i:s');
-
-    $capturedBindings = [];
-    $connection = new class ($recentReservedAt, $capturedBindings) implements ConnectionInterface
-    {
-        public function __construct(
-            private readonly string $recentReservedAt,
-            /** @noinspection PhpPropertyOnlyWrittenInspection - Reference property tracks bindings in external variable */
-            private array &$capturedBindings,
-        ) {}
-
-        public function connect(): void {}
-
-        public function disconnect(): void {}
-
-        public function isConnected(): bool
-        {
-            return true;
-        }
-
-        public function query(
-            string $sql,
-            array $bindings = [],
-        ): array {
-            $this->capturedBindings = $bindings;
-
-            // Simulate DB: only return the job if its reserved_at is past the reclaim cutoff
-            if (!isset($bindings['reclaim_cutoff'])) {
-                return [];
-            }
-
-            $cutoff = new DateTimeImmutable($bindings['reclaim_cutoff']);
-            $reservedAt = new DateTimeImmutable($this->recentReservedAt);
-
-            // The job is NOT past the cutoff, so DB returns empty
-            if ($reservedAt > $cutoff) {
-                return [];
-            }
-
-            return [['id' => 'job-recent', 'queue' => 'default', 'payload' => '', 'attempts' => 0, 'reserved_at' => $this->recentReservedAt, 'available_at' => '2024-01-01 00:00:00', 'created_at' => '2024-01-01 00:00:00']];
-        }
-
-        public function execute(
-            string $sql,
-            array $bindings = [],
-        ): int {
-            return 1;
-        }
-
-        public function prepare(
-            string $sql,
-        ): StatementInterface {
-            throw new RuntimeException('Not implemented');
-        }
-
-        public function lastInsertId(): int
-        {
-            return 1;
-        }
-
-        public function driverName(): string
-        {
-            return 'sqlite';
-        }
-    };
-
-    $queue = createTestQueue($connection, $envelope, $retryAfter);
-    $result = $queue->pop();
-
-    // Job reserved 1 second ago (within 90s window) should NOT be returned
-    expect($result)->toBeNull()
-        ->and($capturedBindings)->toHaveKey('reclaim_cutoff');
-
-    // The reclaim_cutoff must be at least retry_after - 1 seconds ago
-    $cutoff = new DateTimeImmutable($capturedBindings['reclaim_cutoff']);
-    $expectedCutoff = (new DateTimeImmutable())->modify("-$retryAfter seconds");
-    expect($cutoff->getTimestamp())->toBeLessThanOrEqual($expectedCutoff->getTimestamp() + 1);
+    expect($queue->pop())->toBeNull();
 });
 
 it(
     'reclaims a job whose reservation is older than queue.retry_after and makes it available to pop() again',
     function (): void {
-        $envelope = createTestEnvelope();
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $queue = createTestQueue($connection, retryAfter: 90, clock: $clock);
+        $id = $queue->push(new TestJob('reclaim test'));
+        $queue->pop();
+        $clock->travel('+91 seconds');
 
-        $job = new TestJob('reclaim test');
-        $wrappedPayload = $envelope->wrap($job->serialize());
-
-        $retryAfter = 90;
-        // reserved_at more than retry_after seconds ago — should be reclaimable
-        $oldReservedAt = (new DateTimeImmutable())->modify("-$retryAfter seconds")->modify('-1 second')->format(
-            'Y-m-d H:i:s',
-        );
-
-        $capturedSql = '';
-        $capturedBindings = [];
-        $connection->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->callback(function (string $sql) use (&$capturedSql): bool {
-                    $capturedSql = $sql;
-
-                    return true;
-                }),
-                $this->callback(function (array $bindings) use (&$capturedBindings): bool {
-                    $capturedBindings = $bindings;
-
-                    return true;
-                }),
-            )
-            ->willReturn([
-                [
-                    'id' => 'job-reclaim',
-                    'queue' => 'default',
-                    'payload' => $wrappedPayload,
-                    'attempts' => 1,
-                    'reserved_at' => $oldReservedAt,
-                    'available_at' => '2024-01-01 00:00:00',
-                    'created_at' => '2024-01-01 00:00:00',
-                ],
-            ]);
-
-        $connection->method('execute')->willReturn(1);
-
-        $queue = createTestQueue($connection, $envelope, $retryAfter);
-        $poppedJob = $queue->pop();
-
-        expect($poppedJob)->not->toBeNull()
-            ->and($capturedSql)->toContain('reserved_at IS NULL OR reserved_at <=')
-            ->and($capturedBindings)->toHaveKey('reclaim_cutoff');
+        expect($queue->pop()?->id)->toBe($id);
     },
 );
 
+it('selects the next job with FOR UPDATE SKIP LOCKED', function (): void {
+    $connection = SqliteConnection::withQueueTables();
+    $queue = createTestQueue($connection);
+    $queue->push(new TestJob('locked select'));
+
+    $queue->pop();
+
+    expect($connection->lockClauses)->toBe(['FOR UPDATE SKIP LOCKED']);
+});
+
+it('fails loudly when popping on a connection without transactions', function (): void {
+    $connection = $this->createStub(ConnectionInterface::class);
+    $queue = createTestQueue($connection);
+
+    expect(fn () => $queue->pop())->toThrow(LockException::class);
+});
+
 it('issues the reserve UPDATE with a reserved_at IS NULL guard', function (): void {
     $envelope = createTestEnvelope();
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createMockForIntersectionOfInterfaces(
+        [ConnectionInterface::class, TransactionInterface::class],
+    );
+    runsTransactions($connection);
 
     $job = new TestJob('guard test');
     $wrappedPayload = $envelope->wrap($job->serialize());
@@ -832,7 +740,10 @@ it(
     'reserves a job atomically so a second concurrent pop() of the same queue does not return the already-reserved job (affected-rows guard returns null on race loss)',
     function (): void {
         $envelope = createTestEnvelope();
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStubForIntersectionOfInterfaces(
+            [ConnectionInterface::class, TransactionInterface::class],
+        );
+        runsTransactions($connection);
 
         $job = new TestJob('atomic test');
         $wrappedPayload = $envelope->wrap($job->serialize());
@@ -860,68 +771,7 @@ it(
 );
 
 test('it round-trips a legitimate job through DatabaseQueue push and pop', function (): void {
-    $envelope = createTestEnvelope();
-
-    $connection = new class () implements ConnectionInterface
-    {
-        /** @var array<int, array<string, mixed>> */
-        private array $storedRows = [];
-
-        public function connect(): void {}
-
-        public function disconnect(): void {}
-
-        public function isConnected(): bool
-        {
-            return true;
-        }
-
-        public function query(
-            string $sql,
-            array $bindings = [],
-        ): array {
-            return $this->storedRows;
-        }
-
-        public function execute(
-            string $sql,
-            array $bindings = [],
-        ): int {
-            if (str_contains($sql, 'INSERT')) {
-                $this->storedRows = [
-                    [
-                        'id' => $bindings['id'],
-                        'queue' => $bindings['queue'],
-                        'payload' => $bindings['payload'],
-                        'attempts' => $bindings['attempts'],
-                        'reserved_at' => null,
-                        'available_at' => $bindings['available_at'],
-                        'created_at' => $bindings['created_at'],
-                    ],
-                ];
-            }
-
-            return 1;
-        }
-
-        public function prepare(
-            string $sql,
-        ): StatementInterface {
-            throw new RuntimeException('Not implemented');
-        }
-
-        public function lastInsertId(): int
-        {
-            return 1;
-        }
-
-        public function driverName(): string
-        {
-            return 'sqlite';
-        }
-    };
-
-    $queue = new DatabaseQueue($connection, $envelope);
+    $queue = createTestQueue(SqliteConnection::withQueueTables());
 
     $job = new TestJob('round-trip message');
     $pushedId = $queue->push($job);
@@ -932,4 +782,96 @@ test('it round-trips a legitimate job through DatabaseQueue push and pop', funct
     expect($poppedJob)->toBeInstanceOf(TestJob::class)
         ->and($poppedJob->message)->toBe('round-trip message')
         ->and($poppedJob->id)->toBe($pushedId);
+});
+
+describe('DatabaseQueue clock', function (): void {
+    it('stores available_at and created_at from the injected clock', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $queue = createTestQueue($connection, clock: new FakeClock('2026-10-05 12:00:00'));
+
+        $id = $queue->later(120, new TestJob('timed'));
+        $row = $connection->query('SELECT available_at, created_at FROM jobs WHERE id = :id', ['id' => $id])[0];
+
+        expect($row['available_at'])->toBe('2026-10-05 12:02:00')
+            ->and($row['created_at'])->toBe('2026-10-05 12:00:00');
+    });
+
+    it('does not pop a delayed job until the clock reaches its available time', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $queue = createTestQueue($connection, clock: $clock);
+        $id = $queue->later(60, new TestJob('delayed'));
+
+        $clock->travel('+59 seconds');
+        $beforeAvailable = $queue->pop();
+        $clock->travel('+1 second');
+        $onceAvailable = $queue->pop();
+
+        expect($beforeAvailable)->toBeNull()
+            ->and($onceAvailable?->id)->toBe($id);
+    });
+
+    it('reclaims a reserved job once the clock reaches retry_after', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $queue = createTestQueue($connection, retryAfter: 30, clock: $clock);
+        $id = $queue->push(new TestJob('stuck'));
+        $queue->pop();
+
+        $clock->travel('+29 seconds');
+        $withinWindow = $queue->pop();
+        $clock->travel('+1 second');
+        $afterWindow = $queue->pop();
+
+        expect($withinWindow)->toBeNull()
+            ->and($afterWindow?->id)->toBe($id);
+    });
+
+    it('counts only jobs available at the clock time in size', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $queue = createTestQueue($connection, clock: $clock);
+        $queue->push(new TestJob('now'));
+        $queue->later(300, new TestJob('later'));
+
+        $sizeNow = $queue->size();
+        $clock->travel('+5 minutes');
+
+        expect($sizeNow)->toBe(1)
+            ->and($queue->size())->toBe(2);
+    });
+
+    it('schedules a released job relative to the injected clock', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $queue = createTestQueue($connection, clock: $clock);
+        $id = $queue->push(new TestJob('retry me'));
+        $queue->pop();
+        $clock->travel('+10 seconds');
+
+        $queue->release($id, 45);
+        $row = $connection->query('SELECT available_at, reserved_at FROM jobs WHERE id = :id', ['id' => $id])[0];
+
+        expect($row['available_at'])->toBe('2026-10-05 12:00:55')
+            ->and($row['reserved_at'])->toBeNull();
+    });
+
+    it('stamps failedAt from the injected clock when a reclaimed job exhausts its attempts', function (): void {
+        $connection = SqliteConnection::withQueueTables();
+        $clock = new FakeClock('2026-10-05 12:00:00');
+        $failed = new InMemoryFailedJobRepository();
+        $queue = createTestQueue(
+            $connection,
+            retryAfter: 30,
+            clock: $clock,
+            maxAttempts: 1,
+            failedJobRepository: $failed,
+        );
+        $id = $queue->push(new TestJob('crashes its worker'));
+        $queue->pop();
+        $clock->travel('+31 seconds');
+
+        expect($queue->pop())->toBeNull()
+            ->and($failed->find($id)?->failedAt)->toEqual(new DateTimeImmutable('2026-10-05 12:00:31'));
+    });
 });

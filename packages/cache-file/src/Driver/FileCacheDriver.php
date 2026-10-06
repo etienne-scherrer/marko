@@ -4,18 +4,20 @@ declare(strict_types=1);
 
 namespace Marko\Cache\File\Driver;
 
-use DateTimeImmutable;
 use Marko\Cache\CacheItem;
 use Marko\Cache\Config\CacheConfig;
 use Marko\Cache\Contracts\CacheInterface;
 use Marko\Cache\Contracts\CacheItemInterface;
 use Marko\Cache\Exceptions\InvalidKeyException;
-use RuntimeException;
+use Marko\Cache\File\Exceptions\FileCacheException;
+use Marko\Core\Support\ErrorCapture;
+use Psr\Clock\ClockInterface;
 
 readonly class FileCacheDriver implements CacheInterface
 {
     public function __construct(
         private CacheConfig $config,
+        private ClockInterface $clock,
     ) {}
 
     /**
@@ -43,7 +45,7 @@ readonly class FileCacheDriver implements CacheInterface
     }
 
     /**
-     * @throws InvalidKeyException|RuntimeException
+     * @throws InvalidKeyException|FileCacheException
      */
     public function set(
         string $key,
@@ -54,15 +56,17 @@ readonly class FileCacheDriver implements CacheInterface
         $this->ensureDirectoryExists();
 
         $ttl ??= $this->config->defaultTtl();
-        $expiresAt = $ttl > 0 ? time() + $ttl : null;
+        $now = $this->clock->now()->getTimestamp();
 
         $data = [
             'value' => $value,
-            'expires_at' => $expiresAt,
-            'created_at' => time(),
+            'expires_at' => $ttl > 0 ? $now + $ttl : null,
+            'created_at' => $now,
         ];
 
-        return $this->write($key, $data);
+        $this->write($key, $data);
+
+        return true;
     }
 
     /**
@@ -155,7 +159,7 @@ readonly class FileCacheDriver implements CacheInterface
         }
 
         $expiresAt = $data['expires_at'] !== null
-            ? new DateTimeImmutable()->setTimestamp($data['expires_at'])
+            ? $this->clock->now()->setTimestamp($data['expires_at'])
             : null;
 
         return CacheItem::hit($key, $data['value'], $expiresAt);
@@ -178,7 +182,7 @@ readonly class FileCacheDriver implements CacheInterface
     }
 
     /**
-     * @throws InvalidKeyException
+     * @throws InvalidKeyException|FileCacheException
      */
     public function setMultiple(
         array $values,
@@ -213,7 +217,7 @@ readonly class FileCacheDriver implements CacheInterface
     }
 
     /**
-     * @throws InvalidKeyException|RuntimeException
+     * @throws InvalidKeyException|FileCacheException
      */
     public function increment(
         string $key,
@@ -233,18 +237,18 @@ readonly class FileCacheDriver implements CacheInterface
 
         $content = stream_get_contents($fh);
         $data = $content !== '' && $content !== false ? unserialize($content) : null;
+        $now = $this->clock->now()->getTimestamp();
 
         if (!is_array($data)
             || !array_key_exists('value', $data)
             || !isset($data['created_at'])
-            || ($data['expires_at'] !== null && time() > $data['expires_at'])
+            || ($data['expires_at'] !== null && $now > $data['expires_at'])
         ) {
-            $expiresAt = $ttl > 0 ? time() + $ttl : null;
             $newValue = 1;
             $data = [
                 'value' => $newValue,
-                'expires_at' => $expiresAt,
-                'created_at' => time(),
+                'expires_at' => $ttl > 0 ? $now + $ttl : null,
+                'created_at' => $now,
             ];
         } else {
             $newValue = (int) $data['value'] + 1;
@@ -316,27 +320,29 @@ readonly class FileCacheDriver implements CacheInterface
 
     /**
      * @param array{value: mixed, expires_at: ?int, created_at: int} $data
+     *
+     * @throws FileCacheException
      */
     private function write(
         string $key,
         array $data,
-    ): bool {
+    ): void {
         $filePath = $this->getFilePath($key);
         $tempPath = $filePath . '.tmp.' . uniqid();
 
         $serialized = serialize($data);
 
-        if (file_put_contents($tempPath, $serialized, LOCK_EX) === false) {
-            return false;
+        $written = ErrorCapture::run($reason, fn (): int|false => file_put_contents($tempPath, $serialized, LOCK_EX));
+
+        if ($written === false) {
+            throw FileCacheException::writeFailed($filePath, $reason);
         }
 
-        if (!@rename($tempPath, $filePath)) {
+        if (!ErrorCapture::run($reason, fn (): bool => rename($tempPath, $filePath))) {
             @unlink($tempPath);
 
-            return false;
+            throw FileCacheException::writeFailed($filePath, $reason);
         }
-
-        return true;
     }
 
     /**
@@ -349,20 +355,26 @@ readonly class FileCacheDriver implements CacheInterface
             return false;
         }
 
-        return time() > $data['expires_at'];
+        return $this->clock->now()->getTimestamp() > $data['expires_at'];
     }
 
     /**
-     * @throws RuntimeException
+     * Creates the cache directory only when it is missing, so the common case
+     * (it already exists) never calls mkdir(). A concurrent creator winning the
+     * race is fine: mkdir() fails but the directory then exists.
+     *
+     * @throws FileCacheException
      */
     private function ensureDirectoryExists(): void
     {
-        @mkdir($this->config->path(), 0755, recursive: true);
+        $path = $this->config->path();
 
-        if (!is_dir($this->config->path())) {
-            throw new RuntimeException(
-                'Cache directory could not be created: ' . $this->config->path(),
-            );
+        if (is_dir($path)) {
+            return;
+        }
+
+        if (!ErrorCapture::run($reason, fn (): bool => mkdir($path, 0755, recursive: true)) && !is_dir($path)) {
+            throw FileCacheException::directoryNotCreatable($path, $reason);
         }
     }
 }

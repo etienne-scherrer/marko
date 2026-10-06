@@ -16,8 +16,10 @@ composer require marko/cache-redis
 This automatically installs `marko/cache`, `predis/predis`, and [`marko/encryption`](/docs/packages/encryption/). A non-empty `encryption.key` is required; reads and writes throw `TamperedCacheValueException` if the key is empty or a stored value's HMAC does not verify.
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['APP_KEY'] ?? '',
+    'key' => Env::string('APP_KEY', ''),
 ];
 ```
 
@@ -33,28 +35,29 @@ return [
 ];
 ```
 
-Redis connection is configured via `RedisConnection`:
+The package ships `config/cache-redis.php`, and its module binding builds a single shared `RedisConnection` from it. No hand-written binding is needed. Set the environment variables, or override the file in your app:
 
-```php title="module.php"
-use Marko\Cache\Redis\RedisConnection;
-use Psr\Container\ContainerInterface;
+```php title="config/cache-redis.php"
+use Marko\Config\Env;
 
-'bindings' => [
-    RedisConnection::class => RedisConnection::class,
-],
-'boot' => function (ContainerInterface $container): void {
-    $container->bind(
-        RedisConnection::class,
-        fn () => new RedisConnection(
-            host: $_ENV['REDIS_HOST'] ?? '127.0.0.1',
-            port: (int) ($_ENV['REDIS_PORT'] ?? 6379),
-            password: $_ENV['REDIS_PASSWORD'] ?? null,
-            database: (int) ($_ENV['REDIS_DATABASE'] ?? 0),
-            prefix: 'marko:cache:',
-        ),
-    );
-},
+return [
+    'host' => Env::string('REDIS_HOST', '127.0.0.1'),
+    'port' => Env::int('REDIS_PORT', 6379, min: 1, max: 65535),
+    'password' => Env::nullableString('REDIS_PASSWORD'),
+    'database' => Env::int('REDIS_CACHE_DATABASE', 0, min: 0),
+    'prefix' => Env::string('CACHE_PREFIX', 'marko:cache:'),
+];
 ```
+
+| Key | Env var | Default | Description |
+|---|---|---|---|
+| `host` | `REDIS_HOST` | `127.0.0.1` | Redis server host |
+| `port` | `REDIS_PORT` | `6379` | Redis server port (1-65535) |
+| `password` | `REDIS_PASSWORD` | `null` | Password for `AUTH`; `null` or empty means no authentication |
+| `database` | `REDIS_CACHE_DATABASE` | `0` | Redis database index (0 or higher) |
+| `prefix` | `CACHE_PREFIX` | `marko:cache:` | Prefix added to every cache key |
+
+The connection opens on first use. If Redis refuses it, a `RedisConnectionException` names the host and port and points back to this config file.
 
 ## Usage
 
@@ -93,7 +96,7 @@ class SessionStore
 
 ### Key Prefixing
 
-All keys are automatically prefixed (default: `marko:cache:`) to prevent collisions with other Redis data. The prefix is configurable via the `RedisConnection` constructor.
+All keys are automatically prefixed (default: `marko:cache:`) to prevent collisions with other Redis data. Change it with the `prefix` key in `config/cache-redis.php` (or `CACHE_PREFIX`).
 
 ## API Reference
 
@@ -112,14 +115,14 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 | `getMultiple(array $keys, mixed $default = null): iterable` | Retrieve multiple values at once |
 | `setMultiple(array $values, ?int $ttl = null): bool` | Store multiple key-value pairs at once |
 | `deleteMultiple(array $keys): bool` | Remove multiple entries at once |
-| `increment(string $key, int $ttl): int` | Atomically increment an integer counter; TTL applied only on first increment |
+| `increment(string $key, int $ttl): int` | Atomically increment an integer counter and apply its TTL in one step; an existing TTL is never reset |
 
 ### RedisConnection
 
 | Method | Description |
 |---|---|
 | `__construct(string $host, int $port, ?string $password, int $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), and key prefix (`marko:cache:`) |
-| `client(): ClientInterface` | Get the Predis client instance --- lazily connected on first call |
+| `client(): ClientInterface` | Get the Predis client instance --- connected on first call; throws `RedisConnectionException` if the connection is refused |
 | `disconnect(): void` | Disconnect and release the client instance |
 | `isConnected(): bool` | Check whether a client instance is currently active |
 
@@ -127,5 +130,7 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 
 - Values are serialized with PHP's `serialize()`, wrapped in an HMAC-SHA256 envelope, and stored as Redis strings. Reads verify the HMAC before deserializing; tampered or corrupted entries throw `TamperedCacheValueException`.
 - A `null` TTL falls back to `default_ttl` from config. A TTL greater than `0` uses Redis `SETEX` for native expiration. A TTL of `0` or less means the entry never expires.
-- `increment()` uses Redis `INCR` (atomic). The TTL is set only when the key is first created (count reaches `1`); subsequent increments do not reset it.
+- `increment()` runs `INCR` and `EXPIRE` together in one Lua script (`EVAL`), so a crash can never leave a counter without an expiry. The TTL is set when the key is created (count reaches `1`), and is restored if the key somehow has none. Subsequent increments do not reset it, so the window stays fixed.
+- Counters are plain integers, not signed envelopes, because Redis writes them itself. `get()`, `getItem()` and `getMultiple()` return them as `int`, which is what [`marko/ratelimiter`](/docs/packages/ratelimiter/) relies on. Only values that are entirely an optional `-` followed by digits are read this way. They are never passed to `unserialize()`, and every other value must still carry a valid HMAC.
 - `clear()` removes only keys matching the configured prefix --- other Redis data is not affected.
+- `getItem()` reports `expiresAt()` as the current time from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)) plus the key's remaining Redis TTL. Redis enforces the expiry itself, so moving a [`FakeClock`](/docs/packages/testing/#fakeclock) changes the reported time but never expires a key. Use [`marko/cache-array`](/docs/packages/cache-array/) to test expiry with a fake clock.

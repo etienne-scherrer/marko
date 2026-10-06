@@ -17,16 +17,50 @@ This automatically installs `marko/pubsub` and `marko/amphp`.
 
 ## Configuration
 
-Set environment variables or publish the config file:
+The package ships `config/pubsub-redis.php`, and its module binding builds a single shared `RedisPubSubConnection` from it. Set the environment variables, or override the file in your app:
+
+```php title="config/pubsub-redis.php"
+use Marko\Config\Env;
+
+return [
+    'host' => Env::string('PUBSUB_REDIS_HOST', '127.0.0.1'),
+    'port' => Env::int('PUBSUB_REDIS_PORT', 6379, min: 1, max: 65535),
+    'password' => Env::nullableString('PUBSUB_REDIS_PASSWORD'),
+    'database' => Env::int('PUBSUB_REDIS_DATABASE', 0, min: 0),
+];
+```
+
+| Key | Env var | Default | Description |
+|---|---|---|---|
+| `host` | `PUBSUB_REDIS_HOST` | `127.0.0.1` | Redis server host |
+| `port` | `PUBSUB_REDIS_PORT` | `6379` | Redis server port |
+| `password` | `PUBSUB_REDIS_PASSWORD` | `null` | Password for `AUTH`; `null` or empty means no authentication |
+| `database` | `PUBSUB_REDIS_DATABASE` | `0` | Redis database index |
+
+The channel prefix is not a Redis setting. It comes from `pubsub.prefix` in [`marko/pubsub`](/docs/packages/pubsub/) (`PUBSUB_PREFIX`, default `marko:`), which is the single source of truth: the publisher, the subscriber and `RedisPubSubConnection::$prefix` all use it.
 
 ```bash
-PUBSUB_REDIS_HOST=127.0.0.1
-PUBSUB_REDIS_PORT=6379
-PUBSUB_REDIS_PASSWORD=
-PUBSUB_REDIS_DATABASE=0
 PUBSUB_DRIVER=redis
 PUBSUB_PREFIX=marko:
 ```
+
+## Connections
+
+The publisher and the subscriber use separate Redis connections, because a Redis connection in subscribe mode cannot run other commands.
+
+- **Publishing** goes through one `RedisClient`, shared by the singleton `RedisPubSubConnection`.
+- **Subscribing** goes through one connection per `RedisSubscriber`. The module binding shares `SubscriberInterface` as a singleton, so a process has **one subscriber connection**, however many channels or patterns it subscribes to. 500 subscriptions are 500 `SUBSCRIBE`s on that one connection, not 500 connections.
+
+How the shared subscriber connection behaves:
+
+- It opens on the first `subscribe()` or `psubscribe()` and stays open for the life of the process. After the last subscription is cancelled the connection is reopened with no subscriptions, ready for the next one.
+- `cancel()` on a `Subscription` unsubscribes only that subscription's channels and patterns. Other subscriptions on the connection keep receiving. A channel that two subscriptions share stays subscribed until both are cancelled.
+- If the connection drops, it reconnects and re-subscribes every open channel and pattern. Messages published while it was disconnected are lost: Redis pub/sub delivers at most once.
+- If the reconnect fails (for example, Redis is down), every open subscription ends with an error. The next `subscribe()` opens a new connection.
+
+:::caution[Keep reading every subscription]
+Delivery uses backpressure: the connection waits until a message has been read before it reads the next one. A subscription you stop iterating therefore stalls delivery for **every** subscription in the process. Iterate each subscription in its own fiber (as `marko/broadcasting-amphp` does), and `cancel()` a subscription as soon as you no longer read it. A subscription to several channels reads all of them at once, so a quiet first channel never holds up the others.
+:::
 
 ## Usage
 
@@ -59,7 +93,7 @@ class NotificationService
 
 ### Subscribing
 
-Inject `SubscriberInterface` and iterate the `Subscription`. Pass multiple channel names to receive from all of them in a single subscription. Run the subscriber loop via the `pubsub:listen` command:
+Inject `SubscriberInterface` and iterate the `Subscription`. Pass multiple channel names to receive from all of them in a single subscription; its channels are read at the same time, and each channel's messages arrive in order. Run the subscriber loop via the `pubsub:listen` command:
 
 ```php
 use Marko\PubSub\SubscriberInterface;
@@ -102,7 +136,7 @@ marko pubsub:listen
 
 ### Pattern Subscriptions
 
-Use `psubscribe()` to receive messages from all channels matching a glob pattern:
+Use `psubscribe()` to receive messages from all channels matching a glob pattern (Redis `PSUBSCRIBE`). `marko/pubsub-redis` is the only built-in driver that supports pattern subscriptions:
 
 ```php
 $subscription = $this->subscriber->psubscribe('user.*');
@@ -140,29 +174,43 @@ public function stream(int $userId): StreamingResponse
 
 ## Customization
 
-Override the Redis connection by extending `RedisPubSubConnection` via a Preference:
+To change how the connection is built (for example, to connect over a Unix socket), extend `RedisPubSubConnection` and override `redisConfig()`, which both the client and the connector use:
 
 ```php
-use Amp\Redis\RedisClient;
+use Amp\Redis\RedisConfig;
 use Marko\PubSub\Redis\RedisPubSubConnection;
 
-class TlsRedisPubSubConnection extends RedisPubSubConnection
+class SocketRedisPubSubConnection extends RedisPubSubConnection
 {
-    protected function createClient(): RedisClient
+    protected function redisConfig(): RedisConfig
     {
-        return \Amp\Redis\createRedisClient("rediss://$this->host:$this->port");
+        return RedisConfig::fromUri("unix://$this->host")
+            ->withDatabase($this->database)
+            ->withPassword($this->password ?? '');
     }
 }
 ```
 
-Register it in your module:
+Bind it in your app module with the same config keys the package binding reads:
 
-```php title="module.php"
+```php title="app/mymodule/module.php"
+use Marko\Config\ConfigRepositoryInterface;
+use Marko\Core\Container\ContainerInterface;
 use Marko\PubSub\Redis\RedisPubSubConnection;
 
 return [
     'bindings' => [
-        RedisPubSubConnection::class => TlsRedisPubSubConnection::class,
+        RedisPubSubConnection::class => static function (ContainerInterface $container): RedisPubSubConnection {
+            $config = $container->get(ConfigRepositoryInterface::class);
+
+            return new SocketRedisPubSubConnection(
+                host: $config->getString(key: 'pubsub-redis.host'),
+                port: $config->getInt(key: 'pubsub-redis.port'),
+                password: $config->get(key: 'pubsub-redis.password'),
+                database: $config->getInt(key: 'pubsub-redis.database'),
+                prefix: $config->getString(key: 'pubsub.prefix'),
+            );
+        },
     ],
 ];
 ```
@@ -181,23 +229,34 @@ return [
 | Method | Description |
 |---|---|
 | `__construct(RedisPubSubConnection $redisPubSubConnection, PubSubConfig $pubSubConfig)` | Create a subscriber with a Redis connection and pub/sub configuration |
-| `subscribe(string ...$channels): Subscription` | Subscribe to one or more channels, returning an iterable `Subscription` |
-| `psubscribe(string ...$patterns): Subscription` | Subscribe to channels matching glob patterns, returning an iterable `Subscription` |
+| `subscribe(string ...$channels): Subscription` | Subscribe to one or more channels (Redis `SUBSCRIBE`), returning an iterable `Subscription`. Every call shares this subscriber's one Redis connection |
+| `psubscribe(string ...$patterns): Subscription` | Subscribe to channels matching glob patterns (Redis `PSUBSCRIBE`), returning an iterable `Subscription`. Shares the same connection |
+| `createAmphpSubscriber(): AmphpRedisSubscriberInterface` (protected) | Build the amphp subscriber behind the shared connection. Called once, on the first subscription; override it to substitute the subscriber in tests |
 
 ### RedisSubscription
 
 | Method | Description |
 |---|---|
 | `__construct(AmphpRedisSubscription[] $amphpSubscriptions, string $prefix, string[] $channels, string[] $patterns)` | Wrap one or more amphp subscriptions with prefix stripping and message conversion. Pass channel names for channel subscriptions, pattern names for pattern subscriptions. |
-| `getIterator(): Generator` | Yield `Message` instances from all subscriptions --- includes `pattern` and resolved `channel` for pattern subscriptions |
-| `cancel(): void` | Unsubscribe from all channels/patterns and stop iteration |
+| `getIterator(): Generator` | Yield `Message` instances from all subscriptions, reading every channel at once --- includes `pattern` and resolved `channel` for pattern subscriptions |
+| `cancel(): void` | Unsubscribe from this subscription's channels/patterns and stop iteration. Other subscriptions on the shared connection are not affected |
+
+### AmphpRedisSubscriberInterface, DefaultAmphpRedisSubscriber and SharedAmphpRedisSubscriber
+
+Internal abstraction over the `amphp/redis` subscriber, which multiplexes channels and patterns over one connection. `DefaultAmphpRedisSubscriber` is the production implementation. `SharedAmphpRedisSubscriber` creates it lazily, once, and is how `RedisSubscriber` sends every subscription over the same connection. The interface exists to allow substitution in tests.
+
+| Method | Description |
+|---|---|
+| `subscribe(string $channel): AmphpRedisSubscription` | Subscribe to one prefixed channel |
+| `subscribeToPattern(string $pattern): AmphpRedisSubscription` | Subscribe to one prefixed glob pattern |
 
 ### RedisPubSubConnection
 
 | Method | Description |
 |---|---|
-| `__construct(string $host, int $port, ?string $password, int $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), and channel prefix (`marko:`) |
+| `__construct(string $host, int $port, ?string $password, int $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), and channel prefix (`marko:`). The module binding fills these from `config/pubsub-redis.php` and `pubsub.prefix` |
 | `client(): RedisClient` | Get the Redis client instance --- lazily connected on first call |
 | `connector(): RedisConnector` | Get the Redis connector instance --- lazily created on first call |
-| `disconnect(): void` | Disconnect and release both client and connector instances |
+| `redisConfig(): RedisConfig` (protected) | Build the amphp `RedisConfig` (host, port, password, database) used by the client and connector |
+| `disconnect(): void` | Release both client and connector instances. A subscriber that already connected keeps its own connection open |
 | `isConnected(): bool` | Check whether a client instance is currently active |

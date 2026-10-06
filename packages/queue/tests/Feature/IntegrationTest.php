@@ -19,6 +19,7 @@ use Marko\Queue\Sync\NullFailedJobRepository;
 use Marko\Queue\Sync\SyncQueue;
 use Marko\Queue\Worker;
 use Marko\Queue\WorkerInterface;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 function createIntegrationJobEnvelope(
@@ -280,6 +281,7 @@ describe('Integration Tests', function (): void {
             $config,
             createIntegrationJobEnvelope(),
             createIntegrationNullContainer(),
+            new FakeClock(),
         );
 
         // 1. Push the job to the queue
@@ -467,7 +469,7 @@ describe('Integration Tests', function (): void {
             $config = createIntegrationQueueConfig();
 
             // Worker holds envelope + container; injects both into popped AsyncObserverJob
-            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container);
+            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container, new FakeClock());
             $worker->work(once: true);
 
             expect($capture->callCount)->toBe(1)
@@ -543,7 +545,7 @@ describe('Integration Tests', function (): void {
             $failedRepository = createIntegrationFailedJobRepository();
             $config = createIntegrationQueueConfig();
 
-            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container);
+            $worker = new Worker($queue, $failedRepository, $config, $envelope, $container, new FakeClock());
             $worker->work(once: true);
 
             expect($capture->event)->not->toBeNull()
@@ -579,6 +581,7 @@ describe('Integration Tests', function (): void {
             $config,
             createIntegrationJobEnvelope(),
             createIntegrationNullContainer(),
+            new FakeClock(),
         );
 
         // Push a job to the queue
@@ -587,7 +590,7 @@ describe('Integration Tests', function (): void {
         expect($queue->size())->toBe(1);
 
         // Create WorkCommand with our worker
-        $workCommand = new WorkCommand($worker);
+        $workCommand = new WorkCommand($worker, $config);
 
         // Create output stream
         $stream = fopen('php://memory', 'r+');
@@ -631,7 +634,7 @@ describe('Integration Tests', function (): void {
             ->and($queueConfig->queue())->toBe('default');
 
         // Verify SyncQueue implements QueueInterface
-        $syncQueue = new SyncQueue();
+        $syncQueue = new SyncQueue(createIntegrationNullContainer(), createIntegrationJobEnvelope());
 
         expect($syncQueue)->toBeInstanceOf(QueueInterface::class);
 
@@ -647,6 +650,7 @@ describe('Integration Tests', function (): void {
             $queueConfig,
             createIntegrationJobEnvelope(),
             createIntegrationNullContainer(),
+            new FakeClock(),
         );
 
         expect($worker)->toBeInstanceOf(WorkerInterface::class);

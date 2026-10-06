@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Latte\Engine;
+use Marko\Routing\UrlGeneratorInterface;
 use Marko\View\Latte\Extensions\SlotExtension;
 use Marko\View\Latte\LatteEngineFactory;
 use Marko\View\Latte\LatteViewConfig;
@@ -111,14 +112,18 @@ describe('SlotExtension', function (): void {
         $cacheDir = sys_get_temp_dir() . '/latte-slot-factory-' . bin2hex(random_bytes(8));
         mkdir($cacheDir, 0755, true);
 
-        $viewConfig = $this->createMock(ViewConfig::class);
+        $viewConfig = $this->createStub(ViewConfig::class);
         $viewConfig->method('cacheDirectory')->willReturn($cacheDir);
         $viewConfig->method('autoRefresh')->willReturn(true);
 
-        $latteViewConfig = $this->createMock(LatteViewConfig::class);
+        $latteViewConfig = $this->createStub(LatteViewConfig::class);
         $latteViewConfig->method('strictTypes')->willReturn(true);
 
-        $factory = new LatteEngineFactory($viewConfig, $latteViewConfig);
+        $factory = new LatteEngineFactory(
+            $viewConfig,
+            $latteViewConfig,
+            $this->createStub(UrlGeneratorInterface::class),
+        );
         $engine = $factory->create();
 
         $templatePath = $cacheDir . '/factory-slot.latte';

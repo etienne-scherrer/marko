@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Marko\Routing\Exceptions\RouteConflictException;
 use Marko\Routing\RouteCollection;
 use Marko\Routing\RouteDefinition;
+use Marko\Routing\RouteMatcher;
 
 it('stores RouteDefinition objects', function () {
     $collection = new RouteCollection();
@@ -247,4 +248,103 @@ it('returns routes filtered by HTTP method', function () {
         ->and($getRoutes)->toContain($getRoute2)
         ->and($getRoutes)->not->toContain($postRoute)
         ->and($getRoutes)->not->toContain($deleteRoute);
+});
+
+/**
+ * @param array<int, string> $paths
+ * @return array<int, string>
+ */
+function orderedPaths(
+    array $paths,
+): array {
+    $collection = new RouteCollection();
+
+    foreach ($paths as $index => $path) {
+        $collection->add(new RouteDefinition(method: 'GET', path: $path, controller: 'C', action: "a$index"));
+    }
+
+    return array_map(fn (RouteDefinition $route): string => $route->path, $collection->byMethod('GET'));
+}
+
+describe('precedence', function (): void {
+    it('orders static routes before dynamic routes regardless of registration order', function (): void {
+        expect(orderedPaths(['/shows/{id}', '/shows/live']))->toBe(['/shows/live', '/shows/{id}'])
+            ->and(orderedPaths(['/shows/live', '/shows/{id}']))->toBe(['/shows/live', '/shows/{id}']);
+    });
+
+    it('orders dynamic routes by descending static segment count', function (): void {
+        expect(orderedPaths(['/a/{x}/{y}', '/a/{x}/c']))->toBe(['/a/{x}/c', '/a/{x}/{y}'])
+            ->and(orderedPaths(['/a/{x}/c', '/a/{x}/{y}']))->toBe(['/a/{x}/c', '/a/{x}/{y}']);
+    });
+
+    it('orders dynamic routes with equal static segments by descending static prefix length', function (): void {
+        expect(orderedPaths(['/{a}/users/list', '/api/{b}/list']))->toBe(['/api/{b}/list', '/{a}/users/list']);
+    });
+
+    it('keeps registration order for routes of equal specificity', function (): void {
+        expect(orderedPaths(['/posts/{id}', '/posts/{slug}/x', '/pages/{id}']))
+            ->toBe(['/posts/{slug}/x', '/posts/{id}', '/pages/{id}']);
+    });
+
+    it('tries a constrained route before an unconstrained route with the same static segments', function (): void {
+        expect(orderedPaths(['/shows/{slug}', '/shows/{id:\d+}']))->toBe(['/shows/{id:\d+}', '/shows/{slug}']);
+    });
+
+    it('still orders by static segment count before constraints', function (): void {
+        expect(orderedPaths(['/a/{x:\d+}/{y}', '/a/{x}/c']))->toBe(['/a/{x}/c', '/a/{x:\d+}/{y}']);
+    });
+
+    it('tries catch-all routes after other dynamic routes', function (): void {
+        expect(orderedPaths(['/docs/{path*}', '/{section}/{page}', '/docs/{page}']))
+            ->toBe(['/docs/{page}', '/{section}/{page}', '/docs/{path*}']);
+    });
+
+    it('falls through to the next route when a constraint rejects the value', function (): void {
+        $collection = new RouteCollection();
+        $collection->add(new RouteDefinition(method: 'GET', path: '/shows/{slug}', controller: 'C', action: 'bySlug'));
+        $collection->add(new RouteDefinition(method: 'GET', path: '/shows/{id:\d+}', controller: 'C', action: 'byId'));
+        $matcher = new RouteMatcher($collection);
+
+        expect($matcher->match('GET', '/shows/42')->route->action)->toBe('byId')
+            ->and($matcher->match('GET', '/shows/abc')->route->action)->toBe('bySlug');
+    });
+
+    it('returns no match when the only candidate constraint rejects the value', function (): void {
+        $collection = new RouteCollection();
+        $collection->add(new RouteDefinition(method: 'GET', path: '/shows/{id:\d+}', controller: 'C', action: 'byId'));
+        $matcher = new RouteMatcher($collection);
+
+        expect($matcher->match('GET', '/shows/abc'))->toBeNull()
+            ->and($matcher->allowedMethods('/shows/abc'))->toBeEmpty();
+    });
+
+    it('re-sorts after a route is added', function (): void {
+        $collection = new RouteCollection();
+        $collection->add(new RouteDefinition(method: 'GET', path: '/shows/{id}', controller: 'C', action: 'show'));
+        $collection->byMethod('GET');
+        $collection->add(new RouteDefinition(method: 'GET', path: '/shows/live', controller: 'C', action: 'live'));
+
+        expect($collection->byMethod('GET')[0]->path)->toBe('/shows/live');
+    });
+
+    it('returns a static route by exact path lookup', function (): void {
+        $collection = new RouteCollection();
+        $static = new RouteDefinition(method: 'GET', path: '/shows/live', controller: 'C', action: 'live');
+        $dynamic = new RouteDefinition(method: 'GET', path: '/shows/{id}', controller: 'C', action: 'show');
+        $collection->add($dynamic);
+        $collection->add($static);
+
+        expect($collection->staticRoute('GET', '/shows/live'))->toBe($static)
+            ->and($collection->staticRoute('GET', '/shows/{id}'))->toBeNull()
+            ->and($collection->staticRoute('POST', '/shows/live'))->toBeNull();
+    });
+
+    it('lists the distinct methods that have routes', function (): void {
+        $collection = new RouteCollection();
+        $collection->add(new RouteDefinition(method: 'POST', path: '/a', controller: 'C', action: 'a'));
+        $collection->add(new RouteDefinition(method: 'GET', path: '/a', controller: 'C', action: 'b'));
+        $collection->add(new RouteDefinition(method: 'GET', path: '/b', controller: 'C', action: 'c'));
+
+        expect($collection->methods())->toBe(['POST', 'GET']);
+    });
 });

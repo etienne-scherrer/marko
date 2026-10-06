@@ -8,7 +8,9 @@ use Marko\Cache\Memory\Driver\ArrayCacheDriver;
 use Marko\RateLimiter\Contracts\RateLimiterInterface;
 use Marko\RateLimiter\RateLimiter;
 use Marko\RateLimiter\RateLimitResult;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
+use Psr\Clock\ClockInterface;
 
 function createRateLimitCacheConfig(
     int $defaultTtl = 3600,
@@ -22,15 +24,17 @@ function createRateLimitCacheConfig(
     return new CacheConfig($config);
 }
 
-function createRateLimitTestCache(): CacheInterface
-{
-    return new ArrayCacheDriver(createRateLimitCacheConfig());
+function createRateLimitTestCache(
+    ClockInterface $clock,
+): CacheInterface {
+    return new ArrayCacheDriver(createRateLimitCacheConfig(), $clock);
 }
 
 describe('RateLimiter', function (): void {
     beforeEach(function (): void {
-        $this->cache = createRateLimitTestCache();
-        $this->limiter = new RateLimiter($this->cache);
+        $this->clock = new FakeClock('2026-01-01 12:00:00 UTC');
+        $this->cache = createRateLimitTestCache($this->clock);
+        $this->limiter = new RateLimiter($this->cache, $this->clock);
     });
 
     it('implements RateLimiterInterface', function (): void {
@@ -90,7 +94,7 @@ describe('RateLimiter', function (): void {
     it('stores cache key with TTL for decay window', function (): void {
         $this->limiter->attempt('test-key', 5, 120);
 
-        $item = $this->cache->getItem('rate_limit.test-key');
+        $item = $this->cache->getItem('rate_limit.' . hash('xxh128', 'test-key'));
 
         expect($item->isHit())->toBeTrue()
             ->and($item->expiresAt())->not->toBeNull();
@@ -106,7 +110,7 @@ describe('RateLimiter', function (): void {
         expect($tooMany)->toBeTrue();
 
         // Verify it did not increment by checking the cache value directly
-        $attempts = (int) $this->cache->get('rate_limit.test-key', 0);
+        $attempts = $this->cache->get('rate_limit.' . hash('xxh128', 'test-key'), 0);
 
         expect($attempts)->toBe(3);
     });
@@ -178,19 +182,45 @@ describe('RateLimiter', function (): void {
             ->and($result3->remaining())->toBe(2);
     });
 
+    it('limits an IPv6 key without throwing InvalidKeyException', function (): void {
+        $first = $this->limiter->attempt('2001:db8::1', 1, 60);
+        $second = $this->limiter->attempt('2001:db8::1', 1, 60);
+
+        expect($first->allowed())->toBeTrue()
+            ->and($second->allowed())->toBeFalse()
+            ->and($second->retryAfter())->toBeGreaterThan(0);
+    });
+
+    it('hashes the caller key into a cache-safe key', function (): void {
+        $this->limiter->attempt('login|user@example.com:{x}/y', 5, 60);
+
+        expect($this->cache->has('rate_limit.' . hash('xxh128', 'login|user@example.com:{x}/y')))->toBeTrue();
+    });
+
+    it('reports tooManyAttempts and clears for an IPv6 key', function (): void {
+        $this->limiter->attempt('2001:db8::1', 1, 60);
+
+        expect($this->limiter->tooManyAttempts('2001:db8::1', 1))->toBeTrue();
+
+        $this->limiter->clear('2001:db8::1');
+
+        expect($this->limiter->tooManyAttempts('2001:db8::1', 1))->toBeFalse();
+    });
+
     it('increments attempts atomically via the cache increment on attempt()', function (): void {
         $incrementCalled = false;
         $incrementKey = null;
 
-        $cache = new class ($incrementCalled, $incrementKey) extends ArrayCacheDriver
+        $cache = new class ($incrementCalled, $incrementKey, $this->clock) extends ArrayCacheDriver
         {
             public function __construct(
                 /** @noinspection PhpPropertyOnlyWrittenInspection - Reference property modifies external variable */
                 private bool &$incrementCalled,
                 /** @noinspection PhpPropertyOnlyWrittenInspection - Reference property modifies external variable */
                 private ?string &$incrementKey,
+                ClockInterface $clock,
             ) {
-                parent::__construct(createRateLimitCacheConfig());
+                parent::__construct(createRateLimitCacheConfig(), $clock);
             }
 
             public function increment(
@@ -204,10 +234,50 @@ describe('RateLimiter', function (): void {
             }
         };
 
-        $limiter = new RateLimiter($cache);
+        $limiter = new RateLimiter($cache, $this->clock);
         $limiter->attempt('test-key', 5, 60);
 
         expect($incrementCalled)->toBeTrue()
-            ->and($incrementKey)->toBe('rate_limit.test-key');
+            ->and($incrementKey)->toBe('rate_limit.' . hash('xxh128', 'test-key'));
+    });
+    it('computes retry after from the clock', function (): void {
+        $this->limiter->attempt('clock-key', 1, 60);
+
+        $this->clock->travel('+20 seconds');
+
+        expect($this->limiter->attempt('clock-key', 1, 60)->retryAfter())->toBe(40);
+    });
+
+    it('counts retry after down as the clock advances', function (): void {
+        $this->limiter->attempt('clock-key', 1, 60);
+        $this->clock->travel('+1 second');
+        $first = $this->limiter->attempt('clock-key', 1, 60)->retryAfter();
+
+        $this->clock->travel('+58 seconds');
+        $second = $this->limiter->attempt('clock-key', 1, 60)->retryAfter();
+
+        expect($first)->toBe(59)
+            ->and($second)->toBe(1);
+    });
+
+    it('reports zero retry after on the last second of the window', function (): void {
+        $this->limiter->attempt('clock-key', 1, 60);
+
+        $this->clock->travel('+60 seconds');
+
+        $result = $this->limiter->attempt('clock-key', 1, 60);
+
+        expect($result->allowed())->toBeFalse()
+            ->and($result->retryAfter())->toBe(0);
+    });
+
+    it('allows attempts again once the clock passes the decay window', function (): void {
+        $this->limiter->attempt('clock-key', 1, 60);
+        expect($this->limiter->attempt('clock-key', 1, 60)->allowed())->toBeFalse();
+
+        $this->clock->travel('+61 seconds');
+
+        expect($this->limiter->attempt('clock-key', 1, 60)->allowed())->toBeTrue()
+            ->and($this->limiter->tooManyAttempts('clock-key', 2))->toBeFalse();
     });
 });

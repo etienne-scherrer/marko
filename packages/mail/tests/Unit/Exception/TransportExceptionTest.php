@@ -45,3 +45,17 @@ test('TransportException has unexpectedResponse factory method', function () {
         ->getContext()->toBe('Server responded with code 550: 5.1.1 Mailbox not found')
         ->getSuggestion()->toBe('Check the recipient address and server error message for details.');
 });
+
+test('TransportException connectionFailed appends the reason to the context', function () {
+    $exception = TransportException::connectionFailed('smtp.example.com', 587, 'Connection refused');
+
+    expect($exception->getContext())
+        ->toBe('Could not establish connection to smtp.example.com:587 (Connection refused)');
+});
+
+test('TransportException tlsFailed appends the reason to the context', function () {
+    $exception = TransportException::tlsFailed('smtp.example.com', 'SSL routines::wrong version number');
+
+    expect($exception->getContext())
+        ->toBe('Could not establish secure connection to smtp.example.com (SSL routines::wrong version number)');
+});

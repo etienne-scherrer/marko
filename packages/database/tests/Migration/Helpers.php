@@ -15,6 +15,8 @@ use Marko\Database\Schema\Column;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Index;
 use Marko\Database\Schema\Table;
+use Marko\Testing\Fake\FakeClock;
+use Psr\Clock\ClockInterface;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -213,6 +215,17 @@ final class Helpers
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
     }
 
@@ -273,10 +286,11 @@ final class Helpers
         ?SchemaDiff $diff = null,
         array $upStatements = ['CREATE TABLE "posts" (id INT)'],
         array $downStatements = ['DROP TABLE "posts"'],
+        ClockInterface $clock = new FakeClock('2026-10-05 12:00:00'),
     ): array {
         $sqlGenerator = self::createSqlGeneratorStub($upStatements, $downStatements);
         $paths = new ProjectPaths($tempDir);
-        $generator = new MigrationGenerator($sqlGenerator, $paths);
+        $generator = new MigrationGenerator($sqlGenerator, $paths, $clock);
         $diff ??= self::createPostsTableDiff();
 
         $paths = $generator->generate($diff);

@@ -71,6 +71,7 @@ function samplePayload(): array
                 name: 'cache:clear',
                 description: 'Clears the cache',
                 aliases: ['cc'],
+                flags: ['force'],
             ),
         ],
     ];
@@ -192,7 +193,8 @@ describe('DiscoveryCache', function (): void {
                 ->and($loaded['commands'][0]->commandClass)->toBe('App\CacheCommand')
                 ->and($loaded['commands'][0]->name)->toBe('cache:clear')
                 ->and($loaded['commands'][0]->description)->toBe('Clears the cache')
-                ->and($loaded['commands'][0]->aliases)->toBe(['cc']);
+                ->and($loaded['commands'][0]->aliases)->toBe(['cc'])
+                ->and($loaded['commands'][0]->flags)->toBe(['force']);
         },
     );
 
@@ -358,6 +360,13 @@ describe('DiscoveryCache', function (): void {
             );
             expect(fn () => $cache->load())->toThrow(DiscoveryCacheException::class);
 
+            // Command flags missing (cache written before flags existed)
+            file_put_contents(
+                $path,
+                "<?php return ['version' => $version, 'preferences' => [], 'plugins' => [], 'observers' => [], 'commands' => [['commandClass' => 'App\\\\Cmd', 'name' => 'cmd', 'description' => '', 'aliases' => []]]];",
+            );
+            expect(fn () => $cache->load())->toThrow(DiscoveryCacheException::class);
+
             // Plugin beforeMethods as string
             file_put_contents(
                 $path,
@@ -403,4 +412,92 @@ describe('DiscoveryCache', function (): void {
                 ->and($exception->getSuggestion())->toContain('discovery:clear');
         },
     );
+
+    it('includes the reason in the notWritable context when one is given', function (): void {
+        $exception = DiscoveryCacheException::notWritable('/x/discovery.php', 'Permission denied');
+
+        expect($exception->getContext())->toContain('/x/discovery.php')
+            ->and($exception->getContext())->toContain('Permission denied');
+    });
+
+    it('keeps the notWritable context unchanged when no reason is given', function (): void {
+        $exception = DiscoveryCacheException::notWritable('/x/discovery.php');
+
+        expect($exception->getContext())->toBe("While writing the discovery cache to '/x/discovery.php'");
+    });
+
+    it(
+        'throws notWritable with the operating system reason when the cache directory is read-only',
+        function (): void {
+            $setup = makeCacheSetup($this->tmpDir);
+            mkdir($this->tmpDir, 0555, true);
+
+            try {
+                if (function_exists('posix_geteuid') && posix_geteuid() === 0 || is_writable($this->tmpDir)) {
+                    $this->markTestSkipped('Directory permissions are not enforced for this user (e.g. root).');
+                }
+
+                $exception = null;
+                try {
+                    $setup['cache']->write(emptyPayload());
+                } catch (DiscoveryCacheException $e) {
+                    $exception = $e;
+                }
+
+                expect($exception)->not->toBeNull()
+                    ->and($exception->getContext())->toMatch('/Permission denied|Failed to open stream/i');
+            } finally {
+                chmod($this->tmpDir, 0755);
+            }
+        },
+    );
+
+    it('emits no PHP warning when the cache file cannot be written', function (): void {
+        $setup = makeCacheSetup($this->tmpDir);
+        mkdir($this->tmpDir, 0555, true);
+        $warnings = [];
+        set_error_handler(function (int $errno, string $errstr) use (&$warnings): bool {
+            if (error_reporting() & $errno) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            if (function_exists('posix_geteuid') && posix_geteuid() === 0 || is_writable($this->tmpDir)) {
+                $this->markTestSkipped('Directory permissions are not enforced for this user (e.g. root).');
+            }
+
+            try {
+                $setup['cache']->write(emptyPayload());
+            } catch (DiscoveryCacheException) {
+            }
+
+            expect($warnings)->toBeEmpty();
+        } finally {
+            restore_error_handler();
+            chmod($this->tmpDir, 0755);
+        }
+    });
+
+    it('does not report a stale earlier error as the reason', function (): void {
+        $setup = makeCacheSetup($this->tmpDir);
+        // Leave a stale error behind, then make the write fail without a fresh PHP error
+        set_error_handler(null);
+        @file_get_contents('/nonexistent/stale_marker_' . uniqid('', true));
+        restore_error_handler();
+        mkdir($this->tmpDir, 0755, true);
+        mkdir($setup['path'], 0755, true); // rename() onto a directory fails
+
+        $exception = null;
+        try {
+            $setup['cache']->write(emptyPayload());
+        } catch (DiscoveryCacheException $e) {
+            $exception = $e;
+        }
+
+        expect($exception)->not->toBeNull()
+            ->and($exception->getContext())->not->toContain('stale_marker_');
+    });
 });

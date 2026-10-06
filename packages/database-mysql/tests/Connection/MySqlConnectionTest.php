@@ -8,10 +8,10 @@ use Marko\Database\Config\DatabaseConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
-use Marko\Database\Exceptions\TransactionException;
 use Marko\Database\MySql\Connection\MySqlConnection;
 use Marko\Database\MySql\Exceptions\ConnectionException;
 use PDO;
+use PDOException;
 use RuntimeException;
 
 describe('MySqlConnection', function (): void {
@@ -20,6 +20,54 @@ describe('MySqlConnection', function (): void {
         $connection = new MySqlConnection($config);
 
         expect($connection)->toBeInstanceOf(ConnectionInterface::class);
+    });
+
+    it('supports RETURNING on MariaDB 10.5 and later', function (): void {
+        expect(connectionReportingVersion('10.5.0-MariaDB')->supportsReturning())->toBeTrue()
+            ->and(connectionReportingVersion('5.5.5-10.11.8-MariaDB-ubu2204')->supportsReturning())->toBeTrue()
+            ->and(connectionReportingVersion('11.8.7-MariaDB-ubu2404')->supportsReturning())->toBeTrue();
+    });
+
+    it('does not support RETURNING on MariaDB before 10.5', function (): void {
+        expect(connectionReportingVersion('10.4.34-MariaDB')->supportsReturning())->toBeFalse();
+    });
+
+    it('does not support RETURNING on MySQL', function (): void {
+        expect(connectionReportingVersion('8.4.3')->supportsReturning())->toBeFalse()
+            ->and(connectionReportingVersion('11.0.0')->supportsReturning())->toBeFalse();
+    });
+
+    it('reads the server version once for supportsReturning and server', function (): void {
+        $versionQueries = 0;
+        $connection = connectionReportingVersion('11.8.7-MariaDB', $versionQueries);
+
+        $connection->supportsReturning();
+        $connection->supportsReturning();
+        $isMariaDb = $connection->server()->isMariaDb();
+
+        expect($versionQueries)->toBe(1)
+            ->and($isMariaDb)->toBeTrue()
+            ->and($connection->server())->toBe($connection->server());
+    });
+
+    it('does not connect until supportsReturning is asked', function (): void {
+        $connection = connectionReportingVersion('11.8.7-MariaDB');
+
+        $connection->server();
+        $connectedBefore = $connection->isConnected();
+        $connection->supportsReturning();
+
+        expect($connectedBefore)->toBeFalse()
+            ->and($connection->isConnected())->toBeTrue();
+    });
+
+    it('quotes identifiers with backticks without connecting', function (): void {
+        $connection = new MySqlConnection(createTestDatabaseConfig());
+
+        expect($connection->quoteIdentifier('group'))->toBe('`group`')
+            ->and($connection->quoteIdentifier('permissions.key'))->toBe('`permissions`.`key`')
+            ->and($connection->quoteIdentifier('we`ird'))->toBe('`we``ird`')
+            ->and($connection->isConnected())->toBeFalse();
     });
 
     it('constructs proper MySQL DSN from config', function (): void {
@@ -122,7 +170,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 // Create a test table
                 $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)');
                 $pdo->exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')");
@@ -168,7 +219,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
 
                 return $pdo;
@@ -230,7 +284,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                return new PDO('sqlite::memory:', options: $options);
+                return new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
             }
         };
 
@@ -267,7 +324,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                return new PDO('sqlite::memory:', options: $options);
+                return new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
             }
         };
 
@@ -290,7 +350,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -319,7 +382,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -346,7 +412,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                return new PDO('sqlite::memory:', options: $options);
+                return new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
             }
         };
 
@@ -377,7 +446,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -402,7 +474,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -433,7 +508,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -467,7 +545,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -491,7 +572,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, value TEXT)');
 
                 return $pdo;
@@ -557,26 +641,6 @@ describe('MySqlConnection', function (): void {
         expect($options)->not->toHaveKey(PDO\Mysql::ATTR_SSL_CA);
     });
 
-    it('prevents nested transactions (throws exception)', function (): void {
-        $config = createTestDatabaseConfig();
-        $connection = new class ($config) extends MySqlConnection
-        {
-            protected function createPdo(
-                string $dsn,
-                string $username,
-                string $password,
-                array $options,
-            ): PDO {
-                return new PDO('sqlite::memory:', options: $options);
-            }
-        };
-
-        $connection->beginTransaction();
-
-        expect(fn () => $connection->beginTransaction())
-            ->toThrow(TransactionException::class, 'Nested transactions are not supported');
-    });
-
     it('JSON-encodes array bindings instead of casting them to the string "Array"', function (): void {
         $config = createTestDatabaseConfig();
         $connection = new class ($config) extends MySqlConnection
@@ -587,7 +651,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE items (id INTEGER PRIMARY KEY, metadata TEXT)');
 
                 return $pdo;
@@ -616,7 +683,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE flags (id INTEGER PRIMARY KEY, active INTEGER)');
 
                 return $pdo;
@@ -640,7 +710,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)');
 
                 return $pdo;
@@ -664,7 +737,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER)');
 
                 return $pdo;
@@ -689,7 +765,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE flags (id INTEGER PRIMARY KEY, active INTEGER)');
 
                 return $pdo;
@@ -713,7 +792,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE items (id INTEGER PRIMARY KEY, metadata TEXT)');
 
                 return $pdo;
@@ -742,7 +824,10 @@ describe('MySqlConnection', function (): void {
                 string $password,
                 array $options,
             ): PDO {
-                $pdo = new PDO('sqlite::memory:', options: $options);
+                $pdo = new PDO(
+                    'sqlite::memory:',
+                    options: array_diff_key($options, [PDO\Mysql::ATTR_INIT_COMMAND => true]),
+                );
                 $pdo->exec('CREATE TABLE items (id INTEGER PRIMARY KEY, metadata TEXT)');
 
                 return $pdo;
@@ -753,5 +838,84 @@ describe('MySqlConnection', function (): void {
             'INSERT INTO items (metadata) VALUES (?)',
             [[NAN]],
         ))->toThrow(ConnectionException::class, "Failed to JSON-encode array bound to parameter '1'");
+    });
+
+    it('sets the session time zone to +00:00 on connect when the database timezone is UTC', function (): void {
+        $options = connectAndCapturePdoOptions(createTestDatabaseConfig());
+
+        expect($options[PDO\Mysql::ATTR_INIT_COMMAND])->toBe("SET time_zone = '+00:00'");
+    });
+
+    it('sets the session time zone to the named zone on connect', function (): void {
+        $options = connectAndCapturePdoOptions(createTestDatabaseConfig(timezone: 'America/New_York'));
+
+        expect($options[PDO\Mysql::ATTR_INIT_COMMAND])->toBe("SET time_zone = 'America/New_York'");
+    });
+
+    it('sets the session time zone to the fixed offset of an offset or abbreviation timezone', function (): void {
+        $offset = connectAndCapturePdoOptions(createTestDatabaseConfig(timezone: '-03:30'));
+        $abbreviation = connectAndCapturePdoOptions(createTestDatabaseConfig(timezone: 'CEST'));
+
+        expect($offset[PDO\Mysql::ATTR_INIT_COMMAND])->toBe("SET time_zone = '-03:30'")
+            ->and($abbreviation[PDO\Mysql::ATTR_INIT_COMMAND])->toBe("SET time_zone = '+02:00'");
+    });
+
+    it('sets the session time zone again after a reconnect', function (): void {
+        $connection = new class (createTestDatabaseConfig(timezone: 'Europe/Paris')) extends MySqlConnection
+        {
+            /** @var list<string> */
+            public array $initCommands = [];
+
+            protected function createPdo(
+                string $dsn,
+                string $username,
+                string $password,
+                array $options,
+            ): PDO {
+                $this->initCommands[] = $options[PDO\Mysql::ATTR_INIT_COMMAND];
+
+                return new PDO('sqlite::memory:');
+            }
+        };
+
+        $connection->connect();
+        $connection->disconnect();
+        $connection->connect();
+
+        expect($connection->initCommands)->toBe([
+            "SET time_zone = 'Europe/Paris'",
+            "SET time_zone = 'Europe/Paris'",
+        ]);
+    });
+
+    it('throws ConnectionException naming the zone when the server does not know the time zone', function (): void {
+        $connection = new class (createTestDatabaseConfig(timezone: 'America/New_York')) extends MySqlConnection
+        {
+            protected function createPdo(
+                string $dsn,
+                string $username,
+                string $password,
+                array $options,
+            ): PDO {
+                $exception = new PDOException(
+                    "SQLSTATE[HY000] [1298] Unknown or incorrect time zone: 'America/New_York'",
+                    1298,
+                );
+                $exception->errorInfo = ['HY000', 1298, "Unknown or incorrect time zone: 'America/New_York'"];
+
+                throw $exception;
+            }
+        };
+
+        try {
+            $connection->connect();
+            expect(true)->toBeFalse('Should have thrown ConnectionException');
+        } catch (ConnectionException $e) {
+            expect($e->getMessage())->toContain("'America/New_York'")
+                ->and($e->getSuggestion())->toContain('mysql_tzinfo_to_sql')
+                ->and($e->getSuggestion())->toContain('UTC')
+                ->and($e->getPrevious())->toBeInstanceOf(PDOException::class)
+                ->and($connection->isConnected())->toBeFalse();
+        }
     });
 });

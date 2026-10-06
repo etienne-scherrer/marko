@@ -57,6 +57,10 @@ readonly class TokenService
 }
 ```
 
+### Encrypting Entity Columns
+
+To store an entity property encrypted, mark it `#[Encrypted]` instead of encrypting and decrypting by hand in a repository. `marko/database` encrypts on save and decrypts on hydration using the bound `EncryptorInterface`. See [Encrypted Columns](/docs/packages/database/#encrypted-columns).
+
 ### Configuration
 
 The `EncryptionConfig` class provides typed access to encryption configuration values:
@@ -81,9 +85,11 @@ class MyService
 Set the encryption key and cipher in your config:
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['ENCRYPTION_KEY'] ?? '',
-    'cipher' => $_ENV['ENCRYPTION_CIPHER'] ?? 'aes-256-gcm',
+    'key' => Env::string('ENCRYPTION_KEY', ''),
+    'cipher' => Env::string('ENCRYPTION_CIPHER', 'aes-256-gcm'),
 ];
 ```
 

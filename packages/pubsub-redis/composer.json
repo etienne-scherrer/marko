@@ -5,13 +5,15 @@
     "type": "marko-module",
     "require": {
         "php": "^8.5",
+        "amphp/pipeline": "^1",
         "amphp/redis": "^2.0",
         "marko/core": "self.version",
         "marko/config": "self.version",
         "marko/pubsub": "self.version"
     },
     "require-dev": {
-        "pestphp/pest": "^4.0"
+        "pestphp/pest": "^4.0",
+        "marko/testing": "self.version"
     },
     "autoload": {
         "psr-4": {

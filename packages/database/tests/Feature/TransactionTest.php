@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Database\Tests\Feature;
 
+use Closure;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
@@ -73,6 +74,17 @@ describe('Transaction Handling', function (): void {
                 return 'sqlite';
             }
 
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+
             public function beginTransaction(): void
             {
                 $this->inTransaction = true;
@@ -110,6 +122,8 @@ describe('Transaction Handling', function (): void {
 
             public function transaction(
                 callable $callback,
+                int $attempts = 1,
+                int|Closure|null $backoff = null,
             ): mixed {
                 $this->beginTransaction();
 
@@ -124,6 +138,15 @@ describe('Transaction Handling', function (): void {
                     throw $e;
                 }
             }
+
+            public function transactionLevel(): int
+            {
+                return 0;
+            }
+
+            public function afterCommit(callable $callback): void {}
+
+            public function afterRollback(callable $callback): void {}
         };
 
         // Test commit flow
@@ -203,6 +226,17 @@ describe('Transaction Handling', function (): void {
                 return 'sqlite';
             }
 
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+
             public function beginTransaction(): void
             {
                 $this->transactionLevel++;
@@ -234,6 +268,8 @@ describe('Transaction Handling', function (): void {
 
             public function transaction(
                 callable $callback,
+                int $attempts = 1,
+                int|Closure|null $backoff = null,
             ): mixed {
                 $this->beginTransaction();
 
@@ -248,6 +284,15 @@ describe('Transaction Handling', function (): void {
                     throw $e;
                 }
             }
+
+            public function transactionLevel(): int
+            {
+                return 0;
+            }
+
+            public function afterCommit(callable $callback): void {}
+
+            public function afterRollback(callable $callback): void {}
         };
 
         $connection->beginTransaction();
@@ -342,6 +387,17 @@ describe('Transaction Handling', function (): void {
                 return 'sqlite';
             }
 
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+
             public function beginTransaction(): void {}
 
             public function commit(): void
@@ -361,9 +417,20 @@ describe('Transaction Handling', function (): void {
 
             public function transaction(
                 callable $callback,
+                int $attempts = 1,
+                int|Closure|null $backoff = null,
             ): null {
                 return null;
             }
+
+            public function transactionLevel(): int
+            {
+                return 0;
+            }
+
+            public function afterCommit(callable $callback): void {}
+
+            public function afterRollback(callable $callback): void {}
         };
 
         expect(fn () => $connection->commit())

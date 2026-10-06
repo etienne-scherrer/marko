@@ -4,13 +4,29 @@ declare(strict_types=1);
 
 namespace Marko\Queue\Sync;
 
+use Marko\Core\Container\ContainerInterface;
+use Marko\Queue\ContainerAwareJobInterface;
 use Marko\Queue\Exceptions\JobFailedException;
+use Marko\Queue\JobEnvelope;
 use Marko\Queue\JobInterface;
 use Marko\Queue\QueueInterface;
+use Random\RandomException;
 use Throwable;
 
-class SyncQueue implements QueueInterface
+readonly class SyncQueue implements QueueInterface
 {
+    public function __construct(
+        private ContainerInterface $container,
+        private JobEnvelope $jobEnvelope,
+    ) {}
+
+    /**
+     * Run the job immediately. Container-aware jobs (such as AsyncObserverJob)
+     * get the container and job envelope first, exactly as the Worker gives them,
+     * and release them once handle() returns or throws.
+     *
+     * @throws JobFailedException|RandomException
+     */
     public function push(
         JobInterface $job,
         ?string $queue = null,
@@ -19,15 +35,27 @@ class SyncQueue implements QueueInterface
         $job->setId($id);
         $job->incrementAttempts();
 
+        if ($job instanceof ContainerAwareJobInterface) {
+            $job->setContainer($this->container);
+            $job->setJobEnvelope($this->jobEnvelope);
+        }
+
         try {
             $job->handle();
         } catch (Throwable $e) {
             throw JobFailedException::fromException($job::class, $e);
+        } finally {
+            if ($job instanceof ContainerAwareJobInterface) {
+                $job->releaseContainer();
+            }
         }
 
         return $id;
     }
 
+    /**
+     * @throws JobFailedException|RandomException
+     */
     public function later(
         int $delay,
         JobInterface $job,

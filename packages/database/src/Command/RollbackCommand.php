@@ -12,24 +12,22 @@ use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Migration\Migrator;
 
 /** @noinspection PhpUnused */
-#[Command(name: 'db:rollback', description: 'Rollback the last batch of migrations')]
+#[Command(name: 'db:rollback', description: 'Rollback the last batch of migrations', flags: ['force'])]
 readonly class RollbackCommand implements CommandInterface
 {
     public function __construct(
         private Migrator $migrator,
-        private bool $isProduction = false,
+        private DestructiveCommandGuard $destructiveCommandGuard,
     ) {}
 
     public function execute(
         Input $input,
         Output $output,
     ): int {
-        // Block in production - no --force flag support
-        if ($this->isProduction) {
-            $output->writeLine('Error: Rollback cannot be run in production environment.');
-            $output->writeLine('Rollback is never allowed in production, even with --force.');
+        $refusal = $this->destructiveCommandGuard->check('db:rollback', 'rolls back migrations', $input, $output);
 
-            return 1;
+        if ($refusal !== null) {
+            return $refusal;
         }
 
         // Parse --step option
@@ -82,14 +80,8 @@ readonly class RollbackCommand implements CommandInterface
     private function parseStepOption(
         Input $input,
     ): int {
-        foreach ($input->getArguments() as $arg) {
-            if (str_starts_with($arg, '--step=')) {
-                $value = (int) substr($arg, 7);
+        $step = $input->getOption('step');
 
-                return max(1, $value);
-            }
-        }
-
-        return 1;
+        return $step === null ? 1 : max(1, (int) $step);
     }
 }

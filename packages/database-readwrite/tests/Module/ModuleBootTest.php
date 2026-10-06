@@ -40,8 +40,9 @@ function makeTestConnection(): ConnectionInterface&TransactionInterface
             return 0;
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -55,6 +56,17 @@ function makeTestConnection(): ConnectionInterface&TransactionInterface
             return 'mysql';
         }
 
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
+
         public function beginTransaction(): void {}
 
         public function commit(): void {}
@@ -66,10 +78,22 @@ function makeTestConnection(): ConnectionInterface&TransactionInterface
             return false;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
             return $callback();
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 }
 
@@ -84,18 +108,20 @@ function makeConfigRepository(
     string $driver = 'readwrite',
     string $readStrategy = 'random',
     array $extraReads = [],
+    ?string $timezone = null,
 ): ConfigRepositoryInterface {
     $reads = array_merge(
         [['driver' => 'mysql', 'host' => 'read-host-1', 'port' => 3306, 'database' => 'db', 'username' => 'root', 'password' => '']],
         $extraReads,
     );
 
-    return new readonly class ($driver, $readStrategy, $reads) implements ConfigRepositoryInterface
+    return new readonly class ($driver, $readStrategy, $reads, $timezone) implements ConfigRepositoryInterface
     {
         public function __construct(
             private string $driver,
             private string $readStrategy,
             private array $reads,
+            private ?string $timezone,
         ) {}
 
         public function get(
@@ -104,6 +130,7 @@ function makeConfigRepository(
         ): mixed {
             return match ($key) {
                 'database.driver' => $this->driver,
+                'database.timezone' => $this->timezone ?? throw new RuntimeException('database.timezone is not set'),
                 'database.connections' => [
                     'write' => ['driver' => 'mysql', 'host' => 'write-host', 'port' => 3306, 'database' => 'db', 'username' => 'root', 'password' => ''],
                     'read' => $this->reads,
@@ -117,7 +144,7 @@ function makeConfigRepository(
             string $key,
             ?string $scope = null,
         ): bool {
-            return true;
+            return $key !== 'database.timezone' || $this->timezone !== null;
         }
 
         public function getString(
@@ -155,20 +182,24 @@ function makeConfigRepository(
             return [];
         }
 
-        public function all(?string $scope = null): array
-        {
+        public function all(
+            ?string $scope = null,
+        ): array {
             return [];
         }
 
-        public function withScope(string $scope): ConfigRepositoryInterface
-        {
+        public function withScope(
+            string $scope,
+        ): ConfigRepositoryInterface {
             return $this;
         }
     };
 }
 
-function makeTestContainer(ConfigRepositoryInterface $config, ConnectionFactoryInterface $factory): ContainerInterface
-{
+function makeTestContainer(
+    ConfigRepositoryInterface $config,
+    ConnectionFactoryInterface $factory,
+): ContainerInterface {
     return new class ($config, $factory) implements ContainerInterface
     {
         /** @var array<string, object> */
@@ -179,8 +210,9 @@ function makeTestContainer(ConfigRepositoryInterface $config, ConnectionFactoryI
             private readonly ConnectionFactoryInterface $factory,
         ) {}
 
-        public function get(string $id): mixed
-        {
+        public function get(
+            string $id,
+        ): mixed {
             return match ($id) {
                 ConfigRepositoryInterface::class => $this->config,
                 ConnectionFactoryInterface::class => $this->factory,
@@ -188,8 +220,9 @@ function makeTestContainer(ConfigRepositoryInterface $config, ConnectionFactoryI
             };
         }
 
-        public function has(string $id): bool
-        {
+        public function has(
+            string $id,
+        ): bool {
             return true;
         }
 
@@ -202,16 +235,18 @@ function makeTestContainer(ConfigRepositoryInterface $config, ConnectionFactoryI
             $this->registered[$id] = $instance;
         }
 
-        public function call(Closure $callable): mixed
-        {
+        public function call(
+            Closure $callable,
+        ): mixed {
             return $callable($this);
         }
 
         /**
          * @return array<string, object>
          */
-        public function resolvedInstances(?string $interface = null): array
-        {
+        public function resolvedInstances(
+            ?string $interface = null,
+        ): array {
             return [];
         }
     };
@@ -229,8 +264,9 @@ function makeSpyFactory(): ConnectionFactoryInterface
         /** @var array<ConnectionInterface> */
         public array $createdConnections = [];
 
-        public function make(DatabaseConfig $config): ConnectionInterface
-        {
+        public function make(
+            DatabaseConfig $config,
+        ): ConnectionInterface {
             $this->callCount++;
             $this->receivedConfigs[] = $config;
             $conn = makeTestConnection();
@@ -371,13 +407,15 @@ describe('module boot callback', function (): void {
                 return [];
             }
 
-            public function all(?string $scope = null): array
-            {
+            public function all(
+                ?string $scope = null,
+            ): array {
                 return [];
             }
 
-            public function withScope(string $scope): ConfigRepositoryInterface
-            {
+            public function withScope(
+                string $scope,
+            ): ConfigRepositoryInterface {
                 return $this;
             }
         };
@@ -395,5 +433,41 @@ describe('module boot callback', function (): void {
         $selector = $selectorProp->getValue($rwConn);
 
         expect($selector)->toBeInstanceOf(WeightedReplicaSelector::class);
+    });
+    it('builds the write and read connections with the top-level database timezone', function (): void {
+        $factory = makeSpyFactory();
+        $container = makeTestContainer(makeConfigRepository(timezone: 'America/New_York'), $factory);
+
+        getBootCallback()($container);
+
+        expect(array_map(
+            static fn (DatabaseConfig $config): string => $config->timezone->getName(),
+            $factory->receivedConfigs,
+        ))->toBe(['America/New_York', 'America/New_York']);
+    });
+
+    it('builds the nodes in UTC when database.timezone is not set', function (): void {
+        $factory = makeSpyFactory();
+        $container = makeTestContainer(makeConfigRepository(), $factory);
+
+        getBootCallback()($container);
+
+        expect(array_map(
+            static fn (DatabaseConfig $config): string => $config->timezone->getName(),
+            $factory->receivedConfigs,
+        ))->toBe(['UTC', 'UTC']);
+    });
+
+    it('overrides a per-node timezone with the top-level database timezone', function (): void {
+        $factory = makeSpyFactory();
+        $replica = ['driver' => 'mysql', 'host' => 'read-host-2', 'port' => 3306, 'database' => 'db', 'username' => 'root', 'password' => '', 'timezone' => 'Asia/Tokyo'];
+        $container = makeTestContainer(
+            makeConfigRepository(extraReads: [$replica], timezone: 'Europe/Paris'),
+            $factory,
+        );
+
+        getBootCallback()($container);
+
+        expect($factory->receivedConfigs[2]->timezone->getName())->toBe('Europe/Paris');
     });
 });

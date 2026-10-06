@@ -221,11 +221,21 @@ When your code depends on `marko/log` (interface) instead of `marko/log-file` (d
 | `marko/errors-simple` | Driver | Basic error logging |
 | `marko/errors-advanced` | Driver | Pretty stack traces, suggestions |
 
+### Broadcasting
+
+| Package | Type | Description |
+|---------|------|-------------|
+| `marko/broadcasting` | Interface | `BroadcasterInterface`, `Channel`/`PrivateChannel`/`PresenceChannel`, `#[BroadcastChannel]` private and presence authorizers and `ChannelRegistry` |
+| `marko/broadcasting-amphp` | Driver | Publishes through `marko/pubsub`; `broadcasting:serve` runs a native async SSE server on amphp/http-server (heartbeats, replay, signed tokens) |
+| `marko/broadcasting-mercure` | Driver | Publishes to a Mercure hub (FrankenPHP built-in hub supported); subscriber JWTs and cookie |
+| `marko/broadcasting-pusher` | Driver | Pusher HTTP API (Pusher, Soketi, Laravel Reverb) and the `/broadcasting/auth` endpoint; the only driver with presence channels |
+
 ### Other Packages
 
 | Package | Type | Description |
 |---------|------|-------------|
 | `marko/authentication` | Feature | Authentication services |
+| `marko/clock` | Feature | PSR-20 `SystemClock` bound to `Psr\Clock\ClockInterface`; `FakeClock` lives in `marko/testing` |
 | `marko/hashing` | Feature | Password hashing |
 | `marko/validation` | Feature | Input validation |
 | `marko/framework` | Metapackage | Bundles common packages |
@@ -396,6 +406,8 @@ Module configuration is split between two files with clear responsibilities:
 - `bindings` - Interface → implementation mappings
 - `singletons` - Shared instances (see Dependency Injection section)
 - `boot` - Closure that runs after all bindings are registered (receives the Container)
+- `globalMiddleware` - Global HTTP middleware classes
+- `discovery` - Discovery cache contributors (`DiscoveryCacheContributorInterface`) that store this package's own discovery results in the discovery cache
 
 This split keeps standard PHP metadata in the standard location (composer.json) while Marko-specific config lives in module.php. A minimal module only needs a composer.json with a `name` field.
 
@@ -701,7 +713,7 @@ interface ResettableInterface
 
 `reset()` must be non-destructive — it clears the instance's in-memory per-request tracking without destroying anything persisted (e.g. resetting a session service forgets which session it was serving, it does not delete the stored session). A long-running process discovers what to reset via `Container::resolvedInstances(ResettableInterface::class)`, which returns only instances the container has already built — never triggering resolution — instead of requiring a hardcoded list. `resolvedInstances()` lives on the concrete `Container` class, not on `ContainerInterface`.
 
-Current implementors: `Session`, `SessionGuard` (`marko/authentication`), `ReadWriteConnection` (`marko/database-readwrite`), and `Inertia` (`marko/inertia`).
+Current implementors: `Session`, `AuthManager`, `SessionGuard` and `RequestCookieJar` (`marko/authentication`), `CurrentRequest` and `TokenGuard` (`marko/authentication-token`), `ReadWriteConnection` (`marko/database-readwrite`), `MySqlConnection` (`marko/database-mysql`), `PgSqlConnection` (`marko/database-pgsql`), and `Inertia` (`marko/inertia`).
 
 ### Preferences
 
@@ -780,9 +792,11 @@ Boot callbacks run after all module bindings are registered, so `$container->bin
 
 // RIGHT - same mailer class, different config per environment
 // config/mail.php
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['MAIL_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['MAIL_PORT'] ?? 1025),
+    'host' => Env::string('MAIL_HOST', 'localhost'),
+    'port' => Env::int('MAIL_PORT', 1025, min: 1, max: 65535),
 ];
 ```
 
@@ -868,12 +882,22 @@ Routes are defined via attributes on controller methods. No separate route files
 - `#[Put(path)]` - PUT request
 - `#[Patch(path)]` - PATCH request
 - `#[Delete(path)]` - DELETE request
+- `#[Head(path)]` - HEAD request (optional: HEAD falls back to the GET route, body removed)
+- `#[Options(path)]` - OPTIONS request (optional: OPTIONS is answered automatically with 204 and `Allow`)
 
-Each attribute accepts a path and optional middleware array.
+Each attribute accepts a path, an optional middleware array and an optional unique `name`. Class-level `#[RoutePrefix('/api/v1', namePrefix: 'api.v1.')]` prefixes paths and names. `#[WithoutMiddleware]` (class or method) removes global or route middleware from a route; excluding middleware that is not in the stack fails at boot.
+
+### Route Precedence and Unmatched Requests
+
+Match order never depends on registration order: static paths first, catch-alls last, then dynamic paths by more static segments, then more constrained parameters, then longer static prefix, then registration order. A request that matches no route gets a 404, or a 405 with `Allow` when another method matches the path. It runs only the global middleware marked `#[RunsOnUnmatched]` (CORS), never session, CSRF or auth middleware.
 
 ### Route Parameters
 
-Route parameters are defined in the path using curly braces: `/posts/{slug}`. Parameters are passed to the controller method.
+Route parameters are defined in the path using curly braces: `/posts/{slug}`. `{id:\d+}` adds a regex constraint and `{path*}` is a catch-all for the final segment. Parameters are passed to the controller method.
+
+### URL Generation
+
+Named routes are turned into URLs through the injected `UrlGeneratorInterface` (and `route()` in Latte and Twig templates). There is no global helper. Absolute URLs use `routing.url` (`APP_URL`), never the request's `Host` header.
 
 ### Modifying Route Behavior
 
@@ -958,9 +982,11 @@ Environment variables should **only** be referenced in config files (`config/*.p
 ```php
 // CORRECT - env var in config file only
 // config/database.php
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['DB_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['DB_PORT'] ?? 3306),
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 3306, min: 1, max: 65535),
 ];
 
 // Application code reads config, not env vars
@@ -971,6 +997,8 @@ $host = $_ENV['DB_HOST'] ?? 'localhost';
 ```
 
 This centralizes environment handling and ensures all configurable values are documented in config files.
+
+Read environment variables through `Marko\Config\Env` (`string`, `nullableString`, `int`, `nullableInt`, `float`, `bool`, `list`), never with casts, `filter_var()` or the global `env()` helper. `Env` throws `ConfigException` on a value it can't parse, naming the variable, so a typo fails the boot instead of becoming `0`, `false` or `true`. An unset or empty variable returns the default. `tests/ConfigEnvReadsTest.php` enforces this for every shipped `packages/*/config/*.php`.
 
 ### Scoped Configuration (Multi-tenant)
 
@@ -1062,6 +1090,9 @@ Attributes are wrong for system wiring and environment configuration:
 | `#[Get]`, `#[Post]`, etc. | Method       | Defines HTTP route                        |
 | `#[Middleware]`           | Method/Class | Applies middleware                        |
 | `#[DisableRoute]`         | Method       | Explicitly removes inherited route        |
+| `#[RoutePrefix]`          | Class        | Prefixes route paths and names            |
+| `#[WithoutMiddleware]`    | Method/Class | Skips global or route middleware          |
+| `#[RunsOnUnmatched]`      | Class        | Global middleware also runs on 404/405    |
 | `#[Command]`              | Class        | Registers CLI command                     |
 
 ### PHP Built-in Attributes to Use
@@ -1173,6 +1204,8 @@ Every Marko application starts with `vendor/marko/core/bootstrap.php`. This is t
 6. **Sort**: Topological sort determines load order
 7. **Boot**: Modules are loaded in order, bindings registered
 8. **Ready**: Container is ready, application can handle requests
+
+Outside development, `marko discovery:cache` compiles steps 3-6 plus attribute, route, global middleware and entity discovery into `storage/cache/discovery.php`. A boot from that cache scans nothing: it requires each cached module's `module.php` (closures stay live) and hydrates everything else. Packages add their own sections through `DiscoveryCacheContributorInterface` (declared under `discovery` in `module.php`). A fingerprint of `vendor/composer/installed.json` and the `modules/`/`app/` module directories makes a stale cache fail loudly; it is never rebuilt silently.
 
 ### Web Entry Point
 

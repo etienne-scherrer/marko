@@ -4,15 +4,33 @@ declare(strict_types=1);
 
 namespace Marko\Notification\Database\Repository;
 
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Notification\Contracts\NotifiableInterface;
 use Marko\Notification\Database\Entity\DatabaseNotification;
+use Psr\Clock\ClockInterface;
 
+/**
+ * read_at is written in the database timezone (`database.timezone`, UTC by
+ * default), the same zone DatabaseChannel writes created_at in.
+ */
 class DatabaseNotificationRepository implements NotificationRepositoryInterface
 {
+    private const string TABLE = 'notifications';
+
     public function __construct(
         private ConnectionInterface $connection,
+        private ClockInterface $clock,
+        private DatabaseTimezoneConfig $databaseTimezoneConfig,
     ) {}
+
+    /**
+     * The notifications table name quoted for the connection's SQL dialect.
+     */
+    private function table(): string
+    {
+        return $this->connection->quoteIdentifier(self::TABLE);
+    }
 
     /**
      * @return array<DatabaseNotification>
@@ -21,7 +39,7 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         NotifiableInterface $notifiable,
     ): array {
         $rows = $this->connection->query(
-            'SELECT * FROM notifications WHERE notifiable_type = ? AND notifiable_id = ? ORDER BY created_at DESC',
+            "SELECT * FROM {$this->table()} WHERE notifiable_type = ? AND notifiable_id = ? ORDER BY created_at DESC",
             [$notifiable->getNotifiableType(), (string) $notifiable->getNotifiableId()],
         );
 
@@ -35,7 +53,7 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         NotifiableInterface $notifiable,
     ): array {
         $rows = $this->connection->query(
-            'SELECT * FROM notifications WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL ORDER BY created_at DESC',
+            "SELECT * FROM {$this->table()} WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL ORDER BY created_at DESC",
             [$notifiable->getNotifiableType(), (string) $notifiable->getNotifiableId()],
         );
 
@@ -46,8 +64,8 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         string $notificationId,
     ): void {
         $this->connection->execute(
-            'UPDATE notifications SET read_at = ? WHERE id = ?',
-            [date('Y-m-d H:i:s'), $notificationId],
+            "UPDATE {$this->table()} SET read_at = ? WHERE id = ?",
+            [$this->databaseTimezoneConfig->format($this->clock->now()), $notificationId],
         );
     }
 
@@ -55,8 +73,12 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         NotifiableInterface $notifiable,
     ): void {
         $this->connection->execute(
-            'UPDATE notifications SET read_at = ? WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL',
-            [date('Y-m-d H:i:s'), $notifiable->getNotifiableType(), (string) $notifiable->getNotifiableId()],
+            "UPDATE {$this->table()} SET read_at = ? WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL",
+            [
+                $this->databaseTimezoneConfig->format($this->clock->now()),
+                $notifiable->getNotifiableType(),
+                (string) $notifiable->getNotifiableId(),
+            ],
         );
     }
 
@@ -64,7 +86,7 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         string $notificationId,
     ): void {
         $this->connection->execute(
-            'DELETE FROM notifications WHERE id = ?',
+            "DELETE FROM {$this->table()} WHERE id = ?",
             [$notificationId],
         );
     }
@@ -73,7 +95,7 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         NotifiableInterface $notifiable,
     ): void {
         $this->connection->execute(
-            'DELETE FROM notifications WHERE notifiable_type = ? AND notifiable_id = ?',
+            "DELETE FROM {$this->table()} WHERE notifiable_type = ? AND notifiable_id = ?",
             [$notifiable->getNotifiableType(), (string) $notifiable->getNotifiableId()],
         );
     }
@@ -82,7 +104,7 @@ class DatabaseNotificationRepository implements NotificationRepositoryInterface
         NotifiableInterface $notifiable,
     ): int {
         $result = $this->connection->query(
-            'SELECT COUNT(*) as count FROM notifications WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL',
+            "SELECT COUNT(*) as count FROM {$this->table()} WHERE notifiable_type = ? AND notifiable_id = ? AND read_at IS NULL",
             [$notifiable->getNotifiableType(), (string) $notifiable->getNotifiableId()],
         );
 

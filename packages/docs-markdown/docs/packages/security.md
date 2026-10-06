@@ -1,9 +1,11 @@
 ---
 title: marko/security
-description: CSRF protection, CORS handling, and security headers middleware -- secure your routes with drop-in middleware.
+description: CSRF protection and security headers middleware -- secure your routes with drop-in middleware.
 ---
 
-CSRF protection, CORS handling, and security headers middleware --- secure your routes with drop-in middleware. Three middleware classes cover the most common web security needs: `CsrfMiddleware` validates tokens on state-changing requests, `CorsMiddleware` handles preflight and cross-origin headers, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). All are configured via `config/security.php`.
+CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes cover the most common web security needs: `CsrfMiddleware` validates tokens on state-changing requests, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
+
+For cross-origin requests, install [marko/cors](/docs/packages/cors/). `marko/security` used to ship its own `CorsMiddleware` with `security.cors.*` config; it was removed so there is a single CORS implementation. Replace any `#[Middleware]` reference to the old class with `marko/cors` (which registers itself globally) and move the `cors` block of `config/security.php` to `config/cors.php`.
 
 ## Installation
 
@@ -15,18 +17,12 @@ Requires [marko/session](/docs/packages/session/) and [marko/encryption](/docs/p
 
 ## Configuration
 
-All three middleware classes read from `config/security.php`:
+Both middleware classes read from `config/security.php`:
 
 ```php title="config/security.php"
 return [
     'csrf' => [
         'session_key' => '_csrf_token',
-    ],
-    'cors' => [
-        'allowed_origins' => [],
-        'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        'allowed_headers' => ['Content-Type', 'X-Requested-With', 'X-CSRF-TOKEN'],
-        'max_age' => 86400,
     ],
     'headers' => [
         'x_content_type_options' => 'nosniff',
@@ -64,6 +60,10 @@ class FormController
 
 The middleware checks `_token` in POST data or the `X-CSRF-TOKEN` header. Safe methods (GET, HEAD, OPTIONS) are skipped automatically.
 
+You can also register `CsrfMiddleware` as global middleware in your module's `module.php`. It still never runs on requests that match no route, because it does not carry `#[RunsOnUnmatched]` (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)). A `POST` to an unknown path gets a `404`, and a `POST` to a GET-only path gets a `405` with `Allow` --- never a `419` token mismatch. The token check applies only to routes that exist.
+
+Issuing a token (`CsrfTokenManagerInterface::get()` the first time) writes it to the session. That counts as a modification, so the session is saved and the visitor gets a session cookie even under [lazy session persistence](/docs/packages/session/#lazy-persistence). The form submission then carries the cookie that holds the token.
+
 Include the token in forms:
 
 ```php
@@ -82,28 +82,6 @@ readonly class ContactController
     }
 }
 ```
-
-### CORS Middleware
-
-Handle cross-origin requests and preflight `OPTIONS` responses:
-
-```php
-use Marko\Routing\Attributes\Get;
-use Marko\Routing\Attributes\Middleware;
-use Marko\Security\Middleware\CorsMiddleware;
-
-class ApiController
-{
-    #[Get('/api/products')]
-    #[Middleware(CorsMiddleware::class)]
-    public function list(): Response
-    {
-        return new Response('Products');
-    }
-}
-```
-
-Configure allowed origins, methods, and headers in `config/security.php` under the `cors` key (see [Configuration](#configuration) above). When a request includes an `Origin` header that matches the allowed origins list, the middleware adds the appropriate CORS headers. For preflight `OPTIONS` requests, it short-circuits with a `204` response containing `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`, and `Access-Control-Max-Age` headers. Use `'*'` in `allowed_origins` to permit any origin.
 
 ### Security Headers Middleware
 
@@ -167,6 +145,8 @@ use Marko\Security\Exceptions\CsrfTokenMismatchException;
 // suggestion: "Ensure your form includes a valid CSRF token field (_token) or X-CSRF-TOKEN header..."
 ```
 
+`CsrfTokenMismatchException` implements `Marko\Core\Exceptions\HttpExceptionInterface`, so the routing pipeline renders it as **`419 Page Expired`** with the body `{"message": "CSRF token mismatch."}` (JSON, or a minimal HTML page for browsers). The detailed message, context and suggestion above stay server-side. Because the response is rendered where the middleware threw, outer middleware such as CORS and security headers still decorate it --- see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
+
 ## API Reference
 
 ### CsrfTokenManagerInterface
@@ -187,14 +167,6 @@ use Marko\Security\Middleware\CsrfMiddleware;
 public function handle(Request $request, callable $next): Response;
 ```
 
-### CorsMiddleware
-
-```php
-use Marko\Security\Middleware\CorsMiddleware;
-
-public function handle(Request $request, callable $next): Response;
-```
-
 ### SecurityHeadersMiddleware
 
 ```php
@@ -209,10 +181,6 @@ public function handle(Request $request, callable $next): Response;
 use Marko\Security\Config\SecurityConfig;
 
 public function csrfSessionKey(): string;
-public function corsAllowedOrigins(): array;
-public function corsAllowedMethods(): array;
-public function corsAllowedHeaders(): array;
-public function corsMaxAge(): int;
 public function headerXContentTypeOptions(): string;
 public function headerXFrameOptions(): string;
 public function headerXXssProtection(): string;
@@ -236,4 +204,7 @@ public function getSuggestion(): string;
 use Marko\Security\Exceptions\CsrfTokenMismatchException;
 
 public static function invalidToken(): self;
+public function getStatusCode(): int;       // 419
+public function getHeaders(): array;        // []
+public function getResponseData(): array;   // ['message' => 'CSRF token mismatch.']
 ```

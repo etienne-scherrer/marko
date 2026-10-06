@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Marko\Database\Tests\Repository;
 
+use Closure;
 use Marko\Core\Event\Event;
 use Marko\Core\Event\EventDispatcherInterface;
 use Marko\Database\Attributes\Column;
@@ -18,6 +19,7 @@ use Marko\Database\Entity\EntityMetadataFactory;
 use Marko\Database\Events\EntityCreated;
 use Marko\Database\Events\EntityCreating;
 use Marko\Database\Exceptions\BatchInsertException;
+use Marko\Database\Exceptions\RepositoryException;
 use Marko\Database\Repository\Repository;
 use RuntimeException;
 use Throwable;
@@ -95,8 +97,10 @@ class BatchWithRelationshipRepository extends Repository
 /**
  * Creates a connection that records SQL/bindings and returns lastInsertId = $firstId.
  */
-function makeBatchSpyConnection(array &$sqlLog, int $firstId = 1): ConnectionInterface
-{
+function makeBatchSpyConnection(
+    array &$sqlLog,
+    int $firstId = 1,
+): ConnectionInterface {
     return new class ($sqlLog, $firstId) implements ConnectionInterface
     {
         private bool $shouldThrow = false;
@@ -143,8 +147,9 @@ function makeBatchSpyConnection(array &$sqlLog, int $firstId = 1): ConnectionInt
             return count(explode('),(', $sql));
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -157,14 +162,27 @@ function makeBatchSpyConnection(array &$sqlLog, int $firstId = 1): ConnectionInt
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
 /**
  * Creates a connection that tracks transaction calls alongside SQL log.
  */
-function makeBatchTransactionConnection(array &$log, bool $failInsert = false): ConnectionInterface&TransactionInterface
-{
+function makeBatchTransactionConnection(
+    array &$log,
+    bool $failInsert = false,
+): ConnectionInterface&TransactionInterface {
     return new class ($log, $failInsert) implements ConnectionInterface, TransactionInterface
     {
         private bool $inTx = false;
@@ -203,8 +221,9 @@ function makeBatchTransactionConnection(array &$log, bool $failInsert = false): 
             return 1;
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -216,6 +235,17 @@ function makeBatchTransactionConnection(array &$log, bool $failInsert = false): 
         public function driverName(): string
         {
             return 'sqlite';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
 
         public function beginTransaction(): void
@@ -241,8 +271,12 @@ function makeBatchTransactionConnection(array &$log, bool $failInsert = false): 
             return $this->inTx;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
+            $this->log[] = ['type' => 'transaction'];
             $this->beginTransaction();
             try {
                 $result = $callback();
@@ -254,6 +288,15 @@ function makeBatchTransactionConnection(array &$log, bool $failInsert = false): 
                 throw $e;
             }
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 }
 
@@ -262,8 +305,9 @@ class BatchFakeDispatcher implements EventDispatcherInterface
     /** @var array<Event> */
     public array $dispatched = [];
 
-    public function dispatch(Event $event): void
-    {
+    public function dispatch(
+        Event $event,
+    ): void {
         $this->dispatched[] = $event;
     }
 }
@@ -291,7 +335,7 @@ it('inserts multiple entities in a single multi-row INSERT statement', function 
 
     $insertStatements = array_values(array_filter($sqlLog, fn ($e) => str_contains($e['sql'], 'INSERT')));
     expect($insertStatements)->toHaveCount(1)
-        ->and($insertStatements[0]['sql'])->toContain('INSERT INTO batch_users')
+        ->and($insertStatements[0]['sql'])->toContain('INSERT INTO "batch_users"')
         ->and(substr_count($insertStatements[0]['sql'], '(?, ?)') >= 3)->toBeTrue();
 });
 
@@ -358,7 +402,7 @@ it('fires Created event for each entity after insert', function (): void {
 });
 
 it(
-    'populates auto-generated primary keys back onto each entity when the driver supports it (MySQL: lastInsertId returns the FIRST id, increment by one per row assuming no gaps; PostgreSQL: use INSERT ... RETURNING id)',
+    'populates auto-increment keys from the first lastInsertId() on a connection without RETURNING',
     function (): void {
         $sqlLog = [];
         // Simulate MySQL: lastInsertId() returns first inserted ID = 10
@@ -390,16 +434,11 @@ it(
 );
 
 it(
-    'documents and tests that MySQL populated-id logic is correct only when innodb_autoinc_lock_mode permits sequential ids (contiguous block)',
+    'assigns ids from a contiguous block in a single INSERT on a connection without RETURNING',
     function (): void {
-        // MySQL innodb_autoinc_lock_mode=2 (interleaved, the default since MySQL 8.0) does NOT
-        // guarantee a contiguous block of IDs for a single multi-row INSERT in a concurrent
-        // environment. The MySQL id-recovery strategy (LAST_INSERT_ID + row-count math) is
-        // therefore only reliable under lock_mode=0 (traditional) or lock_mode=1 (consecutive),
-        // where a single INSERT statement always receives a contiguous block.
-        //
-        // This test verifies the documented contract: given a contiguous block starting at
-        // firstId, each entity receives firstId + its zero-based index in the batch.
+        // A multi-row INSERT ... VALUES gets one contiguous block under innodb_autoinc_lock_mode
+        // 0 and 1, and under 2 unless a bulk insert on the same table interleaves. Given that
+        // block starting at firstId, each entity receives firstId + its zero-based index.
 
         $sqlLog = [];
         // firstId=5 simulates a scenario where rows 5, 6, 7 are a contiguous block
@@ -416,14 +455,12 @@ it(
 
         $repository->insertBatch($users);
 
-        // Under contiguous-block assumption: IDs are 5, 6, 7
-        expect($users[0]->id)->toBe(5)
-                ->and($users[1]->id)->toBe(6)
-                ->and($users[2]->id)->toBe(7);
-
-        // Verify that only a single INSERT statement was issued
+        // Under contiguous-block assumption: IDs are 5, 6, 7, from a single INSERT statement
         $insertStmts = array_values(array_filter($sqlLog, fn ($e) => str_contains($e['sql'], 'INSERT')));
-        expect($insertStmts)->toHaveCount(1);
+        expect($users[0]->id)->toBe(5)
+            ->and($users[1]->id)->toBe(6)
+            ->and($users[2]->id)->toBe(7)
+            ->and($insertStmts)->toHaveCount(1);
     },
 );
 
@@ -470,12 +507,42 @@ it('rolls back all rows when any insert fails (within a transaction)', function 
         $threw = true;
     }
 
-    expect($threw)->toBeTrue();
-
     $txEvents = array_column($log, 'type');
-    expect(in_array('beginTransaction', $txEvents))->toBeTrue()
+    expect($threw)->toBeTrue()
+        ->and(in_array('beginTransaction', $txEvents))->toBeTrue()
         ->and(in_array('rollback', $txEvents))->toBeTrue()
         ->and(in_array('commit', $txEvents))->toBeFalse();
+});
+
+it('wraps the batch insert in transaction() on a transactional connection', function (): void {
+    $log = [];
+    $connection = makeBatchTransactionConnection($log);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+
+    $user = new BatchUser();
+    $user->name = 'Alice';
+    $user->email = 'alice@example.com';
+
+    $repository->insertBatch([$user]);
+
+    expect(array_column($log, 'type'))->toBe(['transaction', 'beginTransaction', 'execute', 'commit']);
+});
+
+it('nests the batch insert inside an outer transaction instead of skipping the wrap', function (): void {
+    $log = [];
+    $connection = makeBatchTransactionConnection($log);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+
+    $user = new BatchUser();
+    $user->name = 'Alice';
+    $user->email = 'alice@example.com';
+
+    $connection->beginTransaction();
+    $repository->insertBatch([$user]);
+
+    expect(array_column($log, 'type'))->toBe(
+        ['beginTransaction', 'transaction', 'beginTransaction', 'execute', 'commit'],
+    );
 });
 
 it('does NOT persist relationships of batch-inserted entities', function (): void {
@@ -525,7 +592,7 @@ it('handles string primary keys in the batch correctly', function (): void {
 
     $insertStmts = array_values(array_filter($sqlLog, fn ($e) => str_contains($e['sql'], 'INSERT')));
     expect($insertStmts)->toHaveCount(1)
-        ->and($insertStmts[0]['sql'])->toContain('INSERT INTO batch_string_pk')
+        ->and($insertStmts[0]['sql'])->toContain('INSERT INTO "batch_string_pk"')
         ->and($insertStmts[0]['bindings'])->toContain('uuid-aaa')
         ->and($insertStmts[0]['bindings'])->toContain('uuid-bbb')
         ->and($insertStmts[0]['bindings'])->toContain('First')
@@ -544,8 +611,10 @@ it('handles string primary keys in the batch correctly', function (): void {
  * @param array<int, array<string, mixed>> $returningRows Rows returned from RETURNING clause
  * @param array<array{type: string, sql: string, bindings: array}> $sqlLog Reference for recording SQL calls
  */
-function makePgsqlSpyConnection(array $returningRows, array &$sqlLog): ConnectionInterface
-{
+function makePgsqlSpyConnection(
+    array $returningRows,
+    array &$sqlLog,
+): ConnectionInterface {
     return new class ($returningRows, $sqlLog) implements ConnectionInterface
     {
         public function __construct(
@@ -580,8 +649,9 @@ function makePgsqlSpyConnection(array $returningRows, array &$sqlLog): Connectio
             return count($this->returningRows);
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -593,6 +663,17 @@ function makePgsqlSpyConnection(array $returningRows, array &$sqlLog): Connectio
         public function driverName(): string
         {
             return 'pgsql';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return true;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
     };
 }
@@ -643,8 +724,9 @@ function makePgsqlTransactionConnection(
             return count($this->returningRows);
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -656,6 +738,17 @@ function makePgsqlTransactionConnection(
         public function driverName(): string
         {
             return 'pgsql';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return true;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
 
         public function beginTransaction(): void
@@ -681,8 +774,11 @@ function makePgsqlTransactionConnection(
             return $this->inTx;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
             $this->beginTransaction();
             try {
                 $result = $callback();
@@ -694,6 +790,15 @@ function makePgsqlTransactionConnection(
                 throw $e;
             }
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 }
 
@@ -780,8 +885,8 @@ it(
         expect($insertStatements)->not->toBeEmpty();
         $insertSql = $insertStatements[0]['sql'];
         expect($insertSql)
-            ->toContain('INSERT INTO batch_users')
-            ->toContain('RETURNING id');
+            ->toContain('INSERT INTO "batch_users"')
+            ->toContain('RETURNING "id"');
     },
 );
 
@@ -806,7 +911,7 @@ it(
         expect($insertStatements)->not->toBeEmpty();
         $insertSql = $insertStatements[0]['sql'];
         expect($insertSql)
-            ->toContain('INSERT INTO batch_users')
+            ->toContain('INSERT INTO "batch_users"')
             ->not->toContain('RETURNING');
     },
 );
@@ -898,3 +1003,391 @@ it(
             ->and($user2->id)->toBe(8);
     },
 );
+
+// ── Database-generated keys ────────────────────────────────────────────────────
+
+#[Table('batch_generated_tokens')]
+class BatchGeneratedToken extends Entity
+{
+    #[Column(primaryKey: true, type: 'uuid', default: 'gen_random_uuid()', generated: true)]
+    public ?string $id;
+
+    #[Column]
+    public string $label = '';
+}
+
+class BatchGeneratedTokenRepository extends Repository
+{
+    protected const string ENTITY_CLASS = BatchGeneratedToken::class;
+}
+
+function makeBatchGeneratedToken(
+    string $label,
+): BatchGeneratedToken {
+    $token = new BatchGeneratedToken();
+    $token->label = $label;
+
+    return $token;
+}
+
+/**
+ * A connection stub that reports RETURNING support under any driver name and records query() calls.
+ *
+ * @param list<array<string, mixed>> $returningRows
+ * @param list<array{sql: string, bindings: array<mixed>}> $queries
+ */
+function makeReturningStubConnection(
+    array $returningRows,
+    array &$queries,
+    string $driverName,
+): ConnectionInterface {
+    $connection = test()->createStub(ConnectionInterface::class);
+    $connection->method('driverName')->willReturn($driverName);
+    $connection->method('supportsReturning')->willReturn(true);
+    $connection->method('quoteIdentifier')->willReturnCallback(
+        fn (string $identifier): string => '"' . str_replace('"', '""', $identifier) . '"',
+    );
+    $connection->method('query')->willReturnCallback(
+        function (string $sql, array $bindings = []) use ($returningRows, &$queries): array {
+            $queries[] = ['sql' => $sql, 'bindings' => $bindings];
+
+            return $returningRows;
+        },
+    );
+
+    return $connection;
+}
+
+describe('database-generated keys in a batch', function (): void {
+    it('reads generated keys back in insert order with RETURNING', function (): void {
+        $sqlLog = [];
+        $connection = makePgsqlSpyConnection(
+            [['id' => 'a0e1c0de-0000-4000-8000-000000000001'], ['id' => 'a0e1c0de-0000-4000-8000-000000000002']],
+            $sqlLog,
+        );
+        $repository = new BatchGeneratedTokenRepository(
+            $connection,
+            new EntityMetadataFactory(),
+            new EntityHydrator(),
+        );
+        $first = makeBatchGeneratedToken('first');
+        $second = makeBatchGeneratedToken('second');
+
+        $repository->insertBatch([$first, $second]);
+
+        expect($sqlLog[0]['sql'])->toBe(
+            'INSERT INTO "batch_generated_tokens" ("label") VALUES (?), (?) RETURNING "id"',
+        )
+            ->and($sqlLog[0]['bindings'])->toBe(['first', 'second'])
+            ->and($first->id)->toBe('a0e1c0de-0000-4000-8000-000000000001')
+            ->and($second->id)->toBe('a0e1c0de-0000-4000-8000-000000000002');
+    });
+
+    it(
+        'uses RETURNING for auto-increment keys when the connection supports it regardless of driver name',
+        function (): void {
+            $queries = [];
+            $connection = makeReturningStubConnection([['id' => '11'], ['id' => '12']], $queries, 'cockroach');
+            $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+            $alice = new BatchUser();
+            $alice->name = 'Alice';
+            $bob = new BatchUser();
+            $bob->name = 'Bob';
+
+            $repository->insertBatch([$alice, $bob]);
+
+            expect($queries[0]['sql'])->toEndWith('RETURNING "id"')
+                ->and($alice->id)->toBe(11)
+                ->and($bob->id)->toBe(12);
+        },
+    );
+
+    it(
+        'throws RepositoryException for unset generated keys in a batch on a connection without RETURNING',
+        function (): void {
+            $sqlLog = [];
+            $repository = new BatchGeneratedTokenRepository(
+                makeBatchSpyConnection($sqlLog),
+                new EntityMetadataFactory(),
+                new EntityHydrator(),
+            );
+
+            expect(fn () => $repository->insertBatch([makeBatchGeneratedToken('a'), makeBatchGeneratedToken('b')]))
+                ->toThrow(RepositoryException::class, 'cannot read a generated key back')
+                ->and($sqlLog)->toBe([]);
+        },
+    );
+
+    it(
+        'throws RepositoryException for unset keys that are neither generated nor auto-increment in a batch',
+        function (): void {
+            $sqlLog = [];
+            $repository = new BatchStringPkRepository(
+                makeBatchSpyConnection($sqlLog),
+                new EntityMetadataFactory(),
+                new EntityHydrator(),
+            );
+            $item = new BatchStringPk();
+            $item->label = 'No key';
+
+            expect(fn () => $repository->insertBatch([$item]))
+                ->toThrow(RepositoryException::class, "Primary key 'uuid' of entity")
+                ->and($sqlLog)->toBe([]);
+        },
+    );
+
+    it('throws a clear exception for a batch that mixes set and unset generated keys', function (): void {
+        $sqlLog = [];
+        $repository = new BatchGeneratedTokenRepository(
+            makePgsqlSpyConnection([], $sqlLog),
+            new EntityMetadataFactory(),
+            new EntityHydrator(),
+        );
+        $withKey = makeBatchGeneratedToken('with key');
+        $withKey->id = 'a0e1c0de-0000-4000-8000-000000000003';
+
+        expect(fn () => $repository->insertBatch([$withKey, makeBatchGeneratedToken('without key')]))
+            ->toThrow(BatchInsertException::class, "with and without a 'id' key: entity at index 1");
+    });
+});
+
+// ── MySQL auto_increment_increment ──────────────────────────────────────────────
+
+/**
+ * MySQL-flavoured transactional spy. query() answers the increment lookup with
+ * $stepRows; lastInsertId() returns 0 when a query ran after the last execute()
+ * (as PDO does), else $firstId.
+ *
+ * @param array<int, array<string, mixed>> $stepRows
+ */
+function makeMysqlStepSpyConnection(
+    array &$log,
+    array $stepRows,
+    int $firstId = 10,
+): ConnectionInterface&TransactionInterface {
+    return new class ($log, $stepRows, $firstId) implements ConnectionInterface, TransactionInterface
+    {
+        private bool $queriedSinceExecute = false;
+
+        private bool $inTx = false;
+
+        public function __construct(
+            private array &$log,
+            private readonly array $stepRows,
+            private readonly int $firstId,
+        ) {}
+
+        public function connect(): void {}
+
+        public function disconnect(): void {}
+
+        public function isConnected(): bool
+        {
+            return true;
+        }
+
+        public function query(
+            string $sql,
+            array $bindings = [],
+        ): array {
+            $this->log[] = ['type' => 'query', 'sql' => $sql, 'inTx' => $this->inTx];
+            $this->queriedSinceExecute = true;
+
+            return $this->stepRows;
+        }
+
+        public function execute(
+            string $sql,
+            array $bindings = [],
+        ): int {
+            $this->log[] = ['type' => 'execute', 'sql' => $sql, 'inTx' => $this->inTx];
+            $this->queriedSinceExecute = false;
+
+            return 1;
+        }
+
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
+            throw new RuntimeException('Not implemented');
+        }
+
+        public function lastInsertId(): int
+        {
+            return $this->queriedSinceExecute ? 0 : $this->firstId;
+        }
+
+        public function driverName(): string
+        {
+            return 'mysql';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '`' . $identifier . '`';
+        }
+
+        public function beginTransaction(): void
+        {
+            $this->inTx = true;
+        }
+
+        public function commit(): void
+        {
+            $this->inTx = false;
+        }
+
+        public function rollback(): void
+        {
+            $this->inTx = false;
+        }
+
+        public function inTransaction(): bool
+        {
+            return $this->inTx;
+        }
+
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
+            $this->beginTransaction();
+            try {
+                $result = $callback();
+                $this->commit();
+
+                return $result;
+            } catch (Throwable $e) {
+                $this->rollback();
+                throw $e;
+            }
+        }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
+    };
+}
+
+/**
+ * @return list<BatchUser>
+ */
+function makeBatchUsers(
+    int $count,
+): array {
+    $users = [];
+    for ($i = 0; $i < $count; $i++) {
+        $user = new BatchUser();
+        $user->name = "User $i";
+        $user->email = "user$i@example.com";
+        $users[] = $user;
+    }
+
+    return $users;
+}
+
+it('steps MySQL batch ids by auto_increment_increment', function (): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, [['auto_increment_increment' => 2]], 10);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+    $users = makeBatchUsers(3);
+
+    $repository->insertBatch($users);
+
+    expect(array_map(fn (BatchUser $u) => $u->id, $users))->toBe([10, 12, 14]);
+});
+
+it('reads auto_increment_increment inside the batch transaction on the same connection', function (): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, [['auto_increment_increment' => 1]]);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+
+    $repository->insertBatch(makeBatchUsers(2));
+
+    $queries = array_values(array_filter($log, fn (array $e) => $e['type'] === 'query'));
+
+    expect($queries)->toHaveCount(1)
+        ->and($queries[0]['sql'])->toContain('@@auto_increment_increment')
+        ->and($queries[0]['inTx'])->toBeTrue();
+});
+
+it('reads auto_increment_increment before the INSERT so lastInsertId() reflects the INSERT', function (): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, [['auto_increment_increment' => 1]], 10);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+    $users = makeBatchUsers(2);
+
+    $repository->insertBatch($users);
+
+    expect(array_column($log, 'type'))->toBe(['query', 'execute'])
+        ->and($users[0]->id)->toBe(10)
+        ->and($users[1]->id)->toBe(11);
+});
+
+it('accepts auto_increment_increment returned as a numeric string', function (): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, [['auto_increment_increment' => '3']], 5);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+    $users = makeBatchUsers(2);
+
+    $repository->insertBatch($users);
+
+    expect($users[0]->id)->toBe(5)
+        ->and($users[1]->id)->toBe(8);
+});
+
+it('throws BatchInsertException naming auto_increment_increment when the setting cannot be read', function (
+    array $rows,
+): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, $rows);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+
+    expect(fn () => $repository->insertBatch(makeBatchUsers(2)))
+        ->toThrow(BatchInsertException::class, 'auto_increment_increment');
+})->with([
+    'empty result' => [[]],
+    'missing column' => [[['other' => 1]]],
+    'zero' => [[['auto_increment_increment' => 0]]],
+    'negative' => [[['auto_increment_increment' => -1]]],
+    'non-numeric' => [[['auto_increment_increment' => 'abc']]],
+]);
+
+it('keeps explicit auto-increment keys set on every entity in the batch', function (): void {
+    $log = [];
+    $connection = makeMysqlStepSpyConnection($log, [['auto_increment_increment' => 2]], 999);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+    $users = makeBatchUsers(3);
+    foreach ([10, 50, 30] as $i => $id) {
+        $users[$i]->id = $id;
+    }
+
+    $repository->insertBatch($users);
+
+    expect(array_map(fn (BatchUser $u) => $u->id, $users))->toBe([10, 50, 30])
+        ->and(array_column($log, 'type'))->toBe(['execute']);
+});
+
+it('does not read auto_increment_increment on a non-mysql connection without RETURNING', function (): void {
+    $sqlLog = [];
+    $connection = makeBatchSpyConnection($sqlLog, 10);
+    $repository = new BatchUserRepository($connection, new EntityMetadataFactory(), new EntityHydrator());
+    $users = makeBatchUsers(2);
+
+    $repository->insertBatch($users);
+
+    expect(array_column($sqlLog, 'type'))->toBe(['execute'])
+        ->and($users[1]->id)->toBe(11);
+});

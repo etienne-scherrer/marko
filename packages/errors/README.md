@@ -16,7 +16,7 @@ Note: You typically install an implementation package (like `marko/errors-simple
 use Marko\Errors\ErrorReport;
 use Marko\Errors\Severity;
 
-$report = ErrorReport::fromThrowable($exception, Severity::Error);
+$report = ErrorReport::fromThrowable($exception, Severity::Error, $clock->now());
 ```
 
 ## Documentation

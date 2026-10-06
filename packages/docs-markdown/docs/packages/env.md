@@ -1,9 +1,9 @@
 ---
 title: marko/env
-description: Environment variable loading — reads .env files and provides the env() helper with automatic type coercion.
+description: Environment variable loading — reads a .env file into $_ENV at boot so config files can read it with Marko\Config\Env.
 ---
 
-Environment variable loading — reads `.env` files and provides the `env()` helper with automatic type coercion. Env loads variables from a `.env` file into `$_ENV` and `putenv()`, with system environment variables taking precedence. The `env()` helper function retrieves values with type coercion for common patterns (`true`, `false`, `null`, `empty`). No external dependencies — works with any PHP application.
+Environment variable loading — reads a `.env` file into `$_ENV` and `putenv()` at boot, with real environment variables taking precedence. Config files then read those values with [`Marko\Config\Env`](/docs/packages/config/#environment-variables). No external dependencies — works with any PHP application.
 
 ## Installation
 
@@ -11,11 +11,13 @@ Environment variable loading — reads `.env` files and provides the `env()` hel
 composer require marko/env
 ```
 
+The [skeleton](/docs/packages/skeleton/) requires `marko/env`, so a new app already has it. Framework packages don't require it: loading a `.env` file is the app's choice.
+
 ## Usage
 
 ### Loading Environment Variables
 
-Load from a `.env` file at application bootstrap:
+When `marko/env` is installed, [`marko/core`](/docs/packages/core/) loads the `.env` file in the project root at boot, before any config file runs. Outside a Marko app, load it yourself at bootstrap:
 
 ```php
 use Marko\Env\EnvLoader;
@@ -24,21 +26,13 @@ $envLoader = new EnvLoader();
 $envLoader->load(__DIR__);
 ```
 
-The `.env` file is optional — if it does not exist, the loader silently returns. System environment variables are never overwritten, allowing production deployments to override `.env` values.
+The `.env` file is optional. Real environment variables always take precedence over `.env` values, so production deployments can override anything from the container, PaaS, or web server.
 
-### The `env()` Helper
+### Real Environment Variables Are Mirrored Into `$_ENV`
 
-Retrieve environment variables with automatic type coercion:
+Before reading `.env`, the loader copies every real environment variable (everything `getenv()` returns) into `$_ENV`, without overwriting entries that are already there. This happens even when no `.env` file exists.
 
-```php
-// Simple retrieval
-$dbHost = env('DB_HOST', 'localhost');
-
-// Type coercion
-$debug = env('APP_DEBUG');    // 'true' -> true, 'false' -> false
-$value = env('NULLABLE_VAR'); // 'null' -> null
-$empty = env('EMPTY_VAR');    // 'empty' -> ''
-```
+PHP only fills `$_ENV` itself when the `variables_order` ini setting contains `E`, and the `php.ini-production` default (`GPCS`) does not. Without mirroring, a config file such as `'host' => $_ENV['DB_HOST'] ?? 'localhost'` would silently fall back to its default in a typical container deployment. With mirroring, `$_ENV` and `getenv()` agree no matter how PHP is configured, so config files can safely read `$_ENV`, which is where [`Marko\Config\Env`](/docs/packages/config/#environment-variables) looks first.
 
 ### .env File Format
 
@@ -53,17 +47,25 @@ SECRET_KEY="quoted values supported"
 ANOTHER_KEY='single quotes too'
 ```
 
-### Using in Config Files
+### Reading Values in Config Files
 
-Environment variables should only be referenced in [config](/docs/packages/config/) files, not in application code:
+Environment variables should only be referenced in [config](/docs/packages/config/) files, not in application code. Read them with `Marko\Config\Env`:
 
 ```php title="config/database.php"
+<?php
+
+declare(strict_types=1);
+
+use Marko\Config\Env;
+
 return [
-    'host' => env('DB_HOST', 'localhost'),
-    'port' => (int) env('DB_PORT', 3306),
-    'name' => env('DB_NAME', 'marko'),
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 3306, min: 1, max: 65535),
+    'name' => Env::string('DB_NAME', 'marko'),
 ];
 ```
+
+`Env` lives in [marko/config](/docs/packages/config/#environment-variables), which documents every reader, the accepted values, and the rule that an unset or empty variable returns the default.
 
 Application code then reads config values:
 
@@ -71,15 +73,86 @@ Application code then reads config values:
 $host = $this->config->getString('database.host');
 ```
 
-## Type Coercion
+## Deprecated: the `env()` Helper
 
-| String Value | Coerced To |
-|--------------|------------|
-| `'true'`, `'(true)'` | `true` |
-| `'false'`, `'(false)'` | `false` |
-| `'null'`, `'(null)'` | `null` |
-| `'empty'`, `'(empty)'` | `''` |
-| Everything else | Unchanged string |
+:::caution
+The global `env()` function is deprecated and will be removed in Marko 1.0. Every call emits an `E_USER_DEPRECATED` notice naming the variable and its replacement, for example:
+
+```text
+env('APP_DEBUG') is deprecated and will be removed in Marko 1.0. Read it in a config file with Marko\Config\Env instead: Env::bool('APP_DEBUG', false). ...
+```
+
+Marko's error handlers report the notice without stopping the request, so remaining calls show up in your output or logs.
+:::
+
+`env()` coerces only a few strings and returns everything else unchanged, so a typo never fails: `APP_DEBUG=off` reaches the config as the string `'off'`, which is truthy. `Env::bool()` reads `off` as `false` and throws on a value such as `ture`. The config files Marko ships no longer call `env()`.
+
+### Before and After
+
+The same config file, written with `env()` and with `Env`:
+
+```php title="config/mercure.php (before)"
+<?php
+
+declare(strict_types=1);
+
+return [
+    'hub_url' => env('MERCURE_URL', 'http://localhost/.well-known/mercure'),
+    'subscriber_jwt_ttl' => (int) env('MERCURE_SUBSCRIBER_JWT_TTL', 3600),
+    'cookie_secure' => env('MERCURE_COOKIE_SECURE', true),
+];
+```
+
+```php title="config/mercure.php (after)"
+<?php
+
+declare(strict_types=1);
+
+use Marko\Config\Env;
+
+return [
+    'hub_url' => Env::string('MERCURE_URL', 'http://localhost/.well-known/mercure'),
+    'subscriber_jwt_ttl' => Env::int('MERCURE_SUBSCRIBER_JWT_TTL', 3600, min: 0),
+    'cookie_secure' => Env::bool('MERCURE_COOKIE_SECURE', true),
+];
+```
+
+What each version does with the same `.env` values:
+
+| `.env` value | `env()` version | `Env` version |
+|---|---|---|
+| `MERCURE_SUBSCRIBER_JWT_TTL=7200` | `7200` | `7200` |
+| `MERCURE_SUBSCRIBER_JWT_TTL=1h` | `(int) '1h'` is `1`, so tokens expire after one second | Throws `ConfigException`: `Environment variable "MERCURE_SUBSCRIBER_JWT_TTL" must be an integer`, `Got "1h"` |
+| `MERCURE_SUBSCRIBER_JWT_TTL=-5` | `-5` | Throws, because of `min: 0` |
+| `MERCURE_COOKIE_SECURE=off` | The string `'off'`, which is truthy, so the cookie stays secure when you meant to turn it off | `false` |
+| `MERCURE_COOKIE_SECURE=ture` | The string `'ture'`, accepted without complaint | Throws: `must be a boolean`, `Got "ture"`, listing the accepted values |
+| `MERCURE_COOKIE_SECURE=` (empty) | `''`, which is falsy | `true`, the default |
+| Variable not set | The default | The default |
+
+`Env` errors are thrown while the config file loads, so a bad value stops the app at boot, and the message names the config file that read it.
+
+Replace each call with the `Env` method for the type the config value needs:
+
+| `env()` call | `env()` behavior | Replace with |
+|---|---|---|
+| `env('APP_DEBUG', false)` | `'true'`, `'(true)'` → `true`; `'false'`, `'(false)'` → `false`; any other string returned unchanged | `Env::bool('APP_DEBUG', false)`. Accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`; `(true)` and `(false)` throw, so write `true` or `false` |
+| `env('MAIL_FROM')` with `MAIL_FROM=null` | `'null'`, `'(null)'` → `null` | `Env::nullableString('MAIL_FROM')`, and unset the variable or leave it empty (`MAIL_FROM=`). `Env` doesn't treat the word `null` as special |
+| `env('PREFIX', 'app_')` with `PREFIX=empty` | `'empty'`, `'(empty)'` → `''` | Set the empty string in the config file (`'prefix' => ''`). `Env` treats an empty value as unset and returns the default, and doesn't treat the word `empty` as special |
+| `env('DB_HOST', 'localhost')` | Any other string, unchanged | `Env::string('DB_HOST', 'localhost')` |
+| `env('DB_PORT', 3306)` | The string `'3306'`, not an `int` | `Env::int('DB_PORT', 3306)` |
+
+`env()` also differs on an empty value: `KEY=` returns `''` from `env()` and the default from `Env`.
+
+`env()` is defined inside `if (!function_exists('env'))`, so a library that defines its own global `env()` first (Laravel's `illuminate/support` helpers are the common one) silently replaces Marko's, with different coercion rules. `Env` is a class, so it has no such conflict.
+
+### env()
+
+```php
+/** @deprecated */
+function env(string $key, mixed $default = null): mixed;
+```
+
+Retrieves an environment variable by name. Checks `$_ENV` first, then falls back to `getenv()`. Returns the `$default` if the variable is not set. Applies the coercion in the table above, and emits `E_USER_DEPRECATED` on every call.
 
 ## API Reference
 
@@ -89,12 +162,4 @@ $host = $this->config->getString('database.host');
 public function load(string $path): void;
 ```
 
-Loads environment variables from a `.env` file in the given directory. Skips comments, blank lines, and lines without `=`. Removes surrounding quotes (single or double) from values. Does not overwrite existing system environment variables.
-
-### env()
-
-```php
-function env(string $key, mixed $default = null): mixed;
-```
-
-Retrieves an environment variable by name. Checks `$_ENV` first, then falls back to `getenv()`. Returns the `$default` if the variable is not set. Applies type coercion for common string representations (see table above).
+Mirrors real environment variables (from `getenv()`) into `$_ENV` without overwriting existing entries, then loads environment variables from a `.env` file in the given directory, if one exists. Skips comments, blank lines, and lines without `=`. Removes surrounding quotes (single or double) from values. Does not overwrite existing system environment variables — real environment variables win over `.env` values.

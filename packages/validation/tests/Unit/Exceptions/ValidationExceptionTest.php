@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Marko\Core\Exceptions\HttpExceptionInterface;
+use Marko\Routing\Http\ExceptionRenderer;
+use Marko\Routing\Http\Request;
 use Marko\Validation\Exceptions\ValidationException;
 use Marko\Validation\Validation\ValidationErrors;
 
@@ -59,4 +62,37 @@ it('creates exception with errors using factory method', function () {
         ->and($exception->errors())->toBe($errors)
         ->and($exception->getContext())->not->toBeEmpty()
         ->and($exception->getSuggestion())->not->toBeEmpty();
+});
+
+describe('HTTP mapping', function (): void {
+    it('implements HttpExceptionInterface with status 422', function (): void {
+        $exception = ValidationException::withErrors(new ValidationErrors(['email' => ['Email is required.']]));
+
+        expect($exception)->toBeInstanceOf(HttpExceptionInterface::class)
+            ->and($exception->getStatusCode())->toBe(422)
+            ->and($exception->getHeaders())->toBeEmpty();
+    });
+
+    it('exposes message and errors in response data', function (): void {
+        $errors = new ValidationErrors(['email' => ['Email is required.'], 'name' => ['Name is too short.']]);
+
+        expect(ValidationException::withErrors($errors)->getResponseData())->toBe([
+            'message' => 'The given data was invalid.',
+            'errors' => $errors->all(),
+        ]);
+    });
+
+    it('renders 422 with an errors object matching ValidationErrors::all', function (): void {
+        $errors = new ValidationErrors(['email' => ['Email is required.', 'Email is invalid.']]);
+
+        $response = (new ExceptionRenderer())->render(
+            ValidationException::withErrors($errors),
+            new Request(server: ['HTTP_ACCEPT' => 'application/json']),
+        );
+        $body = json_decode($response->body(), true);
+
+        expect($response->statusCode())->toBe(422)
+            ->and($body['message'])->toBe('The given data was invalid.')
+            ->and($body['errors'])->toBe($errors->all());
+    });
 });

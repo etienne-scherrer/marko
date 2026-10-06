@@ -22,10 +22,18 @@ Note: You typically install a driver package (like `marko/queue-database`) which
 `marko/queue` requires [`marko/encryption`](/docs/packages/encryption/) and a non-empty `encryption.key` in your config. Job payloads are HMAC-signed when enqueued and verified before deserialization; if the key is empty or the signature does not match, a `SerializationException` is thrown loudly.
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['APP_KEY'] ?? '',
+    'key' => Env::string('APP_KEY', ''),
 ];
 ```
+
+### Payload Envelope Format
+
+`JobEnvelope` wraps every stored payload as `{hmac}.b64:{base64(serialize(job))}`. The 64-character hex HMAC-SHA256 covers everything after the `.` separator, including the `b64:` marker. PHP's `serialize()` writes NUL bytes for private and protected properties. Base64 keeps the payload 7-bit clean, so it fits in a PostgreSQL `TEXT` column, which can't store `\0`.
+
+The legacy format, `{hmac}.{raw serialized bytes}`, is still accepted when unwrapping. Jobs queued before the base64 format was introduced keep working after an upgrade. New payloads are always written in the base64 format. The same envelope is used for queued jobs, failed-job payloads and `AsyncObserverJob` event data, and by every driver.
 
 ## Usage
 
@@ -49,14 +57,14 @@ readonly class SendWelcomeEmail extends Job
 }
 ```
 
-Set `maxAttempts` to control retry behavior (defaults to 3):
+By default a job is attempted `queue.max_attempts` times (see [Configuration](#configuration)). Override `maxAttempts` on a job to give it its own limit. The property is `?int`: `null` (the default on `Job`) means "use the config value".
 
 ```php
 use Marko\Queue\Job;
 
 class ImportProducts extends Job
 {
-    protected(set) int $maxAttempts = 5;
+    public protected(set) ?int $maxAttempts = 5;
 
     public function handle(): void
     {
@@ -65,11 +73,53 @@ class ImportProducts extends Job
 }
 ```
 
-When a job fails and has remaining attempts, the worker releases it back to the queue with exponential backoff (`2^attempts * 10` seconds). Once all attempts are exhausted, the job is stored in the failed job repository.
+When a job fails and has remaining attempts, the worker releases it back to the queue after a backoff delay (see [Retry Backoff](#retry-backoff)). Once all attempts are exhausted, the job is stored in the failed job repository and removed from the queue.
+
+Attempts persist across releases: the driver stores the updated count with the job, so a job that always throws is attempted exactly `maxAttempts` times. Drivers that track reservations (such as [`marko/queue-database`](/docs/packages/queue-database/)) also count an attempt whose worker died mid-run, so a job that crashes its worker cannot be retried forever.
+
+### Retry Backoff
+
+The backoff is how many seconds the worker waits before a failed job runs again. Set it per job with the `backoff` property, or for every job with `queue.backoff` in [Configuration](#configuration). The worker uses the job's value first, then the config value, then the built-in curve.
+
+| Value | Meaning |
+|-------|---------|
+| `int` | A fixed delay for every retry, e.g. `30` |
+| `list<int>` | The delay per attempt: the first entry after attempt 1 fails, the second after attempt 2, and so on. The last value repeats once the list runs out |
+| `null` | Fall through: a job with `null` uses `queue.backoff`, and `queue.backoff => null` uses `2^attempts * 10` seconds (20, 40, 80, ...) |
+
+```php
+use Marko\Queue\Job;
+
+class DeliverPartnerWebhook extends Job
+{
+    public protected(set) ?int $maxAttempts = 5;
+
+    // 5s after attempt 1, 30s after attempt 2, 120s after attempts 3 and 4
+    public protected(set) array|int|null $backoff = [5, 30, 120];
+
+    public function handle(): void
+    {
+        // Call a slow partner API...
+    }
+}
+```
+
+Declare the property with exactly the type `array|int|null`, since PHP requires a redeclared property to keep its parent's type.
+
+#### Invalid Backoff Values
+
+A negative delay, an empty or keyed array, or a list with a negative or non-int entry is invalid. What happens depends on where it is set:
+
+- **`queue.backoff` config**: `queue:work` checks it before it starts. It refuses to start, prints the `Invalid queue backoff in config queue.backoff.` error with the reason, and exits with code `1`, so the mistake shows up at deploy rather than when the first job fails.
+- **A job's `backoff` property**: the worker only reads it when that job fails with attempts left. It can't release the job without a valid delay, so it fails the job instead: the job goes to the failed job repository with both its own exception and the `Invalid queue backoff in job ...` error, is deleted from the queue, and the worker moves on to the next job. One bad job class can't stop your workers, and the job's real error isn't lost.
+
+The failed job's payload keeps the `backoff` value it was dispatched with. `marko queue:retry <id>` runs it again with that same value: fine if it succeeds, but if it throws again it goes straight back to the failed jobs. After fixing the property, dispatch the job again so the new value applies.
+
+On a job's last attempt the backoff isn't read, so an invalid value there doesn't add a backoff error to the failed job. `Worker::backoffFor()` itself still throws `QueueException` for an invalid value.
 
 ### Jobs That Need Container Services
 
-If your job needs to resolve services (like a mailer or repository) from the container at handle-time rather than serializing them, implement `ContainerAwareJobInterface`. The worker automatically injects the container before calling `handle()`:
+If your job needs to resolve services (like a mailer or repository) from the container at handle-time rather than serializing them, implement `ContainerAwareJobInterface`. The worker injects the container before calling `handle()`, and calls `releaseContainer()` afterwards:
 
 ```php
 use Marko\Queue\Job;
@@ -79,7 +129,7 @@ use Marko\Core\Container\ContainerInterface;
 
 class SendOrderEmail extends Job implements ContainerAwareJobInterface
 {
-    private ContainerInterface $container;
+    private ?ContainerInterface $container = null;
 
     public function __construct(
         private readonly int $orderId,
@@ -93,6 +143,11 @@ class SendOrderEmail extends Job implements ContainerAwareJobInterface
 
     public function setJobEnvelope(JobEnvelope $jobEnvelope): void {}
 
+    public function releaseContainer(): void
+    {
+        $this->container = null;
+    }
+
     public function handle(): void
     {
         $mailer = $this->container->get(MailerInterface::class);
@@ -102,6 +157,18 @@ class SendOrderEmail extends Job implements ContainerAwareJobInterface
 ```
 
 Store only scalar values (IDs, strings) in the job's constructor — resolve heavy services from the container in `handle()`. This avoids serializing objects that may not survive across queue backends.
+
+`releaseContainer()` must drop everything `setContainer()` and `setJobEnvelope()` stored, so the job holds only serializable data again. The worker calls it in a `finally` block around `handle()`, so it runs when the job succeeds and when it throws. That matters on the job's last attempt: the worker serializes the failed job into the failed-job store, and the container holds closures that cannot be serialized. Make `releaseContainer()` safe to call more than once, and before anything was injected.
+
+### When a Failed Job Cannot Be Serialized
+
+If a job that has used up its attempts still can't be serialized (for example, it holds a closure, a resource or a live connection), the worker records it anyway and keeps running:
+
+- The failed job's payload is a placeholder, `['class' => <job class>, 'serialization_error' => <message>]`, signed with the same envelope as every other payload. `queue:failed` shows the job class from it.
+- The failed job's `exception` text holds the job's own exception and trace, followed by `Job payload could not be serialized, so this failed job cannot be retried.` with the job class and the serialization error.
+- The job is deleted from the queue, so the next worker doesn't pick it up again.
+
+`queue:retry` refuses a placeholder (and any payload that isn't a queue job): it prints why, leaves the row in the failed-job store, and returns exit code 1. Fix the job so it holds only serializable data, then dispatch it again.
 
 ### Dispatching Jobs
 
@@ -149,9 +216,57 @@ Use the CLI command to process jobs:
 
 ```bash
 marko queue:work
-marko queue:work --queue=emails
+marko queue:work --queue emails     # or --queue=emails
 marko queue:work --once
+marko queue:work --queue=high,default,low --sleep=1
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--queue` | Queue names to work, in priority order, separated by commas. Defaults to the `queue.queue` config value |
+| `--sleep` | Seconds to wait when every queue is empty (default `3`) |
+| `--once` | Process at most one job, then exit |
+
+### Queue Priority
+
+Give `--queue` several names to work them in priority order from one worker process:
+
+```bash
+marko queue:work --queue=high,default,low
+```
+
+On every pass the worker pops `high` first, then `default`, then `low`, and processes the first job it finds. After each job it starts again at `high`, so a lower queue only runs when every queue ahead of it is empty. The worker sleeps only when all listed queues are empty. With `--once`, it processes at most one job across all the queues.
+
+A failed job is recorded with the queue it was popped from, so `queue:failed` shows `low` for a job that failed on the `low` queue.
+
+To work queues from code, pass the list to the worker:
+
+```php
+use Marko\Queue\WorkerInterface;
+
+$worker->work(queues: ['high', 'default', 'low']);
+```
+
+`marko/queue` binds `WorkerInterface` to the built-in `Worker`, so `queue:work` resolves once a driver is installed. You don't need to bind it yourself. To replace the worker, bind `WorkerInterface` to your own class in your module's `module.php`, or use a Preference on `Worker`.
+
+### Async Observers
+
+`marko/queue` binds `Marko\Core\Event\AsyncObserverDispatcherInterface` to `QueueAsyncObserverDispatcher`. Installing the package and a driver is all it takes for `#[Observer(async: true)]` observers to be queued instead of run during the request:
+
+```php
+use Marko\Core\Attributes\Observer;
+
+#[Observer(event: OrderShipped::class, async: true)]
+class SendShippingEmail
+{
+    public function handle(OrderShipped $event): void
+    {
+        // Runs when queue:work processes the AsyncObserverJob
+    }
+}
+```
+
+When an async observer fires, `QueueAsyncObserverDispatcher` serializes the event, wraps it in a `JobEnvelope` and pushes an `AsyncObserverJob` onto the default queue. The worker verifies the envelope, resolves the observer from the container and calls `handle()` with the event. The binding is resolved the first time an async observer fires, so requests that dispatch none never open a queue connection. An event that can't be serialized throws `SerializationException` at dispatch time. Without `marko/queue`, an async observer throws an `EventException` rather than running inline. See [Events](/docs/concepts/events/#async-observers).
 
 ### Managing Failed Jobs
 
@@ -159,8 +274,29 @@ marko queue:work --once
 |---------|-------------|
 | `marko queue:failed` | List failed jobs |
 | `marko queue:retry <id>` | Retry a failed job (resets attempt counter so the job gets its full `maxAttempts`) |
+| `marko queue:retry --all` | Retry every failed job. Rows whose payload could not be serialized are skipped and reported, and the command returns exit code 1 if any were skipped |
 | `marko queue:clear` | Clear all jobs from a queue |
 | `marko queue:status` | Show queue size |
+
+### Time and Testing
+
+The worker reads the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)) and stamps `FailedJob::$failedAt` with it, rather than calling `new DateTimeImmutable()`. In a test, pass a [`FakeClock`](/docs/packages/testing/#fakeclock) to freeze that time:
+
+```php
+use Marko\Queue\Worker;
+use Marko\Testing\Fake\FakeClock;
+
+it('records when a job failed', function (): void {
+    $clock = new FakeClock('2026-03-01 09:15:00 UTC');
+    $worker = new Worker($queue, $failedJobs, $config, $envelope, $container, $clock);
+
+    $worker->work(once: true);
+
+    expect($failedJobs->find($jobId)?->failedAt)->toEqual($clock->now());
+});
+```
+
+Drivers that schedule delayed or reserved jobs, such as [`marko/queue-database`](/docs/packages/queue-database/#time-and-testing), take the same clock, so one `FakeClock` controls the whole queue.
 
 ### Configuration
 
@@ -173,6 +309,7 @@ return [
     'queue'        => 'default',
     'retry_after'  => 90,           // seconds before a reserved-but-unfinished job is reclaimed
     'max_attempts' => 3,
+    'backoff'      => null,         // int, list<int>, or null for 2^attempts * 10 seconds
 ];
 ```
 
@@ -180,9 +317,10 @@ return [
 |-----|---------|-------------|
 | `driver` | `sync` | Queue backend: `sync`, `database`, or `rabbitmq` |
 | `connection` | `default` | Named connection passed to the driver |
-| `queue` | `default` | Default queue name |
-| `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation |
-| `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store |
+| `queue` | `default` | Default queue name, used by `push()`, `later()` and `pop()` when no queue is given |
+| `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation. The reclaimed reservation still counts as an attempt |
+| `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store. A job's own `maxAttempts`, when set, takes precedence |
+| `backoff` | `null` | Seconds to wait before retrying a failed job that sets no `backoff` of its own: an `int` (fixed), a `list<int>` (per attempt; the last value repeats), or `null` for `2^attempts * 10` seconds. See [Retry Backoff](#retry-backoff) |
 
 The `QueueConfig` class provides typed access to these values:
 
@@ -202,6 +340,7 @@ class MyService
         $defaultQueue = $this->queueConfig->queue();
         $retryAfter = $this->queueConfig->retryAfter();
         $maxAttempts = $this->queueConfig->maxAttempts();
+        $backoff = $this->queueConfig->backoff();
     }
 }
 ```
@@ -230,7 +369,8 @@ use Marko\Queue\JobInterface;
 
 public ?string $id { get; }
 public int $attempts { get; }
-public int $maxAttempts { get; }
+public ?int $maxAttempts { get; } // null = use queue.max_attempts
+public array|int|null $backoff { get; } // int, list<int>, or null = use queue.backoff
 public function handle(): void;
 public function setId(string $id): void;
 public function incrementAttempts(): void;
@@ -244,9 +384,12 @@ public static function unserialize(string $data): static;
 ```php
 use Marko\Queue\WorkerInterface;
 
-public function work(?string $queue = null, bool $once = false, int $sleep = 3): void;
+/** @param list<string>|null $queues Priority order; null = the default queue */
+public function work(?array $queues = null, bool $once = false, int $sleep = 3): void;
 public function stop(): void;
 ```
+
+The built-in `Worker` also exposes `backoffFor(JobInterface $job): int`, which returns the retry delay for a job whose latest attempt failed.
 
 ### FailedJobRepositoryInterface
 
@@ -272,6 +415,7 @@ public function connection(): string;
 public function queue(): string;
 public function retryAfter(): int;
 public function maxAttempts(): int;
+public function backoff(): array|int|null; // int, list<int>, or null; throws QueueException when invalid
 ```
 
 ### ContainerAwareJobInterface
@@ -283,9 +427,23 @@ use Marko\Core\Container\ContainerInterface;
 
 public function setContainer(ContainerInterface $container): void;
 public function setJobEnvelope(JobEnvelope $jobEnvelope): void;
+public function releaseContainer(): void;
 ```
 
-Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface and calls both setters before invoking `handle()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface, calls both setters before invoking `handle()`, and calls `releaseContainer()` once `handle()` returns or throws. The [sync driver](/docs/packages/queue-sync/) does the same when it runs a job on `push()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+
+`releaseContainer()` is part of the contract: a job written before it existed must add it. It must drop the container, the envelope and anything else the setters stored. See [Jobs That Need Container Services](#jobs-that-need-container-services).
+
+### QueueAsyncObserverDispatcher
+
+```php
+use Marko\Core\Event\Event;
+use Marko\Queue\QueueAsyncObserverDispatcher;
+
+public function dispatch(string $observerClass, Event $event): void;
+```
+
+Implements `Marko\Core\Event\AsyncObserverDispatcherInterface` and is bound to it in `module.php`. Pushes an `AsyncObserverJob` whose event data is the serialized event wrapped in a `JobEnvelope`. Throws `SerializationException` when the event can't be serialized.
 
 ### Exceptions
 
@@ -293,4 +451,5 @@ Implement this interface on any job class that needs to resolve services from th
 |-----------|-------------|
 | `QueueException` | Base exception for all queue errors --- includes `getContext()` and `getSuggestion()` methods |
 | `JobFailedException` | Thrown when a job fails during execution |
-| `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
+| `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when an async observer's event cannot be serialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
+| `NoDriverException` | Thrown when a queue interface can't be resolved. For `QueueInterface` and `FailedJobRepositoryInterface` it lists the driver packages to install. For any other queue interface it names the interface that has no binding and tells you to bind it in `module.php` |

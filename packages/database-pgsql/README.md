@@ -12,33 +12,36 @@ This automatically installs `marko/database` (the interface package) as a depend
 
 ## Configuration
 
-Publish or create `config/database.php` and set your connection details:
+Create `config/database.php` with a flat array of connection details:
 
-```php
+```php title="config/database.php"
+<?php
+
+declare(strict_types=1);
+
+use Marko\Config\Env;
+
 return [
-    'default' => env('DB_CONNECTION', 'pgsql'),
-
-    'connections' => [
-        'pgsql' => [
-            'driver'   => 'pgsql',
-            'host'     => env('DB_HOST', '127.0.0.1'),
-            'database' => env('DB_DATABASE', 'marko'),
-            'username' => env('DB_USERNAME', 'postgres'),
-            'password' => env('DB_PASSWORD', ''),
-        ],
-    ],
+    'driver' => 'pgsql',
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 5432, min: 1, max: 65535),
+    'database' => Env::string('DB_DATABASE', 'marko'),
+    'username' => Env::string('DB_USERNAME', 'postgres'),
+    'password' => Env::string('DB_PASSWORD', ''),
 ];
 ```
 
-Set the corresponding values in your `.env` file:
+`driver`, `host`, `port`, `database`, `username`, and `password` are all required. Set the corresponding values in your `.env` file:
 
 ```dotenv
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
+DB_HOST=localhost
+DB_PORT=5432
 DB_DATABASE=marko
 DB_USERNAME=postgres
 DB_PASSWORD=secret
 ```
+
+For multiple connections (for example, read replicas), use [`marko/database-readwrite`](https://marko.build/docs/packages/database-readwrite/), which adds the `connections` layout.
 
 ## Driver Notes
 

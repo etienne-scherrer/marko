@@ -13,7 +13,7 @@ use Marko\Routing\Router;
 
 it('accepts a RouteMatcher in constructor', function (): void {
     $routes = new RouteCollection();
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
 
     $router = new Router(
         matcher: new RouteMatcher($routes),
@@ -40,7 +40,7 @@ it('matches request to route', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -63,7 +63,7 @@ it('matches request to route', function (): void {
 it('returns 404 response when no route matches', function (): void {
     $routes = new RouteCollection();
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
 
     $router = new Router(
         matcher: new RouteMatcher($routes),
@@ -78,7 +78,7 @@ it('returns 404 response when no route matches', function (): void {
     $response = $router->handle($request);
 
     expect($response->statusCode())->toBe(404)
-        ->and($response->body())->toBe('Not Found');
+        ->and($response->body())->toContain('404 Not Found');
 });
 
 it('resolves controller through container', function (): void {
@@ -144,7 +144,7 @@ it('invokes controller method', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -188,7 +188,7 @@ it('passes route parameters to controller method', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -244,7 +244,7 @@ it('executes middleware pipeline', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturnCallback(fn (string $class) => match ($class) {
             'App\\Controllers\\ProtectedController' => $controller,
@@ -288,7 +288,7 @@ it('returns response from controller', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -347,7 +347,7 @@ it('returns response from middleware short-circuit', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturnCallback(fn (string $class) => match ($class) {
             'App\\Controllers\\AdminController' => $controller,
@@ -388,7 +388,7 @@ it('handles controller returning Response object', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -426,7 +426,7 @@ it('wraps string return in Response object', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -467,7 +467,7 @@ it('wraps array return in JSON Response', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -514,7 +514,7 @@ it('injects Request into controller method parameter', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -569,7 +569,7 @@ it('executes global middleware on every request', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturnCallback(fn (string $class) => match ($class) {
             'App\\Controllers\\HelloController' => $controller,
@@ -645,7 +645,7 @@ it('runs global middleware before route middleware', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturnCallback(fn (string $class) => match ($class) {
             'App\\Controllers\\TestCtrl' => $controller,
@@ -708,7 +708,7 @@ it('makes the matched controller and action visible to middleware during Router:
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturnCallback(fn (string $class) => match ($class) {
             'App\\Controllers\\HelloController' => $controller,
@@ -756,7 +756,7 @@ it('prefers a route param over a POST value of the same name', function (): void
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -800,7 +800,7 @@ it('still injects the default value for an optional param that has one', functio
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -836,7 +836,7 @@ it('does not raise a TypeError when a required typed scalar param is missing', f
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -877,7 +877,7 @@ it('returns a 4xx response naming the parameter when a required typed scalar par
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -922,7 +922,7 @@ it('casts a query-string value to a typed scalar action parameter', function ():
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -966,7 +966,7 @@ it('casts a POST value to a bool action parameter', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -1010,7 +1010,7 @@ it('casts a POST value to an int action parameter', function (): void {
         }
     };
 
-    $container = $this->createMock(ContainerInterface::class);
+    $container = $this->createStub(ContainerInterface::class);
     $container->method('get')
         ->willReturn($controller);
 
@@ -1027,6 +1027,178 @@ it('casts a POST value to an int action parameter', function (): void {
     $router->handle($request);
 
     expect($receivedCount)->toBe(42);
+});
+
+it('binds json body fields to typed controller parameters', function (): void {
+    $routes = new RouteCollection();
+    $routes->add(new RouteDefinition(
+        method: 'POST',
+        path: '/shows',
+        controller: 'App\\Controllers\\ShowController',
+        action: 'create',
+    ));
+
+    $received = [];
+    $controller = new class ($received)
+    {
+        public function __construct(
+            private array &$received,
+        ) {}
+
+        public function create(
+            string $title,
+            int $count,
+        ): Response {
+            $this->received = ['title' => $title, 'count' => $count];
+
+            return new Response('Created', 201);
+        }
+    };
+
+    $container = $this->createStub(ContainerInterface::class);
+    $container->method('get')
+        ->willReturn($controller);
+
+    $router = new Router(
+        matcher: new RouteMatcher($routes),
+        container: $container,
+    );
+
+    $request = new Request(
+        server: ['REQUEST_METHOD' => 'POST', 'REQUEST_URI' => '/shows', 'CONTENT_TYPE' => 'application/json'],
+        body: '{"title":"Live at Five","count":7}',
+    );
+
+    $response = $router->handle($request);
+
+    expect($response->statusCode())->toBe(201)
+        ->and($received)->toBe(['title' => 'Live at Five', 'count' => 7]);
+});
+
+it('prefers a json body value over a query value of the same name', function (): void {
+    $routes = new RouteCollection();
+    $routes->add(new RouteDefinition(
+        method: 'POST',
+        path: '/shows',
+        controller: 'App\\Controllers\\ShowController',
+        action: 'create',
+    ));
+
+    $receivedTitle = null;
+    $controller = new class ($receivedTitle)
+    {
+        public function __construct(
+            private ?string &$receivedTitle,
+        ) {}
+
+        public function create(
+            string $title,
+        ): Response {
+            $this->receivedTitle = $title;
+
+            return new Response('OK');
+        }
+    };
+
+    $container = $this->createStub(ContainerInterface::class);
+    $container->method('get')
+        ->willReturn($controller);
+
+    $router = new Router(
+        matcher: new RouteMatcher($routes),
+        container: $container,
+    );
+
+    $request = new Request(
+        server: ['REQUEST_METHOD' => 'POST', 'REQUEST_URI' => '/shows?title=query', 'CONTENT_TYPE' => 'application/json'],
+        query: ['title' => 'query'],
+        body: '{"title":"body"}',
+    );
+
+    $router->handle($request);
+
+    expect($receivedTitle)->toBe('body');
+});
+
+it('returns 400 when a json request body is malformed during parameter binding', function (): void {
+    $routes = new RouteCollection();
+    $routes->add(new RouteDefinition(
+        method: 'POST',
+        path: '/shows',
+        controller: 'App\\Controllers\\ShowController',
+        action: 'create',
+    ));
+
+    $controller = new class ()
+    {
+        public function create(
+            string $title,
+        ): Response {
+            return new Response('OK');
+        }
+    };
+
+    $container = $this->createStub(ContainerInterface::class);
+    $container->method('get')
+        ->willReturn($controller);
+
+    $router = new Router(
+        matcher: new RouteMatcher($routes),
+        container: $container,
+    );
+
+    $request = new Request(
+        server: ['REQUEST_METHOD' => 'POST', 'REQUEST_URI' => '/shows', 'CONTENT_TYPE' => 'application/json'],
+        body: '{"title": ',
+    );
+
+    $response = $router->handle($request);
+
+    expect($response->statusCode())->toBe(400)
+        ->and($response->body())->toContain('malformed JSON');
+});
+
+it('renders a 400 when a controller reads a malformed json body itself', function (): void {
+    $routes = new RouteCollection();
+    $routes->add(new RouteDefinition(
+        method: 'POST',
+        path: '/shows',
+        controller: 'App\\Controllers\\ShowController',
+        action: 'create',
+    ));
+
+    $controller = new class ()
+    {
+        public function create(
+            Request $request,
+        ): Response {
+            return new Response((string) json_encode($request->json()));
+        }
+    };
+
+    $container = $this->createStub(ContainerInterface::class);
+    $container->method('get')
+        ->willReturn($controller);
+
+    $router = new Router(
+        matcher: new RouteMatcher($routes),
+        container: $container,
+    );
+
+    $request = new Request(
+        server: [
+            'REQUEST_METHOD' => 'POST',
+            'REQUEST_URI' => '/shows',
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+        ],
+        body: '{"title": ',
+    );
+
+    $response = $router->handle($request);
+
+    expect($response->statusCode())->toBe(400)
+        ->and($response->body())->toContain('malformed JSON');
 });
 
 class TestController

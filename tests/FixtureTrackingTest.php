@@ -10,7 +10,7 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 
 /**
- * Every file under a package's `tests/Fixtures/` must be reachable by git.
+ * Every file under a package's `tests/Fixtures/` (or `tests/fixtures/`) must be reachable by git.
  *
  * Fixtures that model a real Marko project tree contain a directory literally
  * named `vendor/`, because that is what module discovery looks for. The root
@@ -34,7 +34,15 @@ function fixtureFiles(): array
 {
     $paths = [];
 
-    foreach (glob(monorepoRoot() . '/packages/*/tests/Fixtures', GLOB_ONLYDIR) ?: [] as $fixtureRoot) {
+    // Packages use both `Fixtures/` and `fixtures/`. The basename filter (instead of
+    // a literal glob segment) reads the real directory names, so a case-insensitive
+    // filesystem cannot match one directory under both spellings.
+    $fixtureRoots = array_filter(
+        glob(monorepoRoot() . '/packages/*/tests/*', GLOB_ONLYDIR) ?: [],
+        static fn (string $dir): bool => in_array(basename($dir), ['Fixtures', 'fixtures'], true),
+    );
+
+    foreach ($fixtureRoots as $fixtureRoot) {
         // Symlinks are deliberately not followed: the roadrunner fixture links
         // vendor/marko/roadrunner back at the package itself, so descending
         // through it would recurse without end.

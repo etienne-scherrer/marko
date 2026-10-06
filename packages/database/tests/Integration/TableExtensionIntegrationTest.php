@@ -101,6 +101,17 @@ function createSqliteConnection(): ConnectionInterface
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 

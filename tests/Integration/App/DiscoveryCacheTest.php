@@ -1,0 +1,117 @@
+<?php
+
+declare(strict_types=1);
+
+use Marko\Core\Application;
+use Marko\Core\Discovery\CachedDiscovery;
+use Marko\Core\Module\ModuleManifest;
+use Marko\Database\Entity\EntityCacheContributor;
+use Marko\Integration\Fixture\Entity\Author;
+use Marko\Routing\RouteCollection;
+use Marko\Routing\RouteDefinition;
+
+/*
+ * The route and module discovery cache through the real module wiring (#173):
+ * a production boot from a warm cache must behave exactly like a live boot.
+ */
+
+pest()->group('integration-services');
+
+beforeEach(function (): void {
+    $this->savedDiscoveryEnv = [];
+
+    foreach (['DISCOVERY_CACHE_ENABLED', 'DISCOVERY_CACHE_PATH'] as $key) {
+        $this->savedDiscoveryEnv[$key] = [array_key_exists($key, $_ENV) ? $_ENV[$key] : null, getenv($key)];
+        unset($_ENV[$key]);
+        putenv($key);
+    }
+
+    setUpIntegrationTest($this);
+});
+
+afterEach(function (): void {
+    tearDownIntegrationTest($this);
+
+    foreach ($this->savedDiscoveryEnv ?? [] as $key => [$env, $process]) {
+        unset($_ENV[$key]);
+        putenv($key);
+
+        if ($env !== null) {
+            $_ENV[$key] = $env;
+        }
+
+        if ($process !== false) {
+            putenv("$key=$process");
+        }
+    }
+});
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function discoveryCacheRoutes(
+    Application $app,
+): array {
+    return array_map(fn (RouteDefinition $route): array => [
+        'method' => $route->method,
+        'path' => $route->path,
+        'controller' => $route->controller,
+        'action' => $route->action,
+        'middleware' => $route->middleware,
+        'name' => $route->name,
+        'withoutMiddleware' => $route->withoutMiddleware,
+    ], $app->container->get(RouteCollection::class)->inMatchOrder());
+}
+
+/**
+ * Status and body of requests that leave no state behind.
+ *
+ * @return array<string, array{int, string}>
+ */
+function discoveryCacheResponses(
+    Application $app,
+): array {
+    $requests = [
+        ['GET', '/health'],
+        ['GET', '/visits'],
+        ['GET', '/admin'],
+        ['GET', '/admin/report'],
+        ['GET', '/api/status/204'],
+        ['GET', '/api/status/abc'],
+        ['POST', '/health'],
+        ['GET', '/no-such-route'],
+    ];
+    $responses = [];
+
+    foreach ($requests as [$method, $uri]) {
+        $response = $app->router->handle(integrationRequest($method, $uri));
+        $responses["$method $uri"] = [$response->statusCode(), $response->body()];
+    }
+
+    return $responses;
+}
+
+it('routes identically with the discovery cache warm and cold', function (): void {
+    $cold = $this->app;
+    $coldRoutes = discoveryCacheRoutes($cold);
+    $coldResponses = discoveryCacheResponses($cold);
+
+    $result = runIntegrationCommand($cold, 'discovery:cache');
+    expect($result['exitCode'])->toBe(0, $result['output']);
+
+    $warm = withIntegrationAppEnv('production', function (): Application {
+        $app = Application::boot($this->project);
+        restore_error_handler();
+        restore_exception_handler();
+
+        return $app;
+    });
+    $cachedDiscovery = $warm->container->get(CachedDiscovery::class);
+
+    expect($cachedDiscovery->isCached())->toBeTrue()
+        ->and(array_map(fn (ModuleManifest $m): string => $m->name, $warm->modules))
+        ->toBe(array_map(fn (ModuleManifest $m): string => $m->name, $cold->modules))
+        ->and(discoveryCacheRoutes($warm))->toBe($coldRoutes)
+        ->and($cachedDiscovery->section(EntityCacheContributor::KEY))->toContain(Author::class)
+        ->and(discoveryCacheResponses($warm))->toBe($coldResponses);
+})->issue(173);

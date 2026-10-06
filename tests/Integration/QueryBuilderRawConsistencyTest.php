@@ -21,8 +21,7 @@ function makeRecordingConnection(): ConnectionInterface
         public function query(
             string $sql,
             array $bindings = [],
-        ): array
-        {
+        ): array {
             $this->lastSql = $sql;
             $this->lastBindings = $bindings;
 
@@ -32,8 +31,7 @@ function makeRecordingConnection(): ConnectionInterface
         public function execute(
             string $sql,
             array $bindings = [],
-        ): int
-        {
+        ): int {
             $this->lastSql = $sql;
             $this->lastBindings = $bindings;
 
@@ -84,6 +82,17 @@ function makeRecordingConnection(): ConnectionInterface
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -102,21 +111,21 @@ it(
     function (): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         applyFixture($mysql);
         applyFixture($pgsql);
-    
+
         $mysql->get();
         $pgsql->get();
-    
+
         expect($mysqlConnection->lastBindings)
             ->toBe(['a', 'b', true, 100])
             ->and($pgsqlConnection->lastBindings)
             ->toBe(['a', 'b', true, 100]);
-    }
+    },
 );
 
 it(
@@ -124,18 +133,18 @@ it(
     function (): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         applyFixture($mysql);
         applyFixture($pgsql);
-    
+
         $mysql->get();
         $pgsql->get();
-    
+
         $expected = ['a', 'b', true, 100];
-    
+
         expect($mysqlConnection->lastBindings[0])->toBe('a')
             ->and($mysqlConnection->lastBindings[1])->toBe('b')
             ->and($mysqlConnection->lastBindings[2])->toBeTrue()
@@ -146,7 +155,7 @@ it(
             ->and($pgsqlConnection->lastBindings[3])->toBe(100)
             ->and($mysqlConnection->lastBindings)->toBe($expected)
             ->and($pgsqlConnection->lastBindings)->toBe($expected);
-    }
+    },
 );
 
 it('both drivers include the raw select expression in the SELECT list, after the regular columns', function (): void {
@@ -202,19 +211,19 @@ it(
     function (string $dangerous): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         expect(fn () => $mysql->selectRaw($dangerous))->toThrow(InvalidColumnException::class)
             ->and(fn () => $pgsql->selectRaw($dangerous))->toThrow(InvalidColumnException::class);
-    
+
         $mysql2 = new MySqlQueryBuilder($mysqlConnection);
         $pgsql2 = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         expect(fn () => $mysql2->whereRaw($dangerous))->toThrow(InvalidColumnException::class)
             ->and(fn () => $pgsql2->whereRaw($dangerous))->toThrow(InvalidColumnException::class);
-    }
+    },
 )->with([';', '--', '/*', '*/', '`']);
 
 it(
@@ -222,27 +231,27 @@ it(
     function (): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         applyFixture($mysql);
         applyFixture($pgsql);
-    
+
         $mysql->get();
         $pgsql->get();
-    
+
         $mysqlSql = $mysqlConnection->lastSql ?? '';
         $pgsqlSql = $pgsqlConnection->lastSql ?? '';
-    
+
         $mysqlNormalized = str_replace(['`', '"'], '', $mysqlSql);
         $pgsqlNormalized = str_replace(['`', '"'], '', $pgsqlSql);
-    
+
         $mysqlSelectList = (string) preg_replace('/SELECT\s+(.*?)\s+FROM.*/s', '$1', $mysqlNormalized);
         $pgsqlSelectList = (string) preg_replace('/SELECT\s+(.*?)\s+FROM.*/s', '$1', $pgsqlNormalized);
-    
+
         expect($mysqlSelectList)->toBe($pgsqlSelectList);
-    }
+    },
 );
 
 it(
@@ -250,30 +259,30 @@ it(
     function (): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         applyFixture($mysql);
         applyFixture($pgsql);
-    
+
         $mysql->get();
         $pgsql->get();
-    
+
         $mysqlSql = $mysqlConnection->lastSql ?? '';
         $pgsqlSql = $pgsqlConnection->lastSql ?? '';
-    
+
         $mysqlNormalized = str_replace(['`', '"'], '', $mysqlSql);
         $pgsqlNormalized = str_replace(['`', '"'], '', $pgsqlSql);
-    
+
         $mysqlWherePos = strpos($mysqlNormalized, 'WHERE');
         $pgsqlWherePos = strpos($pgsqlNormalized, 'WHERE');
-    
+
         $mysqlWhere = $mysqlWherePos !== false ? substr($mysqlNormalized, $mysqlWherePos) : '';
         $pgsqlWhere = $pgsqlWherePos !== false ? substr($pgsqlNormalized, $pgsqlWherePos) : '';
-    
+
         expect($mysqlWhere)->toBe($pgsqlWhere);
-    }
+    },
 );
 
 it(
@@ -281,13 +290,13 @@ it(
     function (string $dangerous): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         expect(fn () => $mysql->orderByRaw($dangerous))->toThrow(InvalidColumnException::class)
             ->and(fn () => $pgsql->orderByRaw($dangerous))->toThrow(InvalidColumnException::class);
-    }
+    },
 )->with([';', '--', '/*', '*/', '`']);
 
 it(
@@ -295,37 +304,37 @@ it(
     function (): void {
         $mysqlConnection = makeRecordingConnection();
         $pgsqlConnection = makeRecordingConnection();
-    
+
         $mysql = new MySqlQueryBuilder($mysqlConnection);
         $pgsql = new PgSqlQueryBuilder($pgsqlConnection);
-    
+
         $mysql
             ->table('products')
             ->select('id')
             ->orderBy('id', 'ASC')
             ->orderByRaw('LENGTH(name)', 'DESC')
             ->get();
-    
+
         $pgsql
             ->table('products')
             ->select('id')
             ->orderBy('id', 'ASC')
             ->orderByRaw('LENGTH(name)', 'DESC')
             ->get();
-    
+
         $mysqlSql = $mysqlConnection->lastSql ?? '';
         $pgsqlSql = $pgsqlConnection->lastSql ?? '';
-    
+
         $mysqlNormalized = str_replace(['`', '"'], '', $mysqlSql);
         $pgsqlNormalized = str_replace(['`', '"'], '', $pgsqlSql);
-    
+
         $mysqlOrderPos = strpos($mysqlNormalized, 'ORDER BY');
         $pgsqlOrderPos = strpos($pgsqlNormalized, 'ORDER BY');
-    
+
         $mysqlOrder = $mysqlOrderPos !== false ? substr($mysqlNormalized, $mysqlOrderPos) : '';
         $pgsqlOrder = $pgsqlOrderPos !== false ? substr($pgsqlNormalized, $pgsqlOrderPos) : '';
-    
+
         expect($mysqlOrder)->toBe($pgsqlOrder)
             ->and($mysqlOrder)->toContain('LENGTH(name) DESC');
-    }
+    },
 );

@@ -106,10 +106,21 @@ PHP;
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
 
         // Mock repository
-        $repository = $this->createMock(MigrationRepository::class);
+        $repository = $this->createStub(MigrationRepository::class);
         $repository->method('createTable');
         $repository->method('getApplied')->willReturn([]);
         $repository->method('getNextBatchNumber')->willReturn(1);
@@ -219,9 +230,20 @@ PHP;
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
 
-        $repository = $this->createMock(MigrationRepository::class);
+        $repository = $this->createStub(MigrationRepository::class);
         $repository->method('createTable');
         $repository->method('getApplied')->willReturn([]);
         $repository->method('getNextBatchNumber')->willReturn(1);
@@ -303,9 +325,20 @@ PHP;
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
 
-        $repository = $this->createMock(MigrationRepository::class);
+        $repository = $this->createStub(MigrationRepository::class);
         $repository->method('createTable');
         // First migration already applied
         $repository->method('getApplied')->willReturn(['2024_01_01_000001_first']);
@@ -340,9 +373,9 @@ PHP;
 
         file_put_contents($this->migrationsPath . '/2024_01_01_000001_failing.php', $migrationContent);
 
-        $connection = $this->createMock(ConnectionInterface::class);
+        $connection = $this->createStub(ConnectionInterface::class);
 
-        $repository = $this->createMock(MigrationRepository::class);
+        $repository = $this->createStub(MigrationRepository::class);
         $repository->method('createTable');
         $repository->method('getApplied')->willReturn([]);
         $repository->method('getNextBatchNumber')->willReturn(1);
@@ -438,9 +471,20 @@ PHP;
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
 
-        $repository = $this->createMock(MigrationRepository::class);
+        $repository = $this->createStub(MigrationRepository::class);
         $repository->method('createTable');
         // Return migrations in reverse order (as they would be in batch)
         $repository->method('getLastBatchMigrations')->willReturn([

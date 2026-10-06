@@ -10,7 +10,12 @@ abstract class Job implements JobInterface
 
     public private(set) int $attempts = 0;
 
-    public protected(set) int $maxAttempts = 3;
+    public protected(set) ?int $maxAttempts = null;
+
+    /**
+     * @var int|list<int>|null
+     */
+    public protected(set) array|int|null $backoff = null;
 
     public function setId(
         string $id,

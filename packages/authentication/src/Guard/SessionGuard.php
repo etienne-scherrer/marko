@@ -21,8 +21,6 @@ use Random\RandomException;
 
 class SessionGuard implements GuardInterface, ResettableInterface
 {
-    private const int REMEMBER_COOKIE_MINUTES = 43200; // 30 days
-
     private ?AuthenticatableInterface $cachedUser = null;
 
     public function __construct(
@@ -36,10 +34,11 @@ class SessionGuard implements GuardInterface, ResettableInterface
         private readonly ?CookieJarInterface $cookieJar = null,
         private readonly ?RememberTokenManager $tokenManager = null,
         private readonly ?EventDispatcherInterface $eventDispatcher = null,
+        private readonly string $rememberCookiePrefix = 'remember_',
     ) {}
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     public function check(): bool
     {
@@ -47,7 +46,7 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     public function guest(): bool
     {
@@ -55,7 +54,7 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     public function user(): ?AuthenticatableInterface
     {
@@ -78,7 +77,7 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     private function authenticateViaRememberCookie(): ?AuthenticatableInterface
     {
@@ -100,7 +99,8 @@ class SessionGuard implements GuardInterface, ResettableInterface
 
         [$id, $token] = $parts;
 
-        $user = $this->provider->retrieveByRememberToken($id, $token);
+        // Providers store (and compare against) the hash, never the plain token
+        $user = $this->provider->retrieveByRememberToken($id, $this->tokenManager->hash($token));
 
         if ($user === null) {
             return null;
@@ -120,7 +120,7 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     public function id(): int|string|null
     {
@@ -173,12 +173,12 @@ class SessionGuard implements GuardInterface, ResettableInterface
         AuthenticatableInterface $user,
         bool $remember = false,
     ): void {
-        $this->ensureSessionStarted();
+        $this->ensureSessionAvailable();
         $this->session->set($this->getSessionKey(), $user->getAuthIdentifier());
         $this->session->regenerate();
         $this->cachedUser = $user;
 
-        if ($remember && $this->cookieJar !== null && $this->tokenManager !== null) {
+        if ($remember) {
             $this->createRememberToken($user);
         }
 
@@ -197,21 +197,29 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     private function createRememberToken(
         AuthenticatableInterface $user,
     ): void {
+        if ($this->cookieJar === null || $this->tokenManager === null) {
+            throw AuthException::rememberMeUnavailable($this->name);
+        }
+
         $token = $this->tokenManager->generate();
         $hashedToken = $this->tokenManager->hash($token);
 
         $this->provider->updateRememberToken($user, $hashedToken);
 
+        if ($user->getRememberToken() !== $hashedToken) {
+            throw AuthException::rememberTokenNotStored($this->name, $this->provider::class);
+        }
+
         $cookieValue = $user->getAuthIdentifier() . '|' . $token;
         $this->cookieJar->set(
             $this->getRememberCookieName(),
             $cookieValue,
-            self::REMEMBER_COOKIE_MINUTES,
+            $this->tokenManager->lifetimeMinutes(),
         );
     }
 
@@ -222,15 +230,15 @@ class SessionGuard implements GuardInterface, ResettableInterface
 
     private function getRememberCookieName(): string
     {
-        return 'remember_' . $this->name;
+        return $this->rememberCookiePrefix . $this->name;
     }
 
     /**
      * @throws AuthException
      */
-    private function ensureSessionStarted(): void
+    private function ensureSessionAvailable(): void
     {
-        if (!$this->session->started) {
+        if (!$this->session->isAvailable()) {
             throw new AuthException(
                 message: 'Session not started',
                 context: 'SessionGuard requires an active session',
@@ -257,7 +265,7 @@ class SessionGuard implements GuardInterface, ResettableInterface
     }
 
     /**
-     * @throws RandomException
+     * @throws AuthException|RandomException
      */
     public function logout(): void
     {

@@ -44,12 +44,17 @@ body:
         - authentication
         - authentication-token
         - authorization
+        - broadcasting
+        - broadcasting-amphp
+        - broadcasting-mercure
+        - broadcasting-pusher
         - cache
         - cache-array
         - cache-file
         - cache-redis
         - claude-plugins
         - cli
+        - clock
         - codeindexer
         - config
         - core

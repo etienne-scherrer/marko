@@ -36,6 +36,18 @@ it(
     },
 );
 
+it('requires marko/http as a dependency', function () {
+    $composer = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true);
+
+    expect($composer['require'])->toHaveKey('marko/http');
+});
+
+it('requires marko/routing for the HTTP test client', function () {
+    $composer = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true);
+
+    expect($composer['require'])->toHaveKey('marko/routing');
+});
+
 it('has a module.php with correct module configuration', function () {
     $modulePath = dirname(__DIR__) . '/module.php';
 
@@ -58,4 +70,12 @@ it('has tests directory for tests', function () {
     $testsPath = dirname(__DIR__) . '/tests';
 
     expect(is_dir($testsPath))->toBeTrue();
+});
+
+it('suggests marko/database without requiring it', function () {
+    $composer = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true);
+
+    expect($composer['suggest'])->toHaveKey('marko/database')
+        ->and($composer['require'])->not->toHaveKey('marko/database')
+        ->and($composer['require-dev'])->toHaveKey('marko/database');
 });

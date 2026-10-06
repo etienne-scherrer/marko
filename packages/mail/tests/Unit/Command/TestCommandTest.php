@@ -11,8 +11,8 @@ use Marko\Mail\Exception\TransportException;
 use Marko\Mail\Message;
 
 it('mail:test command requires email argument', function (): void {
-    $mailer = $this->createMock(MailerInterface::class);
-    $config = $this->createMock(MailConfig::class);
+    $mailer = $this->createStub(MailerInterface::class);
+    $config = $this->createStub(MailConfig::class);
 
     $command = new TestCommand($mailer, $config);
     $input = new Input(['marko', 'mail:test']);
@@ -34,7 +34,7 @@ it('mail:test command sends test email', function (): void {
         ->method('send')
         ->willReturn(true);
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -60,7 +60,7 @@ it('mail:test command supports subject option', function (): void {
             return true;
         });
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -75,11 +75,38 @@ it('mail:test command supports subject option', function (): void {
         ->and($capturedMessage->subject)->toBe('Custom Subject');
 });
 
-it('mail:test command shows success message', function (): void {
+it('reads the email argument after --subject for mail:test', function (): void {
+    $capturedMessage = null;
+
     $mailer = $this->createMock(MailerInterface::class);
+    $mailer->expects($this->once())
+        ->method('send')
+        ->willReturnCallback(function (Message $message) use (&$capturedMessage) {
+            $capturedMessage = $message;
+
+            return true;
+        });
+
+    $config = $this->createStub(MailConfig::class);
+    $config->method('fromAddress')->willReturn('sender@example.com');
+    $config->method('fromName')->willReturn('Test Sender');
+
+    $command = new TestCommand($mailer, $config);
+    $input = new Input(['marko', 'mail:test', '--subject', 'Custom Subject', 'recipient@example.com']);
+    $stream = fopen('php://memory', 'r+');
+    $output = new Output($stream);
+
+    $command->execute($input, $output);
+
+    expect($capturedMessage->subject)->toBe('Custom Subject')
+        ->and($capturedMessage->to[0]->email)->toBe('recipient@example.com');
+});
+
+it('mail:test command shows success message', function (): void {
+    $mailer = $this->createStub(MailerInterface::class);
     $mailer->method('send')->willReturn(true);
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 
@@ -98,11 +125,11 @@ it('mail:test command shows success message', function (): void {
 });
 
 it('mail:test command shows failure message on error', function (): void {
-    $mailer = $this->createMock(MailerInterface::class);
+    $mailer = $this->createStub(MailerInterface::class);
     $mailer->method('send')
         ->willThrowException(TransportException::connectionFailed('smtp.example.com', 587));
 
-    $config = $this->createMock(MailConfig::class);
+    $config = $this->createStub(MailConfig::class);
     $config->method('fromAddress')->willReturn('sender@example.com');
     $config->method('fromName')->willReturn('Test Sender');
 

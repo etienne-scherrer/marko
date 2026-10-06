@@ -4,14 +4,28 @@ declare(strict_types=1);
 
 namespace Marko\Authentication\Middleware;
 
-use JsonException;
 use Marko\Authentication\AuthManager;
+use Marko\Authentication\Contracts\StatelessGuardInterface;
 use Marko\Authentication\Exceptions\AuthException;
-use Marko\Authentication\Guard\TokenGuard;
+use Marko\Authentication\Exceptions\UnauthenticatedException;
+use Marko\Config\Exceptions\ConfigNotFoundException;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use Marko\Routing\Middleware\MiddlewareInterface;
 
+/**
+ * Lets authenticated requests through.
+ *
+ * An unauthenticated request throws a 401 UnauthenticatedException, which the routing
+ * pipeline renders through ExceptionRenderer as JSON or HTML according to the
+ * request's Accept header. The one exception is a browser request on a
+ * stateful guard: it is redirected to `redirectTo` when one is set.
+ *
+ * A stateless guard (StatelessGuardInterface, e.g. the token guard) never
+ * redirects, since its API clients cannot follow a login redirect, and its
+ * 401 carries the guard's WWW-Authenticate challenge. A request that wants
+ * JSON (Request::wantsJson()) never redirects either, whatever the guard.
+ */
 readonly class AuthMiddleware implements MiddlewareInterface
 {
     public function __construct(
@@ -21,7 +35,7 @@ readonly class AuthMiddleware implements MiddlewareInterface
     ) {}
 
     /**
-     * @throws JsonException|AuthException
+     * @throws AuthException|ConfigNotFoundException|UnauthenticatedException
      */
     public function handle(
         Request $request,
@@ -33,22 +47,14 @@ readonly class AuthMiddleware implements MiddlewareInterface
             return $next($request);
         }
 
-        // API guards return JSON 401
-        if ($guard instanceof TokenGuard) {
-            return Response::json(
-                data: ['error' => 'Unauthorized'],
-                statusCode: 401,
-            );
-        }
-
-        // Web guards redirect if redirectTo is configured
-        if ($this->redirectTo !== null) {
+        if (
+            !$guard instanceof StatelessGuardInterface
+            && $this->redirectTo !== null
+            && !$request->wantsJson()
+        ) {
             return Response::redirect($this->redirectTo);
         }
 
-        return new Response(
-            body: 'Unauthorized',
-            statusCode: 401,
-        );
+        throw UnauthenticatedException::forGuard($guard);
     }
 }

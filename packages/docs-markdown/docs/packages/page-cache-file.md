@@ -18,14 +18,20 @@ This automatically installs `marko/page-cache`.
 ## Configuration
 
 ```php title="config/page-cache.php"
+use Marko\Config\Env;
+
 return [
-    'driver' => env('PAGE_CACHE_DRIVER', 'file'),
-    'path'   => env('PAGE_CACHE_PATH', 'storage/page-cache'),
-    'ttl'    => (int) env('PAGE_CACHE_TTL', 3600),
+    'driver' => Env::string('PAGE_CACHE_DRIVER', 'file'),
+    'path' => Env::string('PAGE_CACHE_PATH', 'storage/page-cache'),
+    'default_ttl' => Env::int('PAGE_CACHE_TTL', 3600, min: 0),
+    'cacheable_status_codes' => [200, 301],
+    'cacheable_methods' => ['GET', 'HEAD'],
 ];
 ```
 
 The `path` directory and its subdirectories are created automatically if they do not exist.
+
+`default_ttl` is used when a `#[Cacheable]` attribute has `ttl: 0`. When the effective TTL is `0` (for example `PAGE_CACHE_TTL=0`), the page is stored with no expiry and served until it is purged by tag or URL or cleared with `marko page-cache:clear`. A `PAGE_CACHE_TTL` that is not a non-negative integer (`abc`, `1h`, `1.5`, `-1`) fails config load with a `ConfigException` instead of silently becoming `0`. See [Cache Lifetime (TTL)](/docs/packages/page-cache/#cache-lifetime-ttl).
 
 ### Storage Layout
 
@@ -35,7 +41,7 @@ storage/page-cache/
   tags/{hash}.tag        # Reverse-index: page hashes per tag
 ```
 
-Each `.cache` file contains the serialized response body, status code, headers, associated tags, and expiry timestamp. Each `.tag` file contains a serialized list of page hashes that carry that tag, used to resolve purge-by-tag requests.
+Each `.cache` file contains the serialized response body, status code, headers, associated tags, and expiry timestamp (`null` for a page that never expires). An expired entry is deleted the next time it is looked up. Each `.tag` file contains a serialized list of page hashes that carry that tag, used to resolve purge-by-tag requests.
 
 ## Usage
 
@@ -89,6 +95,7 @@ public function clear(): bool;
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption under concurrent traffic.
 - Tag entries are similarly written atomically and updated on each `store()` call.
 - Expired entries are removed on the next `lookup()` call for that key (lazy expiration).
+- Expiry and `created_at` timestamps come from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), not `time()`, so the driver follows a [`FakeClock`](/docs/packages/testing/#fakeclock) in tests.
 
 ## Related Packages
 

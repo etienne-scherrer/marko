@@ -4,17 +4,21 @@ declare(strict_types=1);
 
 namespace Marko\Database\ReadWrite\Connection;
 
+use Closure;
 use Marko\Core\Contracts\ResettableInterface;
 use Marko\Core\Exceptions\MarkoException;
 use Marko\Database\Connection\ConnectionInterface;
+use Marko\Database\Connection\PendingAfterCommitInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
+use Marko\Database\Exceptions\TransactionConflictException;
+use Marko\Database\Exceptions\TransactionException;
 use Marko\Database\ReadWrite\Exceptions\ReadException;
 use Marko\Database\ReadWrite\Replica\ReplicaSelectorInterface;
 use Override;
 use PDOException;
 
-class ReadWriteConnection implements ConnectionInterface, TransactionInterface, ResettableInterface
+class ReadWriteConnection implements ConnectionInterface, TransactionInterface, PendingAfterCommitInterface, ResettableInterface
 {
     private bool $stickyWrite = false;
 
@@ -34,7 +38,13 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
         string $sql,
         array $bindings = [],
     ): array {
-        if ($this->stickyWrite || $this->isWriteStatement($sql)) {
+        if ($this->isWriteStatement($sql)) {
+            // A write that returns rows (INSERT ... RETURNING) sticks to the
+            // write connection like execute() does, so reads see it.
+            $this->stickyWrite = true;
+        }
+
+        if ($this->stickyWrite) {
             return $this->write->query($sql, $bindings);
         }
 
@@ -70,8 +80,9 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
         return $this->write->execute($sql, $bindings);
     }
 
-    public function prepare(string $sql): StatementInterface
-    {
+    public function prepare(
+        string $sql,
+    ): StatementInterface {
         return $this->write->prepare($sql);
     }
 
@@ -83,6 +94,17 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
     public function driverName(): string
     {
         return $this->write->driverName();
+    }
+
+    public function supportsReturning(): bool
+    {
+        return $this->write->supportsReturning();
+    }
+
+    public function quoteIdentifier(
+        string $identifier,
+    ): string {
+        return $this->write->quoteIdentifier($identifier);
     }
 
     public function connect(): void
@@ -121,15 +143,59 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
         return $this->write->inTransaction();
     }
 
-    public function transaction(callable $callback): mixed
+    public function transactionLevel(): int
     {
+        return $this->write->transactionLevel();
+    }
+
+    /**
+     * Routes every read inside the callback to the write connection, then
+     * restores the sticky flag it had before the call. A nested transaction()
+     * therefore leaves the outer transaction's reads on the write connection.
+     *
+     * $attempts and $backoff are passed to the write connection, which owns
+     * the retry and the wait between attempts.
+     *
+     * @throws TransactionException|TransactionConflictException When $attempts is below 1, $backoff is
+     *     negative, or the last attempt still conflicts
+     */
+    public function transaction(
+        callable $callback,
+        int $attempts = 1,
+        int|Closure|null $backoff = null,
+    ): mixed {
+        $wasSticky = $this->stickyWrite;
         $this->stickyWrite = true;
 
         try {
-            return $this->write->transaction($callback);
+            return $this->write->transaction($callback, $attempts, $backoff);
         } finally {
-            $this->stickyWrite = false;
+            $this->stickyWrite = $wasSticky;
         }
+    }
+
+    public function afterCommit(
+        callable $callback,
+    ): void {
+        $this->write->afterCommit($callback);
+    }
+
+    public function afterRollback(
+        callable $callback,
+    ): void {
+        $this->write->afterRollback($callback);
+    }
+
+    /**
+     * @throws TransactionException When the write connection cannot run pending callbacks
+     */
+    public function runPendingAfterCommitCallbacks(): void
+    {
+        if (!$this->write instanceof PendingAfterCommitInterface) {
+            throw TransactionException::cannotRunPendingAfterCommitCallbacks($this->write::class);
+        }
+
+        $this->write->runPendingAfterCommitCallbacks();
     }
 
     public function resetStickyState(): void
@@ -141,6 +207,10 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
      * Rolls back a transaction abandoned by a request that threw before
      * commit()/rollback(), then clears the sticky-write flag.
      *
+     * A resettable write connection resets itself (rolling back every level
+     * and dropping pending callbacks). Otherwise every open level is rolled
+     * back, innermost first, so no savepoint leaves the outer transaction open.
+     *
      * The rollback runs first (inside try) and the sticky-state reset
      * runs in finally so it always happens, even if the rollback itself
      * throws. The exception is intentionally not swallowed here: a
@@ -151,8 +221,12 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
     public function reset(): void
     {
         try {
-            if ($this->write->inTransaction()) {
-                $this->write->rollback();
+            if ($this->write instanceof ResettableInterface) {
+                $this->write->reset();
+            } else {
+                for ($level = $this->write->transactionLevel(); $level > 0; $level--) {
+                    $this->write->rollback();
+                }
             }
         } finally {
             $this->resetStickyState();
@@ -171,8 +245,9 @@ class ReadWriteConnection implements ConnectionInterface, TransactionInterface, 
      * routing to ensure correct behaviour. With ... INSERT ... RETURNING should use
      * execute() instead.
      */
-    private function isWriteStatement(string $sql): bool
-    {
+    private function isWriteStatement(
+        string $sql,
+    ): bool {
         $trimmed = ltrim($sql);
 
         // Strip a leading line comment: -- ...

@@ -22,33 +22,35 @@ Set `driver` to `readwrite` in your `config/database.php`, then declare a `conne
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
     'driver' => 'readwrite',
     'connections' => [
         'write' => [
             'driver'   => 'pgsql',
-            'host'     => $_ENV['DB_WRITE_HOST'] ?? 'localhost',
-            'port'     => (int) ($_ENV['DB_WRITE_PORT'] ?? 5432),
-            'database' => $_ENV['DB_DATABASE'] ?? 'marko',
-            'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
-            'password' => $_ENV['DB_PASSWORD'] ?? '',
+            'host'     => Env::string('DB_WRITE_HOST', 'localhost'),
+            'port'     => Env::int('DB_WRITE_PORT', 5432, min: 1, max: 65535),
+            'database' => Env::string('DB_DATABASE', 'marko'),
+            'username' => Env::string('DB_USERNAME', 'postgres'),
+            'password' => Env::string('DB_PASSWORD', ''),
         ],
         'read' => [
             [
                 'driver'   => 'pgsql',
-                'host'     => $_ENV['DB_READ_HOST_1'] ?? 'replica-1',
-                'port'     => (int) ($_ENV['DB_READ_PORT_1'] ?? 5432),
-                'database' => $_ENV['DB_DATABASE'] ?? 'marko',
-                'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
-                'password' => $_ENV['DB_PASSWORD'] ?? '',
+                'host'     => Env::string('DB_READ_HOST_1', 'replica-1'),
+                'port'     => Env::int('DB_READ_PORT_1', 5432, min: 1, max: 65535),
+                'database' => Env::string('DB_DATABASE', 'marko'),
+                'username' => Env::string('DB_USERNAME', 'postgres'),
+                'password' => Env::string('DB_PASSWORD', ''),
             ],
             [
                 'driver'   => 'pgsql',
-                'host'     => $_ENV['DB_READ_HOST_2'] ?? 'replica-2',
-                'port'     => (int) ($_ENV['DB_READ_PORT_2'] ?? 5432),
-                'database' => $_ENV['DB_DATABASE'] ?? 'marko',
-                'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
-                'password' => $_ENV['DB_PASSWORD'] ?? '',
+                'host'     => Env::string('DB_READ_HOST_2', 'replica-2'),
+                'port'     => Env::int('DB_READ_PORT_2', 5432, min: 1, max: 65535),
+                'database' => Env::string('DB_DATABASE', 'marko'),
+                'username' => Env::string('DB_USERNAME', 'postgres'),
+                'password' => Env::string('DB_PASSWORD', ''),
             ],
         ],
         'read_strategy' => 'random',  // 'random' (default) or 'weighted'
@@ -64,8 +66,9 @@ return [
 | `connections.read` | `array[]` | Yes | One or more replica connection configs |
 | `connections.read_strategy` | `string` | No | Replica selection strategy: `random` (default) or `weighted` |
 | `read[n].weight` | `int` | No | Required when `read_strategy` is `weighted`; positive integer |
+| `timezone` | `string` | No | Top-level [`database.timezone`](/docs/packages/database/#datetimes-and-timezones) (default `UTC`) |
 
-Each connection config inside `write` and `read[]` follows the same structure as a standalone driver config (e.g., `marko/database-pgsql`).
+Each connection config inside `write` and `read[]` follows the same structure as a standalone driver config (e.g., `marko/database-pgsql`). The time zone is the exception: every node's session is pinned to the top-level `timezone` ([the database session time zone](/docs/packages/database/#the-database-session-time-zone)), so the primary and the replicas agree. A `timezone` inside a node config is ignored.
 
 ## Replica Strategies
 
@@ -118,8 +121,9 @@ After any write operation or transaction, subsequent reads within the same reque
 The sticky flag is set by:
 
 - `execute()` — any INSERT, UPDATE, DELETE, or DDL statement
+- `query()` with an INSERT, UPDATE, or DELETE — a write that returns rows, such as the `INSERT ... RETURNING` a repository runs to read a [database-generated key](/docs/packages/database/#database-generated-keys) back, so a following `find()` sees the new row
 - `beginTransaction()` — entering a transaction
-- `transaction(callable $callback)` — the entire callback runs on the primary; the sticky flag is cleared automatically when the callback completes
+- `transaction(callable $callback, int $attempts = 1, int|Closure|null $backoff = null)` — the entire callback, every retried attempt included, runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
 
 ```php
 use Marko\Database\Connection\ConnectionInterface;
@@ -147,6 +151,8 @@ class OrderService
     }
 }
 ```
+
+Row-locking reads (`lockForUpdate()`, `sharedLock()`) must run inside a transaction, so they always reach the primary. `upsert()` is an `INSERT` and is routed to the primary too.
 
 The sticky flag persists until `resetStickyState()` is called. In a PHP-FPM application this happens automatically because each request runs in a fresh process. In long-running processes you must call it manually (see [Long-Running Processes](#long-running-processes)).
 
@@ -183,7 +189,7 @@ In PHP-FPM the sticky flag is cleared automatically at the end of each request b
 
 `ReadWriteConnection` also implements `Marko\Core\Contracts\ResettableInterface`, so a worker that resets every registered `ResettableInterface` implementation between requests will clear the sticky flag automatically via `reset()`. Calling `resetStickyState()` directly remains supported for callers that don't go through the contract.
 
-Beyond clearing the sticky flag, `reset()` also rolls back any transaction left open by a request that called `beginTransaction()` directly and then threw before `commit()`/`rollback()`. Without this, the underlying write connection stays mid-transaction on the pooled connection, and the next request's writes would silently land inside the previous request's abandoned transaction. The rollback only runs when a transaction is actually open; if the rollback itself throws, the sticky flag is still cleared before the exception propagates, so the connection is never left permanently sticky even when a reset only partially succeeds.
+Beyond clearing the sticky flag, `reset()` also rolls back any transaction left open by a request that called `beginTransaction()` directly and then threw before `commit()`/`rollback()`. When the write connection is itself resettable (the MySQL and PostgreSQL drivers are), `reset()` delegates to it, which rolls back every nested level and drops pending after-commit callbacks. Otherwise it calls `rollback()` once per open level, innermost first. Without this, the underlying write connection stays mid-transaction on the pooled connection, and the next request's writes would silently land inside the previous request's abandoned transaction. The rollback only runs when a transaction is actually open; if the rollback itself throws, the sticky flag is still cleared before the exception propagates, so the connection is never left permanently sticky even when a reset only partially succeeds.
 
 ```php
 use Marko\Database\ReadWrite\Connection\ReadWriteConnection;
@@ -240,7 +246,7 @@ Your `CustomReadWriteConnection` must extend `ReadWriteConnection` (or independe
 
 ### ReadWriteConnection
 
-Implements `ConnectionInterface`, `TransactionInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
+Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
 
 | Method | Routes To | Description |
 |--------|-----------|-------------|
@@ -255,10 +261,16 @@ Implements `ConnectionInterface`, `TransactionInterface`, and `ResettableInterfa
 | `commit(): void` | Write | Commit the current transaction |
 | `rollback(): void` | Write | Roll back the current transaction |
 | `inTransaction(): bool` | Write | Check if a transaction is active |
-| `transaction(callable $callback): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction; sticky flag is set for the callback duration and cleared on completion |
+| `transactionLevel(): int` | Write | Number of open transaction levels (savepoints included) |
+| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); `$attempts` and `$backoff` are passed to the write connection, which waits between attempts and retries the outermost transaction on a deadlock or serialization failure. The sticky flag is set for the callback duration and restored to its previous value afterwards |
+| `afterCommit(callable $callback): void` | Write | Run the callback after the write connection's outermost commit |
+| `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
+| `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |
 | `driverName(): string` | Write (delegates) | Return the write connection's driver name (e.g. `'mysql'`, `'pgsql'`) |
+| `supportsReturning(): bool` | Write (delegates) | Whether the write connection supports `INSERT ... RETURNING` |
+| `quoteIdentifier(string $identifier): string` | Write (delegates) | Quote a table or column name with the write connection's quoting rule |
 | `resetStickyState(): void` | — | Clear the sticky flag; subsequent reads route to replicas again |
-| `reset(): void` | — | `ResettableInterface` contract method; rolls back an open transaction (if any) and clears the sticky flag |
+| `reset(): void` | — | `ResettableInterface` contract method; rolls back every open transaction level (delegating to a resettable write connection) and clears the sticky flag |
 
 ### ReadException
 

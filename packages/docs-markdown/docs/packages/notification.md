@@ -135,7 +135,7 @@ $this->notificationSender->queue(
 );
 ```
 
-`queue()` pushes a `SendNotificationJob` onto the queue. The job implements `ContainerAwareJobInterface` and resolves `NotificationSender` from the container at handle-time, so no services are serialized into the payload. If no queue implementation is available, calling `queue()` throws a `NotificationException` with a suggestion to install a queue driver.
+`queue()` pushes a `SendNotificationJob` onto the queue. The job implements `ContainerAwareJobInterface` and resolves `NotificationSender` from the container at handle-time, so no services are serialized into the payload. The worker releases the container once `handle()` returns or throws, so a job that fails for the last time is still recorded in the failed-job store. If no queue implementation is available, calling `queue()` throws a `NotificationException` with a suggestion to install a queue driver.
 
 ### Registering Custom Channels
 
@@ -264,7 +264,7 @@ class SmsChannel implements ChannelInterface, BatchChannelInterface
 }
 ```
 
-The built-in `DatabaseChannel` implements `BatchChannelInterface` and persists multiple recipients via a single chunked multi-row INSERT.
+The built-in `DatabaseChannel` implements `BatchChannelInterface` and persists multiple recipients via a single chunked multi-row INSERT. It stamps `created_at` from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/), so a test that passes a [`FakeClock`](/docs/packages/testing/#fakeclock) gets a known timestamp. The time is converted to the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default) before it is written, whatever timezone the clock is in.
 
 ```php
 use Marko\Notification\Contracts\BatchChannelInterface;

@@ -4,19 +4,28 @@ declare(strict_types=1);
 
 use Marko\Core\Contracts\ResettableInterface;
 use Marko\Database\Connection\ConnectionInterface;
+use Marko\Database\Connection\PendingAfterCommitInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
+use Marko\Database\Exceptions\TransactionException;
 use Marko\Database\ReadWrite\Connection\ReadWriteConnection;
 use Marko\Database\ReadWrite\Exceptions\ReadException;
 use Marko\Database\ReadWrite\Replica\ReplicaSelectorInterface;
 
-function makeConnection(array $overrides = []): ConnectionInterface&TransactionInterface
-{
-    return new class ($overrides) implements ConnectionInterface, TransactionInterface
+function makeConnection(
+    array $overrides = [],
+): ConnectionInterface&TransactionInterface {
+    return new class ($overrides) implements ConnectionInterface, TransactionInterface, PendingAfterCommitInterface
     {
         public array $calls = [];
 
-        public function __construct(private array $overrides) {}
+        /** @var list<int> */
+        public array $transactionAttempts = [];
+
+        /** @var list<int|Closure|null> */
+        public array $transactionBackoffs = [];
+
+        public function __construct(private readonly array $overrides) {}
 
         public function connect(): void
         {
@@ -51,8 +60,9 @@ function makeConnection(array $overrides = []): ConnectionInterface&TransactionI
             return $this->overrides['execute'] ?? 1;
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             $this->calls[] = ['prepare', $sql];
 
             return $this->overrides['prepare'] ?? throw new RuntimeException('Not implemented');
@@ -70,6 +80,21 @@ function makeConnection(array $overrides = []): ConnectionInterface&TransactionI
             $this->calls[] = 'driverName';
 
             return $this->overrides['driverName'] ?? 'mysql';
+        }
+
+        public function supportsReturning(): bool
+        {
+            $this->calls[] = 'supportsReturning';
+
+            return $this->overrides['supportsReturning'] ?? false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            $this->calls[] = 'quoteIdentifier';
+
+            return '"' . str_replace('"', '""', $identifier) . '"';
         }
 
         public function beginTransaction(): void
@@ -98,23 +123,54 @@ function makeConnection(array $overrides = []): ConnectionInterface&TransactionI
             return $this->overrides['inTransaction'] ?? false;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
             $this->calls[] = 'transaction';
+            $this->transactionAttempts[] = $attempts;
+            $this->transactionBackoffs[] = $backoff;
 
             return $callback();
+        }
+
+        public function transactionLevel(): int
+        {
+            $this->calls[] = 'transactionLevel';
+
+            return $this->overrides['transactionLevel'] ?? 0;
+        }
+
+        public function afterCommit(
+            callable $callback,
+        ): void {
+            $this->calls[] = ['afterCommit', $callback];
+        }
+
+        public function afterRollback(
+            callable $callback,
+        ): void {
+            $this->calls[] = ['afterRollback', $callback];
+        }
+
+        public function runPendingAfterCommitCallbacks(): void
+        {
+            $this->calls[] = 'runPendingAfterCommitCallbacks';
         }
     };
 }
 
-function makeSelector(ConnectionInterface $replica): ReplicaSelectorInterface
-{
+function makeSelector(
+    ConnectionInterface $replica,
+): ReplicaSelectorInterface {
     return new readonly class ($replica) implements ReplicaSelectorInterface
     {
         public function __construct(private ConnectionInterface $replica) {}
 
-        public function select(array $replicas): ConnectionInterface
-        {
+        public function select(
+            array $replicas,
+        ): ConnectionInterface {
             return $this->replica;
         }
     };
@@ -127,8 +183,9 @@ function makeSequentialSelector(): ReplicaSelectorInterface
 {
     return new class () implements ReplicaSelectorInterface
     {
-        public function select(array $replicas): ConnectionInterface
-        {
+        public function select(
+            array $replicas,
+        ): ConnectionInterface {
             return $replicas[0];
         }
     };
@@ -137,13 +194,14 @@ function makeSequentialSelector(): ReplicaSelectorInterface
 /**
  * Create a connection whose query() throws a PDOException.
  */
-function makeThrowingConnection(string $message = 'connection refused'): ConnectionInterface&TransactionInterface
-{
+function makeThrowingConnection(
+    string $message = 'connection refused',
+): ConnectionInterface&TransactionInterface {
     return new class ($message) implements ConnectionInterface, TransactionInterface
     {
         public array $calls = [];
 
-        public function __construct(private string $message) {}
+        public function __construct(private readonly string $message) {}
 
         public function connect(): void {}
 
@@ -169,8 +227,9 @@ function makeThrowingConnection(string $message = 'connection refused'): Connect
             return 0;
         }
 
-        public function prepare(string $sql): StatementInterface
-        {
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
             throw new RuntimeException('Not implemented');
         }
 
@@ -184,6 +243,19 @@ function makeThrowingConnection(string $message = 'connection refused'): Connect
             return 'mysql';
         }
 
+        public function supportsReturning(): bool
+        {
+            $this->calls[] = 'supportsReturning';
+
+            return $this->overrides['supportsReturning'] ?? false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
+
         public function beginTransaction(): void {}
 
         public function commit(): void {}
@@ -195,10 +267,22 @@ function makeThrowingConnection(string $message = 'connection refused'): Connect
             return false;
         }
 
-        public function transaction(callable $callback): mixed
-        {
+        public function transaction(
+            callable $callback,
+            int $attempts = 1,
+            int|Closure|null $backoff = null,
+        ): mixed {
             return $callback();
         }
+
+        public function transactionLevel(): int
+        {
+            return 0;
+        }
+
+        public function afterCommit(callable $callback): void {}
+
+        public function afterRollback(callable $callback): void {}
     };
 }
 
@@ -232,8 +316,9 @@ describe('ReadWriteConnection', function (): void {
     it('routes prepare to the write connection', function (): void {
         $statement = new class () implements StatementInterface
         {
-            public function execute(array $bindings = []): bool
-            {
+            public function execute(
+                array $bindings = [],
+            ): bool {
                 return true;
             }
 
@@ -275,6 +360,49 @@ describe('ReadWriteConnection', function (): void {
 
         expect($id)->toBe(99)
             ->and($write->calls)->toContain('lastInsertId')
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it(
+        'makes the connection sticky to the write connection after a write statement runs through query',
+        function (): void {
+            $write = makeConnection(['query' => [['id' => 'generated']]]);
+            $replica = makeConnection();
+            $selector = makeSelector($replica);
+
+            $conn = new ReadWriteConnection($write, [$replica], $selector);
+            $conn->query('INSERT INTO tokens (name) VALUES (?) RETURNING id', ['api']);
+            $conn->query('SELECT * FROM tokens WHERE id = ?', ['generated']);
+
+            expect($write->calls)->toBe([
+                ['query', 'INSERT INTO tokens (name) VALUES (?) RETURNING id', ['api']],
+                ['query', 'SELECT * FROM tokens WHERE id = ?', ['generated']],
+            ])
+                ->and($replica->calls)->toBeEmpty();
+        },
+    );
+
+    it('delegates supportsReturning to the write connection', function (): void {
+        $write = makeConnection(['supportsReturning' => true]);
+        $replica = makeConnection();
+        $selector = makeSelector($replica);
+
+        $conn = new ReadWriteConnection($write, [$replica], $selector);
+
+        expect($conn->supportsReturning())->toBeTrue()
+            ->and($write->calls)->toContain('supportsReturning')
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('delegates quoteIdentifier to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+        $selector = makeSelector($replica);
+
+        $conn = new ReadWriteConnection($write, [$replica], $selector);
+
+        expect($conn->quoteIdentifier('group'))->toBe('"group"')
+            ->and($write->calls)->toContain('quoteIdentifier')
             ->and($replica->calls)->toBeEmpty();
     });
 
@@ -321,10 +449,11 @@ describe('ReadWriteConnection', function (): void {
         {
             public int $selectCallCount = 0;
 
-            public function __construct(private ConnectionInterface $replica) {}
+            public function __construct(private readonly ConnectionInterface $replica) {}
 
-            public function select(array $replicas): ConnectionInterface
-            {
+            public function select(
+                array $replicas,
+            ): ConnectionInterface {
                 $this->selectCallCount++;
 
                 return $this->replica;
@@ -420,6 +549,115 @@ describe('ReadWriteConnection', function (): void {
         expect($write->calls)->toContain('transaction')
             ->and($replica->calls)->toBeEmpty();
     });
+
+    it('delegates the attempts argument of transaction to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->transaction(function (): void {}, attempts: 3);
+
+        expect($write->transactionAttempts)->toBe([3])
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('passes the backoff to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+        $custom = fn (int $attempt): int => $attempt * 10;
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->transaction(function (): void {}, attempts: 3, backoff: 25);
+        $conn->transaction(function (): void {}, attempts: 3, backoff: $custom);
+        $conn->transaction(function (): void {});
+
+        expect($write->transactionBackoffs)->toBe([25, $custom, null])
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('delegates one attempt by default', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->transaction(function (): void {});
+
+        expect($write->transactionAttempts)->toBe([1]);
+    });
+
+    it('delegates transactionLevel to the write connection', function (): void {
+        $write = makeConnection(['transactionLevel' => 2]);
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+
+        expect($conn->transactionLevel())->toBe(2)
+            ->and($write->calls)->toContain('transactionLevel')
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('delegates afterCommit to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+        $callback = function (): void {};
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->afterCommit($callback);
+
+        expect($write->calls)->toContain(['afterCommit', $callback])
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('delegates pending after-commit callbacks to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->runPendingAfterCommitCallbacks();
+
+        expect($write->calls)->toContain('runPendingAfterCommitCallbacks')
+            ->and($conn)->toBeInstanceOf(PendingAfterCommitInterface::class)
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it('throws when the write connection cannot run pending after-commit callbacks', function (): void {
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection(makeThrowingConnection(), [$replica], makeSelector($replica));
+
+        expect(fn () => $conn->runPendingAfterCommitCallbacks())
+            ->toThrow(TransactionException::class, 'cannot run pending after-commit callbacks');
+    });
+
+    it('delegates afterRollback to the write connection', function (): void {
+        $write = makeConnection();
+        $replica = makeConnection();
+        $callback = function (): void {};
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->afterRollback($callback);
+
+        expect($write->calls)->toContain(['afterRollback', $callback])
+            ->and($replica->calls)->toBeEmpty();
+    });
+
+    it(
+        'keeps reads on the write connection after a nested transaction returns inside an outer transaction',
+        function (): void {
+            $write = makeConnection(['query' => [['id' => 1]]]);
+            $replica = makeConnection(['query' => [['id' => 99]]]);
+
+            $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+            $result = $conn->transaction(function () use ($conn): array {
+                $conn->transaction(function (): void {});
+
+                return $conn->query('SELECT 1');
+            });
+
+            expect($result)->toBe([['id' => 1]])
+                ->and($replica->calls)->toBeEmpty();
+        },
+    );
 
     it('returns the transaction callback result', function (): void {
         $write = makeConnection();
@@ -569,7 +807,7 @@ describe('ReadWriteConnection', function (): void {
     });
 
     it('rolls back an open transaction when reset', function (): void {
-        $write = makeConnection(['inTransaction' => true]);
+        $write = makeConnection(['transactionLevel' => 1]);
         $replica = makeConnection();
         $selector = makeSelector($replica);
 
@@ -579,8 +817,32 @@ describe('ReadWriteConnection', function (): void {
         expect($write->calls)->toContain('rollback');
     });
 
+    it('rolls back every open level when reset inside nested transactions', function (): void {
+        $write = makeConnection(['transactionLevel' => 3]);
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->reset();
+
+        expect(array_count_values(array_filter($write->calls, 'is_string'))['rollback'])->toBe(3);
+    });
+
+    it('delegates reset to a resettable write connection', function (): void {
+        $write = $this->createMockForIntersectionOfInterfaces([
+            ConnectionInterface::class,
+            TransactionInterface::class,
+            ResettableInterface::class,
+        ]);
+        $write->expects($this->once())->method('reset');
+        $write->expects($this->never())->method('rollback');
+        $replica = makeConnection();
+
+        $conn = new ReadWriteConnection($write, [$replica], makeSelector($replica));
+        $conn->reset();
+    });
+
     it('does not attempt a rollback when no transaction is open', function (): void {
-        $write = makeConnection(['inTransaction' => false]);
+        $write = makeConnection(['transactionLevel' => 0]);
         $replica = makeConnection();
         $selector = makeSelector($replica);
 
@@ -592,7 +854,7 @@ describe('ReadWriteConnection', function (): void {
 
     it('still clears sticky write state when reset', function (): void {
         $write = makeConnection([
-            'inTransaction' => true,
+            'transactionLevel' => 1,
             'query' => [['id' => 99]],
         ]);
         $replica = makeConnection(['query' => [['id' => 99]]]);
@@ -609,7 +871,7 @@ describe('ReadWriteConnection', function (): void {
 
     it('clears sticky write state even when the rollback fails', function (): void {
         $write = makeConnection([
-            'inTransaction' => true,
+            'transactionLevel' => 1,
             'rollback' => new PDOException('rollback failed'),
             'query' => [['id' => 1]],
         ]);
@@ -708,8 +970,9 @@ describe('ReadWriteConnection', function (): void {
                 return 0;
             }
 
-            public function prepare(string $sql): StatementInterface
-            {
+            public function prepare(
+                string $sql,
+            ): StatementInterface {
                 throw new RuntimeException('Not implemented');
             }
 
@@ -723,6 +986,17 @@ describe('ReadWriteConnection', function (): void {
                 return 'mysql';
             }
 
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+
             public function beginTransaction(): void {}
 
             public function commit(): void {}
@@ -734,10 +1008,22 @@ describe('ReadWriteConnection', function (): void {
                 return false;
             }
 
-            public function transaction(callable $callback): mixed
-            {
+            public function transaction(
+                callable $callback,
+                int $attempts = 1,
+                int|Closure|null $backoff = null,
+            ): mixed {
                 return $callback();
             }
+
+            public function transactionLevel(): int
+            {
+                return 0;
+            }
+
+            public function afterCommit(callable $callback): void {}
+
+            public function afterRollback(callable $callback): void {}
         };
 
         $good = makeConnection(['query' => [['id' => 1]]]);
@@ -830,7 +1116,7 @@ describe('ReadWriteConnection', function (): void {
     });
 
     it(
-        'routes a write statement to the primary even when it has leading whitespace or a leading SQL comment before the INSERT/UPDATE/DELETE keyword (case-insensitive)',
+        'routes a write statement to the primary despite leading whitespace, comments or lowercase keywords',
         function (): void {
             $write = makeConnection(['query' => [['id' => 1]]]);
             $replica = makeConnection(['query' => [['id' => 99]]]);

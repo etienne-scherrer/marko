@@ -11,6 +11,7 @@ use Marko\Authentication\Exceptions\AuthException;
 use Marko\Authentication\Guard\SessionGuard;
 use Marko\Authentication\Token\RememberTokenManager;
 use Marko\Testing\Fake\FakeAuthenticatable;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeCookieJar;
 use Marko\Testing\Fake\FakeSession;
 use Marko\Testing\Fake\FakeUserProvider;
@@ -215,6 +216,24 @@ test('it regenerates session ID on login', function (): void {
     expect($session->regenerated)->toBeTrue();
 });
 
+test('it logs in on an armed session', function (): void {
+    $session = new FakeSession();
+    $session->arm();
+    $user = new FakeAuthenticatable(id: 42);
+
+    $guard = new SessionGuard(
+        session: $session,
+        provider: new FakeUserProvider(),
+        name: 'web',
+    );
+
+    $guard->login($user);
+
+    expect($session->started)->toBeTrue()
+        ->and($session->regenerated)->toBeTrue()
+        ->and($session->get('auth_web_user_id'))->toBe(42);
+});
+
 test('it throws AuthException when session not available', function (): void {
     $session = new FakeSession();
     // started defaults to false, no need to set it
@@ -241,7 +260,7 @@ test('it creates remember token on login with remember flag', function (): void 
     $user = new FakeAuthenticatable(id: 42);
     $provider = new FakeUserProvider([42 => $user]);
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -264,7 +283,7 @@ test('it stores remember token in user provider', function (): void {
     $user = new FakeAuthenticatable(id: 42);
     $provider = new FakeUserProvider([42 => $user]);
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -289,7 +308,7 @@ test('it authenticates via remember token cookie', function (): void {
     $user = new FakeAuthenticatable(id: 42);
 
     // Simulate a valid remember token cookie
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
     $plainToken = $tokenManager->generate();
     $hashedToken = $tokenManager->hash($plainToken);
     $user->setRememberToken($hashedToken);
@@ -297,46 +316,7 @@ test('it authenticates via remember token cookie', function (): void {
     $cookieJar = new FakeCookieJar();
     $cookieJar->set('remember_web', '42|' . $plainToken);
 
-    // Use inline provider since FakeUserProvider's retrieveByRememberToken
-    // compares token to stored hash, which is incompatible with guard's
-    // separate validation step
-    $provider = new readonly class ($user) implements UserProviderInterface
-    {
-        public function __construct(
-            private AuthenticatableInterface $userByRememberToken,
-        ) {}
-
-        public function retrieveById(int|string $identifier): ?AuthenticatableInterface
-        {
-            return null;
-        }
-
-        public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface
-        {
-            return null;
-        }
-
-        public function validateCredentials(
-            AuthenticatableInterface $user,
-            array $credentials,
-        ): bool {
-            return false;
-        }
-
-        public function retrieveByRememberToken(
-            int|string $identifier,
-            string $token,
-        ): ?AuthenticatableInterface {
-            return $this->userByRememberToken;
-        }
-
-        public function updateRememberToken(
-            AuthenticatableInterface $user,
-            ?string $token,
-        ): void {
-            $user->setRememberToken($token);
-        }
-    };
+    $provider = new FakeUserProvider([42 => $user]);
 
     $guard = new SessionGuard(
         session: $session,
@@ -359,7 +339,7 @@ test('it clears remember token on logout', function (): void {
     $user = new FakeAuthenticatable(id: 42);
 
     // Simulate existing remember token
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
     $plainToken = $tokenManager->generate();
     $hashedToken = $tokenManager->hash($plainToken);
     $user->setRememberToken($hashedToken);
@@ -394,7 +374,7 @@ test('it regenerates remember token on each use', function (): void {
     $user = new FakeAuthenticatable(id: 42);
 
     // Simulate a valid remember token cookie
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
     $originalPlainToken = $tokenManager->generate();
     $originalHashedToken = $tokenManager->hash($originalPlainToken);
     $user->setRememberToken($originalHashedToken);
@@ -403,46 +383,7 @@ test('it regenerates remember token on each use', function (): void {
     $cookieJar->set('remember_web', '42|' . $originalPlainToken);
     $originalCookieValue = $cookieJar->cookies['remember_web'];
 
-    // Use inline provider since FakeUserProvider's retrieveByRememberToken
-    // compares token to stored hash, which is incompatible with guard's
-    // separate validation step
-    $provider = new readonly class ($user) implements UserProviderInterface
-    {
-        public function __construct(
-            private AuthenticatableInterface $userByRememberToken,
-        ) {}
-
-        public function retrieveById(int|string $identifier): ?AuthenticatableInterface
-        {
-            return null;
-        }
-
-        public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface
-        {
-            return null;
-        }
-
-        public function validateCredentials(
-            AuthenticatableInterface $user,
-            array $credentials,
-        ): bool {
-            return false;
-        }
-
-        public function retrieveByRememberToken(
-            int|string $identifier,
-            string $token,
-        ): ?AuthenticatableInterface {
-            return $this->userByRememberToken;
-        }
-
-        public function updateRememberToken(
-            AuthenticatableInterface $user,
-            ?string $token,
-        ): void {
-            $user->setRememberToken($token);
-        }
-    };
+    $provider = new FakeUserProvider([42 => $user]);
 
     $guard = new SessionGuard(
         session: $session,
@@ -467,7 +408,7 @@ test('it does not create token when remember is false', function (): void {
     $user = new FakeAuthenticatable(id: 42);
     $provider = new FakeUserProvider([42 => $user]);
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -490,7 +431,7 @@ test('it does not create token when remember is explicitly false', function (): 
     $user = new FakeAuthenticatable(id: 42);
     $provider = new FakeUserProvider([42 => $user]);
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -511,7 +452,7 @@ test('it handles missing remember token gracefully', function (): void {
     $session = new FakeSession();
     $provider = new FakeUserProvider();
     $cookieJar = new FakeCookieJar();
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -532,7 +473,7 @@ test('it handles invalid remember token cookie format gracefully', function (): 
     $provider = new FakeUserProvider();
     $cookieJar = new FakeCookieJar();
     $cookieJar->set('remember_web', 'invalid-format-no-pipe');
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,
@@ -551,7 +492,7 @@ test('it handles invalid remember token value gracefully', function (): void {
     $user = new FakeAuthenticatable(id: 42);
 
     // Set a different token on the user (simulating mismatch)
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
     $validToken = $tokenManager->generate();
     $user->setRememberToken($tokenManager->hash($validToken));
 
@@ -577,7 +518,7 @@ test('it handles user not found by remember token gracefully', function (): void
     $provider = new FakeUserProvider();
     $cookieJar = new FakeCookieJar();
     $cookieJar->set('remember_web', '999|some_token_value');
-    $tokenManager = new RememberTokenManager();
+    $tokenManager = new RememberTokenManager(new FakeClock());
 
     $guard = new SessionGuard(
         session: $session,

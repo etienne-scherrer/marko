@@ -12,24 +12,22 @@ use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Migration\Migrator;
 
 /** @noinspection PhpUnused */
-#[Command(name: 'db:reset', description: 'Rollback all database migrations')]
+#[Command(name: 'db:reset', description: 'Rollback all database migrations', flags: ['force'])]
 readonly class ResetCommand implements CommandInterface
 {
     public function __construct(
         private Migrator $migrator,
-        private bool $isProduction = false,
+        private DestructiveCommandGuard $destructiveCommandGuard,
     ) {}
 
     public function execute(
         Input $input,
         Output $output,
     ): int {
-        // Block in production - no --force flag support
-        if ($this->isProduction) {
-            $output->writeLine('Error: Reset cannot be run in production environment.');
-            $output->writeLine('This command rolls back all migrations and is never allowed in production.');
+        $refusal = $this->destructiveCommandGuard->check('db:reset', 'rolls back every migration', $input, $output);
 
-            return 1;
+        if ($refusal !== null) {
+            return $refusal;
         }
 
         try {

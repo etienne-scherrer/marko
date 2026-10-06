@@ -3,7 +3,7 @@ title: marko/admin
 description: Admin contracts and section registry -- defines the structure for admin sections, menu items, and dashboard widgets so any module can contribute to the admin panel.
 ---
 
-Admin contracts and section registry --- defines the structure for admin sections, menu items, and dashboard widgets so any module can contribute to the admin panel. Modules register admin sections via `#[AdminSection]` attributes, each containing menu items with permission-based visibility. The `AdminSectionRegistry` collects all sections and serves them sorted by priority. This is an interface/contracts package --- install `marko/admin-panel` or `marko/admin-api` for the actual admin UI.
+Admin contracts and section registry --- defines the structure for admin sections, menu items, and dashboard widgets so any module can contribute to the admin panel. Modules declare admin sections with `#[AdminSection]` attributes, each containing menu items with permission-based visibility. At boot the package finds every `#[AdminSection]` class and registers it in the shared `AdminSectionRegistry`, which serves the sections sorted by priority. This is an interface/contracts package --- install `marko/admin-panel` or `marko/admin-api` for the actual admin UI.
 
 ## Installation
 
@@ -78,6 +78,29 @@ class CatalogSection implements AdminSectionInterface
 }
 ```
 
+### How Sections Are Discovered
+
+You don't register a section yourself. Put the class anywhere under a module's `src/` directory (in `vendor/`, `modules/` or `app/`), and marko/admin's boot callback finds it:
+
+1. Every enabled module's `src/` is scanned for classes marked with `#[AdminSection]`. Every class in a file is checked, and the attribute is found however it's written: imported, fully qualified (`#[\Marko\Admin\Attributes\AdminSection(...)]`), under an alias, or grouped with other attributes.
+2. Each class is parsed into an `AdminSectionDefinition`.
+3. Each definition is registered in `AdminSectionRegistryInterface` with `registerDefinition()`. Nothing is built yet.
+
+A section is built through the container the first time `get()` or `all()` needs it, so it can inject dependencies in its constructor, including repositories that read the database. Boot never runs a section's constructor, so requests that don't use the admin, and CLI commands such as `db:migrate` and `discovery:cache`, don't depend on your sections' services. Once built, a section is kept for the rest of the process: once per request under PHP-FPM, and once per worker under a long-running server such as RoadRunner. A section must not keep request or user data in its properties.
+
+Boot fails loudly with an `AdminException` when:
+
+- two classes declare the same section id (the message names both classes). A section you also register by hand with `register()` fails the same way, so remove the manual call.
+- a class marked with `#[AdminSection]` does not implement `AdminSectionInterface`.
+- the discovery cache names a section class that no longer exists.
+
+These checks read the class, not an instance. The checks that need an instance run when the section is first built, and fail the `get()` or `all()` call that built it:
+
+- the constructor (or one of its dependencies) throws. The `AdminException` names the section id and class, and keeps the original exception as its previous exception. A failed build is not kept, so the next call tries again.
+- `getId()` returns something other than the `#[AdminSection]` id.
+
+In production, `marko discovery:cache` stores the section list in the discovery cache under `admin_sections`, so a cached boot registers sections and their permissions without scanning or reflection. After adding or changing an `#[AdminSection]` or `#[AdminPermission]` class, recompile the cache with `marko discovery:cache`. If the cache names a class that no longer exists, boot fails and tells you to recompile.
+
 ### Declaring Permissions
 
 Use `#[AdminPermission]` to declare permissions that your section requires. The attribute is repeatable, so you can stack multiple permissions on a single class:
@@ -96,9 +119,11 @@ class CatalogSection implements AdminSectionInterface
 }
 ```
 
+marko/admin only reads these attributes; permissions belong to [marko/admin-auth](/docs/packages/admin-auth/). When marko/admin-auth is installed, its boot callback registers each `#[AdminPermission]` in `PermissionRegistryInterface`, with the first segment of the key as the group. Run `marko admin-auth:permissions:sync` to write them to the database.
+
 ### Querying Sections
 
-Inject `AdminSectionRegistryInterface` to access all registered sections:
+`AdminSectionRegistryInterface` is a shared singleton, so every class that injects it sees the sections registered at boot. Inject it to access all registered sections. `all()` builds every section that isn't built yet and sorts them by `getSortOrder()`. `get()` builds only the section you ask for:
 
 ```php
 use Marko\Admin\Contracts\AdminSectionInterface;
@@ -211,12 +236,15 @@ interface AdminSectionInterface
 interface AdminSectionRegistryInterface
 {
     public function register(AdminSectionInterface $section): void;
+    public function registerDefinition(AdminSectionDefinition $definition): void;
     public function all(): array;
     public function get(string $id): AdminSectionInterface;
 }
 ```
 
-Calling `register()` with a duplicate section id throws `AdminException`. Calling `get()` with an unknown id also throws `AdminException`.
+`register()` takes a section you have already built. `registerDefinition()` takes an `AdminSectionDefinition` and builds the section through the container on first use; marko/admin's boot callback uses it for every `#[AdminSection]` class. Both throw `AdminException` for a duplicate section id, and `registerDefinition()` also throws when the class does not exist or does not implement `AdminSectionInterface`. `get()` and `all()` throw `AdminException` when a section fails to build, and `get()` throws it for an unknown id.
+
+`AdminSectionRegistry`, the default implementation, takes `ContainerInterface` in its constructor to build sections.
 
 ### MenuItemInterface
 
@@ -262,3 +290,43 @@ interface AdminConfigInterface
 |-----------|--------|------------|
 | `#[AdminSection]` | Class | `id`, `label`, `icon` (optional), `sortOrder` (optional) |
 | `#[AdminPermission]` | Class (repeatable) | `id`, `label` (optional) |
+
+### AdminSectionDiscovery
+
+`AdminSectionDiscovery` finds section classes and reads their metadata:
+
+```php
+public function discoverAll(array $modules): array;
+public function discoverInModule(ModuleManifest $manifest): array;
+public function parseAdminSectionClass(string $className): AdminSectionDefinition;
+```
+
+`discoverAll()` parses every section across the given modules, in module order, into `AdminSectionDefinition`s. Two sections with the same id throw `AdminException::duplicateSection()` naming both classes.
+
+`discoverInModule()` returns the names of every class in the module's `src/` directory that is marked with `#[AdminSection]`. A cheap text match picks candidate files: a file must contain an attribute and mention `AdminSection`. Every class in a candidate file is then loaded and checked with reflection. A file that only mentions `#[AdminSection` in a comment, or uses a longer attribute name such as `#[AdminSectionWidget]`, is skipped. A class that really carries the attribute is always reported, even when it is invalid, so `parseAdminSectionClass()` can reject it loudly.
+
+`parseAdminSectionClass()` turns a section class into an `AdminSectionDefinition` with its `#[AdminPermission]` entries. It checks the attribute first, then the interface.
+
+### DiscoveredAdminSections
+
+`DiscoveredAdminSections::all()` returns the section definitions for the current boot. On a cached boot it reads the `admin_sections` cache section; otherwise it scans the enabled modules. The work runs once and the result is kept. It is a shared singleton: marko/admin's boot callback uses it to register the sections, and marko/admin-auth's uses it to register their permissions.
+
+### AdminSectionCacheContributor
+
+The discovery cache contributor declared in `module.php` under `discovery`, with the key `admin_sections`. `compile()` stores each definition as plain values: class name, id, label, icon, sort order and permissions. `hydrate()` rebuilds the definitions and throws `DiscoveryCacheException` for a malformed record.
+
+### Exceptions
+
+Section registry and discovery errors are thrown as `AdminException`, each with a message, context and suggestion:
+
+| Factory | Thrown when |
+|---------|-------------|
+| `AdminException::duplicateSection()` | Two sections share an id, in `discoverAll()`, `register()` or `registerDefinition()`. The message names both classes |
+| `AdminException::sectionIdMismatch()` | When a section is first built, its `getId()` differs from its `#[AdminSection]` id |
+| `AdminException::sectionBuildFailed()` | When a section is first built, its constructor or one of its dependencies throws. The message names the section id and class |
+| `AdminException::sectionClassNotFound()` | At boot, the discovery cache names a section class that no longer exists |
+| `AdminException::sectionNotFound()` | `AdminSectionRegistry::get()` is called with an unknown id |
+| `AdminException::missingSectionAttribute()` | `parseAdminSectionClass()` is given a class that is not marked with `#[AdminSection]` |
+| `AdminException::sectionMustImplementInterface()` | `parseAdminSectionClass()` is given a class marked with `#[AdminSection]` that does not implement `AdminSectionInterface`, or `registerDefinition()` is given a class (at boot, from the discovery cache) that does not |
+
+`InvalidAdminConfigException` is thrown by `AdminConfig` when the route prefix does not start with `/`.

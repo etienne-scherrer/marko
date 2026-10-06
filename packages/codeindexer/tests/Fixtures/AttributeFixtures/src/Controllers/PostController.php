@@ -7,7 +7,9 @@ namespace Fixture\AttributeFixtures\Controllers;
 use Marko\Routing\Attributes\Delete;
 use Marko\Routing\Attributes\DisableRoute;
 use Marko\Routing\Attributes\Get;
+use Marko\Routing\Attributes\Head;
 use Marko\Routing\Attributes\Middleware;
+use Marko\Routing\Attributes\Options;
 use Marko\Routing\Attributes\Patch;
 use Marko\Routing\Attributes\Post;
 use Marko\Routing\Attributes\Put;
@@ -32,6 +34,12 @@ class PostController
 
     #[Delete('/posts/{id}')]
     public function destroy(): void {}
+
+    #[Head('/posts/{id}')]
+    public function head(): void {}
+
+    #[Options('/posts')]
+    public function options(): void {}
 
     #[DisableRoute]
     public function disabled(): void {}

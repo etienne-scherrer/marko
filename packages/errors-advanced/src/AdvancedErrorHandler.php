@@ -12,7 +12,10 @@ use Marko\Errors\Severity;
 use Marko\ErrorsSimple\CodeSnippetExtractor;
 use Marko\ErrorsSimple\Environment;
 use Marko\ErrorsSimple\Formatters\BasicHtmlFormatter;
+use Marko\ErrorsSimple\Formatters\JsonFormatter;
 use Marko\ErrorsSimple\Formatters\TextFormatter;
+use Marko\ErrorsSimple\HttpErrorStatus;
+use Psr\Clock\ClockInterface;
 use Throwable;
 
 class AdvancedErrorHandler implements ErrorHandlerInterface
@@ -25,6 +28,8 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
 
     private BasicHtmlFormatter $fallbackFormatter;
 
+    private JsonFormatter $jsonFormatter;
+
     protected bool $registered = false;
 
     protected mixed $previousExceptionHandler = null;
@@ -33,13 +38,25 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
 
     protected bool $handledFatalError = false;
 
+    /**
+     * The pretty formatter defaults to one built for the real environment, so
+     * production gets the safe generic page. The container cannot autowire
+     * the nullable FormatterInterface; module.php binds this class with a
+     * closure that passes an Environment backed by the container's shared
+     * AppEnvironment, so this handler and errors-simple agree on which
+     * environments show details.
+     */
     public function __construct(
+        private readonly ClockInterface $clock,
         ?Environment $environment = null,
         ?FormatterInterface $prettyHtmlFormatter = null,
     ) {
         $this->environment = $environment ?? new Environment();
         $extractor = new CodeSnippetExtractor();
-        $this->prettyHtmlFormatter = $prettyHtmlFormatter ?? new PrettyHtmlFormatter();
+        $this->prettyHtmlFormatter = $prettyHtmlFormatter ?? new PrettyHtmlFormatter(
+            environment: $this->environment->appEnvironment(),
+        );
+        $this->jsonFormatter = new JsonFormatter($this->environment);
         $this->textFormatter = new TextFormatter(
             $this->environment,
             $extractor,
@@ -53,11 +70,33 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
     public function handle(
         ErrorReport $report,
     ): void {
+        $this->clearOutputBuffers();
+
         if ($this->environment->isCli()) {
             echo $this->textFormatter->format($report);
 
             return;
         }
+
+        $this->setHttpStatusCode(HttpErrorStatus::statusCode($report->throwable));
+
+        foreach (HttpErrorStatus::headers($report->throwable) as $name => $value) {
+            $this->sendHeader($name, $value);
+        }
+
+        if ($this->environment->acceptsJson()) {
+            $this->sendHeader('Content-Type', JsonFormatter::CONTENT_TYPE);
+
+            try {
+                echo $this->jsonFormatter->format($report);
+            } catch (Throwable) {
+                echo '{"message":"Server Error"}';
+            }
+
+            return;
+        }
+
+        $this->sendHeader('Content-Type', BasicHtmlFormatter::CONTENT_TYPE);
 
         try {
             echo $this->prettyHtmlFormatter->format($report);
@@ -66,10 +105,34 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
         }
     }
 
+    protected function clearOutputBuffers(): void
+    {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+    }
+
+    protected function setHttpStatusCode(
+        int $code,
+    ): void {
+        if (!headers_sent()) {
+            http_response_code($code);
+        }
+    }
+
+    protected function sendHeader(
+        string $name,
+        string $value,
+    ): void {
+        if (!headers_sent()) {
+            header("$name: $value");
+        }
+    }
+
     public function handleException(
         Throwable $exception,
     ): void {
-        $report = ErrorReport::fromThrowable($exception, Severity::Error);
+        $report = ErrorReport::fromThrowable($exception, Severity::Error, $this->clock->now());
         $this->handle($report);
     }
 
@@ -101,7 +164,7 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
         $severity = Severity::fromErrorLevel($level);
 
         if ($severity === Severity::Deprecated || $severity === Severity::Notice) {
-            $report = ErrorReport::fromThrowable($exception, $severity);
+            $report = ErrorReport::fromThrowable($exception, $severity, $this->clock->now());
             $this->handleNonFatal($report);
 
             return true;

@@ -79,3 +79,69 @@ it('defaults path and domain to null when not provided', function (): void {
     expect($cookie->path())->toBeNull()
         ->and($cookie->domain())->toBeNull();
 });
+
+it('exposes the raw value, expiry and flags it was built with', function (): void {
+    $cookie = new Cookie(
+        name: 'locale',
+        value: 'nl nl',
+        expires: 1_700_000_000,
+        secure: true,
+        httpOnly: true,
+        sameSite: 'Strict',
+    );
+
+    expect($cookie->value())->toBe('nl nl')
+        ->and($cookie->expires())->toBe(1_700_000_000)
+        ->and($cookie->secure())->toBeTrue()
+        ->and($cookie->httpOnly())->toBeTrue()
+        ->and($cookie->sameSite())->toBe('Strict');
+});
+
+it('defaults to an empty value, no expiry and no flags', function (): void {
+    $cookie = new Cookie(name: 'locale');
+
+    expect($cookie->value())->toBe('')
+        ->and($cookie->expires())->toBeNull()
+        ->and($cookie->secure())->toBeFalse()
+        ->and($cookie->httpOnly())->toBeFalse()
+        ->and($cookie->sameSite())->toBeNull();
+});
+
+it('returns the max age it was given', function (): void {
+    $cookie = new Cookie(name: 'remember', value: 'r', maxAge: 2592000);
+
+    expect($cookie->maxAge())->toBe(2592000);
+});
+
+it('defaults max age to null and emits no Max-Age attribute', function (): void {
+    $cookie = new Cookie(name: 'remember', value: 'r');
+
+    expect($cookie->maxAge())->toBeNull()
+        ->and($cookie->toSetCookieString())->not->toContain('Max-Age');
+});
+
+it('emits Max-Age after Expires in the Set-Cookie string', function (): void {
+    $cookie = new Cookie(name: 'remember', value: 'r', expires: 1704067200, path: '/', maxAge: 3600);
+
+    expect($cookie->toSetCookieString())
+        ->toBe('remember=r; Expires=Mon, 01 Jan 2024 00:00:00 GMT; Max-Age=3600; Path=/');
+});
+
+it('emits Max-Age=0 for a max age of 0, which deletes the cookie', function (): void {
+    $cookie = new Cookie(name: 'remember', maxAge: 0);
+
+    expect($cookie->toSetCookieString())->toBe('remember=; Max-Age=0');
+});
+
+it('emits Max-Age=0 for a negative max age', function (): void {
+    $cookie = new Cookie(name: 'remember', maxAge: -60);
+
+    expect($cookie->maxAge())->toBe(-60)
+        ->and($cookie->toSetCookieString())->toBe('remember=; Max-Age=0');
+});
+
+it('does not derive an Expires attribute from max age', function (): void {
+    $cookie = new Cookie(name: 'remember', value: 'r', maxAge: 3600);
+
+    expect($cookie->toSetCookieString())->toBe('remember=r; Max-Age=3600');
+});

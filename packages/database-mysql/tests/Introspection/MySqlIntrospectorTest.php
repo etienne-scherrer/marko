@@ -7,22 +7,193 @@ namespace Marko\Database\MySql\Tests\Introspection;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Introspection\IntrospectorInterface;
+use Marko\Database\MySql\Connection\MySqlServer;
 use Marko\Database\MySql\Introspection\MySqlIntrospector;
+use Marko\Database\MySql\Tests\Query\RecordingTransactionalConnection;
 use Marko\Database\Schema\Column;
+use Marko\Database\Schema\Expression;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Index;
 use Marko\Database\Schema\IndexType;
+use Marko\Database\Schema\Literal;
 use Marko\Database\Schema\Table;
 use RuntimeException;
 
 /**
+ * The columns of a table whose varchar columns have the given COLUMN_DEFAULT and EXTRA values, in order.
+ *
+ * @param list<array{0: string, 1: string}> $defaults
+ * @return array<Column>
+ */
+function mysqlColumnsWithDefaults(
+    array $defaults,
+): array {
+    $connection = createMockConnection([
+        'information_schema.columns' => array_map(
+            static fn (array $default, int $index): array => [
+                'COLUMN_NAME' => "col_$index",
+                'DATA_TYPE' => 'varchar',
+                'CHARACTER_MAXIMUM_LENGTH' => '255',
+                'IS_NULLABLE' => 'NO',
+                'COLUMN_DEFAULT' => $default[0],
+                'EXTRA' => $default[1],
+                'COLUMN_TYPE' => 'varchar(255)',
+                'COLLATION_NAME' => null,
+            ],
+            $defaults,
+            array_keys($defaults),
+        ),
+    ]);
+
+    return new MySqlIntrospector($connection, 'testdb')->getColumns('posts');
+}
+
+/**
+ * The columns of a table with the given (DATA_TYPE, COLUMN_TYPE, COLUMN_DEFAULT) definitions, as MySQL or, with
+ * $version naming MariaDB, as MariaDB reports them.
+ *
+ * @param list<array{0: string, 1: string, 2: string|null}> $definitions
+ * @return array<Column>
+ */
+function mysqlTypedColumns(
+    array $definitions,
+    string $version = '8.4.3',
+): array {
+    $connection = createMockConnection([
+        'VERSION()' => [['version' => $version]],
+        'information_schema.columns' => array_map(
+            static fn (array $definition, int $index): array => [
+                'COLUMN_NAME' => "col_$index",
+                'DATA_TYPE' => $definition[0],
+                'CHARACTER_MAXIMUM_LENGTH' => null,
+                'IS_NULLABLE' => 'NO',
+                'COLUMN_DEFAULT' => $definition[2],
+                'EXTRA' => '',
+                'COLUMN_TYPE' => $definition[1],
+                'COLLATION_NAME' => null,
+            ],
+            $definitions,
+            array_keys($definitions),
+        ),
+    ]);
+
+    return new MySqlIntrospector($connection, 'testdb')->getColumns('items');
+}
+
+/**
+ * A `meta` longtext column (utf8mb4_bin, as MariaDB stores JSON) on a server reporting $version, with the given
+ * information_schema.CHECK_CONSTRAINTS rows on its table.
+ *
+ * @param list<array{CONSTRAINT_NAME: string, CHECK_CLAUSE: string}> $checks
+ * @return array<Column>
+ */
+function mariaDbLongtextColumns(
+    array $checks,
+): array {
+    return new MySqlIntrospector(mariaDbLongtextConnection($checks), 'testdb')->getColumns('items');
+}
+
+/**
+ * The connection behind mariaDbLongtextColumns(), counting the CHECK_CONSTRAINTS queries it answers.
+ *
+ * @param list<array{CONSTRAINT_NAME: string, CHECK_CLAUSE: string}> $checks
+ */
+function mariaDbLongtextConnection(
+    array $checks,
+    string $version = '11.8.7-MariaDB',
+    string $dataType = 'longtext',
+): ConnectionInterface {
+    $inner = createMockConnection([
+        'VERSION()' => [['version' => $version]],
+        'information_schema.CHECK_CONSTRAINTS' => $checks,
+        'information_schema.columns' => [[
+            'COLUMN_NAME' => 'meta',
+            'DATA_TYPE' => $dataType,
+            'CHARACTER_MAXIMUM_LENGTH' => '4294967295',
+            'IS_NULLABLE' => 'YES',
+            'COLUMN_DEFAULT' => 'NULL',
+            'EXTRA' => '',
+            'COLUMN_TYPE' => $dataType,
+            'COLLATION_NAME' => 'utf8mb4_bin',
+        ]],
+    ]);
+
+    return new class ($inner) implements ConnectionInterface
+    {
+        public int $checkQueries = 0;
+
+        public function __construct(
+            private readonly ConnectionInterface $inner,
+        ) {}
+
+        public function connect(): void {}
+
+        public function disconnect(): void {}
+
+        public function isConnected(): bool
+        {
+            return true;
+        }
+
+        public function query(
+            string $sql,
+            array $bindings = [],
+        ): array {
+            if (str_contains($sql, 'information_schema.CHECK_CONSTRAINTS')) {
+                $this->checkQueries++;
+            }
+
+            return $this->inner->query($sql, $bindings);
+        }
+
+        public function execute(
+            string $sql,
+            array $bindings = [],
+        ): int {
+            return 0;
+        }
+
+        public function prepare(
+            string $sql,
+        ): StatementInterface {
+            throw new RuntimeException('Not implemented');
+        }
+
+        public function lastInsertId(): int
+        {
+            return 0;
+        }
+
+        public function driverName(): string
+        {
+            return 'mysql';
+        }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
+    };
+}
+
+/**
  * Creates a mock connection that returns predefined query results.
+ *
+ * The server reports MySQL 8.4.3 unless $queryResults has its own 'VERSION()' entry.
  *
  * @param array<string, array<int, array<string, mixed>>> $queryResults Map of SQL patterns to results
  */
 function createMockConnection(
     array $queryResults = [],
 ): ConnectionInterface {
+    $queryResults += ['VERSION()' => [['version' => '8.4.3']]];
+
     return new readonly class ($queryResults) implements ConnectionInterface
     {
         /**
@@ -77,6 +248,17 @@ function createMockConnection(
         {
             return 'sqlite';
         }
+
+        public function supportsReturning(): bool
+        {
+            return false;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
 }
 
@@ -113,6 +295,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => 'auto_increment',
+                    'COLUMN_TYPE' => 'int',
+                    'COLLATION_NAME' => null,
                 ],
                 [
                     'COLUMN_NAME' => 'name',
@@ -121,6 +305,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'varchar(255)',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
             ],
         ]);
@@ -135,7 +321,7 @@ describe('MySqlIntrospector', function (): void {
             ->and($columns[1]->name)->toBe('name');
     });
 
-    it('maps MySQL data types to Column value objects', function (): void {
+    it('maps MySQL data types to the abstract type names entities use', function (): void {
         $connection = createMockConnection([
             'information_schema.columns' => [
                 [
@@ -145,6 +331,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'bigint',
+                    'COLLATION_NAME' => null,
                 ],
                 [
                     'COLUMN_NAME' => 'title',
@@ -153,6 +341,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'varchar(100)',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
                 [
                     'COLUMN_NAME' => 'content',
@@ -161,6 +351,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'YES',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'text',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
             ],
         ]);
@@ -169,10 +361,10 @@ describe('MySqlIntrospector', function (): void {
         $columns = $introspector->getColumns('posts');
 
         expect($columns[0]->type)
-            ->toBe('BIGINT')
-            ->and($columns[1]->type)->toBe('VARCHAR')
+            ->toBe('bigint')
+            ->and($columns[1]->type)->toBe('varchar')
             ->and($columns[1]->length)->toBe(100)
-            ->and($columns[2]->type)->toBe('TEXT');
+            ->and($columns[2]->type)->toBe('text');
     });
 
     it('detects nullable columns', function (): void {
@@ -185,6 +377,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'int',
+                    'COLLATION_NAME' => null,
                 ],
                 [
                     'COLUMN_NAME' => 'bio',
@@ -193,6 +387,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'YES',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'text',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
             ],
         ]);
@@ -215,6 +411,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => 'active',
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'varchar(20)',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
                 [
                     'COLUMN_NAME' => 'priority',
@@ -223,6 +421,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => '0',
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'int',
+                    'COLLATION_NAME' => null,
                 ],
                 [
                     'COLUMN_NAME' => 'created_at',
@@ -231,6 +431,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => 'CURRENT_TIMESTAMP',
                     'EXTRA' => 'DEFAULT_GENERATED',
+                    'COLUMN_TYPE' => 'timestamp',
+                    'COLLATION_NAME' => null,
                 ],
             ],
         ]);
@@ -240,8 +442,351 @@ describe('MySqlIntrospector', function (): void {
 
         expect($columns[0]->default)
             ->toBe('active')
-            ->and($columns[1]->default)->toBe('0')
-            ->and($columns[2]->default)->toBe('CURRENT_TIMESTAMP');
+            ->and($columns[1]->default)->toBe(0)
+            ->and($columns[2]->default)->toEqual(new Expression('CURRENT_TIMESTAMP'));
+    });
+
+    it('reads a DEFAULT_GENERATED default as an expression', function (): void {
+        $columns = mysqlColumnsWithDefaults([
+            ['uuid()', 'DEFAULT_GENERATED'],
+            ['CURRENT_TIMESTAMP(6)', 'DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)'],
+        ]);
+
+        expect($columns[0]->default)->toEqual(new Expression('uuid()'))
+            ->and($columns[1]->default)->toEqual(new Expression('CURRENT_TIMESTAMP(6)'));
+    });
+
+    it('reads a literal default that looks like a function as a literal', function (): void {
+        $columns = mysqlColumnsWithDefaults([['now()', '']]);
+
+        expect($columns[0]->default)->toEqual(new Literal('now()'));
+    });
+
+    it('keeps a plain string default as a string', function (): void {
+        $columns = mysqlColumnsWithDefaults([['draft', '']]);
+
+        expect($columns[0]->default)->toBe('draft');
+    });
+
+    it('keeps CURRENT_TIMESTAMP without DEFAULT_GENERATED as a string', function (): void {
+        $columns = mysqlColumnsWithDefaults([
+            ['CURRENT_TIMESTAMP', ''],
+            ['current_timestamp()', 'on update current_timestamp()'],
+            ['LOCALTIMESTAMP', ''],
+        ]);
+
+        expect($columns[0]->default)->toBe('CURRENT_TIMESTAMP')
+            ->and($columns[1]->default)->toBe('current_timestamp()')
+            ->and($columns[2]->default)->toBe('LOCALTIMESTAMP');
+    });
+
+    it('reads tinyint(1) as boolean and char(36) as uuid', function (): void {
+        $columns = mysqlTypedColumns([
+            ['tinyint', 'tinyint(1)', null],
+            ['char', 'char(36)', null],
+            ['tinyint', 'tinyint', null],
+            ['char', 'char(2)', null],
+            ['int', 'int unsigned', null],
+        ]);
+
+        expect(array_map(static fn (Column $column): string => $column->type, $columns))
+            ->toBe(['boolean', 'uuid', 'tinyint', 'char', 'integer'])
+            ->and($columns[0]->nativeType)->toBe('tinyint(1)')
+            ->and($columns[1]->nativeType)->toBe('char(36)');
+    });
+
+    it('casts integer, boolean and decimal defaults to their PHP types', function (): void {
+        $columns = mysqlTypedColumns([
+            ['int', 'int', '0'],
+            ['bigint', 'bigint', '-42'],
+            ['tinyint', 'tinyint(1)', '0'],
+            ['tinyint', 'tinyint(1)', '1'],
+            ['decimal', 'decimal(10,2)', '0.00'],
+            ['double', 'double', '1.5'],
+            ['varchar', 'varchar(255)', '0'],
+        ]);
+
+        expect(array_map(static fn (Column $column): mixed => $column->default, $columns))
+            ->toBe([0, -42, false, true, 0.0, 1.5, '0']);
+    });
+
+    it('unquotes MariaDB string defaults', function (): void {
+        $columns = mysqlTypedColumns([
+            ['varchar', 'varchar(255)', "'abc'"],
+            ['varchar', 'varchar(255)', "'it''s'"],
+            ['varchar', 'varchar(255)', "'now()'"],
+            ['varchar', 'varchar(255)', "''"],
+        ], '10.11.6-MariaDB');
+
+        expect($columns[0]->default)->toBe('abc')
+            ->and($columns[1]->default)->toBe("it's")
+            ->and($columns[2]->default)->toEqual(new Literal('now()'))
+            ->and($columns[3]->default)->toBe('');
+    });
+
+    it('reads the MariaDB NULL default as no default', function (): void {
+        $columns = mysqlTypedColumns([['varchar', 'varchar(255)', 'NULL']], '10.11.6-MariaDB');
+
+        expect($columns[0]->default)->toBeNull();
+    });
+
+    it(
+        'reads MariaDB unquoted defaults as expressions and current_timestamp() as CURRENT_TIMESTAMP',
+        function (): void {
+            $columns = mysqlTypedColumns([
+                ['timestamp', 'timestamp', 'current_timestamp()'],
+                ['timestamp', 'timestamp(3)', 'current_timestamp(3)'],
+                ['char', 'char(36)', 'uuid()'],
+                ['int', 'int', '0'],
+                ['tinyint', 'tinyint(1)', '1'],
+            ], '10.11.6-MariaDB');
+
+            expect($columns[0]->default)->toBe('CURRENT_TIMESTAMP')
+                ->and($columns[1]->default)->toBe('CURRENT_TIMESTAMP(3)')
+                ->and($columns[2]->default)->toEqual(new Expression('uuid()'))
+                ->and($columns[3]->default)->toBe(0)
+                ->and($columns[4]->default)->toBeTrue();
+        },
+    );
+
+    it('keeps a MySQL default with quotes in it as the literal it is', function (): void {
+        $columns = mysqlTypedColumns([['varchar', 'varchar(255)', "'abc'"], ['varchar', 'varchar(255)', 'NULL']]);
+
+        expect($columns[0]->default)->toBe("'abc'")
+            ->and($columns[1]->default)->toBe('NULL');
+    });
+
+    it('reads the native column definition the restating of a column needs', function (): void {
+        $connection = createMockConnection([
+            'information_schema.columns' => [
+                [
+                    'COLUMN_NAME' => 'price',
+                    'DATA_TYPE' => 'decimal',
+                    'CHARACTER_MAXIMUM_LENGTH' => null,
+                    'IS_NULLABLE' => 'NO',
+                    'COLUMN_DEFAULT' => null,
+                    'EXTRA' => '',
+                    'COLUMN_TYPE' => 'decimal(12,4) unsigned',
+                    'COLLATION_NAME' => null,
+                ],
+                [
+                    'COLUMN_NAME' => 'code',
+                    'DATA_TYPE' => 'varchar',
+                    'CHARACTER_MAXIMUM_LENGTH' => '32',
+                    'IS_NULLABLE' => 'NO',
+                    'COLUMN_DEFAULT' => null,
+                    'EXTRA' => '',
+                    'COLUMN_TYPE' => 'varchar(32)',
+                    'COLLATION_NAME' => 'utf8mb4_bin',
+                ],
+                [
+                    'COLUMN_NAME' => 'updated_at',
+                    'DATA_TYPE' => 'timestamp',
+                    'CHARACTER_MAXIMUM_LENGTH' => null,
+                    'IS_NULLABLE' => 'NO',
+                    'COLUMN_DEFAULT' => 'CURRENT_TIMESTAMP(3)',
+                    'EXTRA' => 'DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)',
+                    'COLUMN_TYPE' => 'timestamp(3)',
+                    'COLLATION_NAME' => null,
+                ],
+                [
+                    'COLUMN_NAME' => 'touched_at',
+                    'DATA_TYPE' => 'datetime',
+                    'CHARACTER_MAXIMUM_LENGTH' => null,
+                    'IS_NULLABLE' => 'YES',
+                    'COLUMN_DEFAULT' => null,
+                    'EXTRA' => 'on update current_timestamp()',
+                    'COLUMN_TYPE' => 'datetime',
+                    'COLLATION_NAME' => null,
+                ],
+            ],
+        ]);
+
+        $columns = new MySqlIntrospector($connection, 'testdb')->getColumns('products');
+
+        expect($columns[0]->nativeType)->toBe('decimal(12,4) unsigned')
+            ->and($columns[0]->collation)->toBeNull()
+            ->and($columns[0]->onUpdateExpression)->toBeNull()
+            ->and($columns[1]->nativeType)->toBe('varchar(32)')
+            ->and($columns[1]->collation)->toBe('utf8mb4_bin')
+            ->and($columns[2]->nativeType)->toBe('timestamp(3)')
+            ->and($columns[2]->onUpdateExpression)->toBe('CURRENT_TIMESTAMP(3)')
+            ->and($columns[3]->onUpdateExpression)->toBe('CURRENT_TIMESTAMP');
+    });
+
+    it('normalises MariaDB on update current_timestamp() to CURRENT_TIMESTAMP', function (): void {
+        $connection = createMockConnection([
+            'VERSION()' => [['version' => '11.8.7-MariaDB']],
+            'information_schema.columns' => array_map(
+                static fn (string $extra, int $index): array => [
+                    'COLUMN_NAME' => "col_$index",
+                    'DATA_TYPE' => 'timestamp',
+                    'CHARACTER_MAXIMUM_LENGTH' => null,
+                    'IS_NULLABLE' => 'NO',
+                    'COLUMN_DEFAULT' => 'current_timestamp()',
+                    'EXTRA' => $extra,
+                    'COLUMN_TYPE' => 'timestamp',
+                    'COLLATION_NAME' => null,
+                ],
+                ['on update current_timestamp()', 'on update current_timestamp(3)'],
+                [0, 1],
+            ),
+        ]);
+
+        $columns = new MySqlIntrospector($connection, 'testdb')->getColumns('items');
+
+        expect($columns[0]->onUpdateExpression)->toBe('CURRENT_TIMESTAMP');
+    });
+
+    it('keeps the precision of MariaDB on update current_timestamp(3)', function (): void {
+        $connection = createMockConnection([
+            'VERSION()' => [['version' => '11.8.7-MariaDB']],
+            'information_schema.columns' => [[
+                'COLUMN_NAME' => 'touched_at',
+                'DATA_TYPE' => 'timestamp',
+                'CHARACTER_MAXIMUM_LENGTH' => null,
+                'IS_NULLABLE' => 'NO',
+                'COLUMN_DEFAULT' => 'current_timestamp(3)',
+                'EXTRA' => 'on update current_timestamp(3)',
+                'COLUMN_TYPE' => 'timestamp(3)',
+                'COLLATION_NAME' => null,
+            ]],
+        ]);
+
+        $columns = new MySqlIntrospector($connection, 'testdb')->getColumns('items');
+
+        expect($columns[0]->onUpdateExpression)->toBe('CURRENT_TIMESTAMP(3)');
+    });
+
+    it('reports a MariaDB longtext column with a json_valid check as json', function (): void {
+        $columns = mariaDbLongtextColumns([
+            ['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta`)'],
+        ]);
+
+        expect($columns[0]->type)->toBe('json')
+            ->and($columns[0]->nativeType)->toBe('json');
+    });
+
+    it('reports a MariaDB json column with no length and no collation', function (): void {
+        $columns = mariaDbLongtextColumns([
+            ['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta`)'],
+        ]);
+
+        expect($columns[0]->length)->toBeNull()
+            ->and($columns[0]->collation)->toBeNull();
+    });
+
+    it('keeps a MariaDB longtext column without a json_valid check as longtext', function (): void {
+        $columns = mariaDbLongtextColumns([
+            ['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'char_length(`meta`) < 10'],
+            ['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta`) and char_length(`meta`) < 10'],
+        ]);
+
+        expect($columns[0]->type)->toBe('longtext')
+            ->and($columns[0]->nativeType)->toBe('longtext')
+            ->and($columns[0]->collation)->toBe('utf8mb4_bin');
+    });
+
+    it('does not treat a json_valid check on another column as json', function (): void {
+        $columns = mariaDbLongtextColumns([
+            ['CONSTRAINT_NAME' => 'meta2', 'CHECK_CLAUSE' => 'json_valid(`meta2`)'],
+            ['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta2`)'],
+        ]);
+
+        expect($columns[0]->type)->toBe('longtext');
+    });
+
+    it('does not read check constraints on MySQL', function (): void {
+        $connection = mariaDbLongtextConnection(
+            [['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta`)']],
+            version: '8.4.3',
+        );
+
+        $columns = new MySqlIntrospector($connection, 'testdb')->getColumns('items');
+
+        expect($columns[0]->type)->toBe('longtext')
+            ->and($connection->checkQueries)->toBe(0);
+    });
+
+    it('does not read check constraints when MariaDB has no longtext column', function (): void {
+        $connection = mariaDbLongtextConnection(
+            [['CONSTRAINT_NAME' => 'meta', 'CHECK_CLAUSE' => 'json_valid(`meta`)']],
+            dataType: 'text',
+        );
+
+        new MySqlIntrospector($connection, 'testdb')->getColumns('items');
+
+        expect($connection->checkQueries)->toBe(0);
+    });
+
+    it('selects the native type and only a collation that differs from the table default', function (): void {
+        $connection = new class () implements ConnectionInterface
+        {
+            public string $columnsSql = '';
+
+            public function connect(): void {}
+
+            public function disconnect(): void {}
+
+            public function isConnected(): bool
+            {
+                return true;
+            }
+
+            public function query(
+                string $sql,
+                array $bindings = [],
+            ): array {
+                if (str_contains($sql, 'VERSION()')) {
+                    return [['version' => '8.4.3']];
+                }
+
+                if (str_contains($sql, 'information_schema.columns')) {
+                    $this->columnsSql = $sql;
+                }
+
+                return [];
+            }
+
+            public function execute(
+                string $sql,
+                array $bindings = [],
+            ): int {
+                return 0;
+            }
+
+            public function prepare(
+                string $sql,
+            ): StatementInterface {
+                throw new RuntimeException('Not implemented');
+            }
+
+            public function lastInsertId(): int
+            {
+                return 0;
+            }
+
+            public function driverName(): string
+            {
+                return 'mysql';
+            }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
+        };
+
+        new MySqlIntrospector($connection, 'testdb')->getColumns('products');
+
+        expect($connection->columnsSql)->toContain('COLUMN_TYPE')
+            ->toContain('CASE WHEN c.COLLATION_NAME = t.TABLE_COLLATION THEN NULL ELSE c.COLLATION_NAME END');
     });
 
     it('detects auto_increment columns', function (): void {
@@ -254,6 +799,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => 'auto_increment',
+                    'COLUMN_TYPE' => 'int',
+                    'COLLATION_NAME' => null,
                 ],
                 [
                     'COLUMN_NAME' => 'name',
@@ -262,6 +809,8 @@ describe('MySqlIntrospector', function (): void {
                     'IS_NULLABLE' => 'NO',
                     'COLUMN_DEFAULT' => null,
                     'EXTRA' => '',
+                    'COLUMN_TYPE' => 'varchar(255)',
+                    'COLLATION_NAME' => 'utf8mb4_0900_ai_ci',
                 ],
             ],
         ]);
@@ -311,6 +860,24 @@ describe('MySqlIntrospector', function (): void {
             ->and($indexes[0]->columns)->toBe(['email'])
             ->and($indexes[1]->name)->toBe('idx_name_created')
             ->and($indexes[1]->columns)->toBe(['name', 'created_at']);
+    });
+
+    it('returns single-column unique indexes from getIndexes', function (): void {
+        $connection = createMockConnection([
+            'information_schema.statistics' => [
+                [
+                    'INDEX_NAME' => 'email',
+                    'COLUMN_NAME' => 'email',
+                    'NON_UNIQUE' => '0',
+                    'INDEX_TYPE' => 'BTREE',
+                    'SEQ_IN_INDEX' => '1',
+                ],
+            ],
+        ]);
+
+        $table = new MySqlIntrospector($connection, 'testdb')->getIndexes('users');
+
+        expect($table)->toEqual([new Index(name: 'email', columns: ['email'], type: IndexType::Unique)]);
     });
 
     it('detects unique indexes', function (): void {
@@ -451,6 +1018,17 @@ describe('MySqlIntrospector', function (): void {
             {
                 return 'sqlite';
             }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
+            }
         };
 
         $introspector = new MySqlIntrospector($connection, 'my_app_db');
@@ -505,7 +1083,12 @@ describe('MySqlIntrospector', function (): void {
                 string $sql,
                 array $bindings = [],
             ): array {
-                if (str_contains($sql, 'information_schema.tables')) {
+                if (str_contains($sql, 'VERSION()')) {
+                    return [['version' => '8.4.3']];
+                }
+
+                // Match the tables query by its FROM clause: the columns query joins information_schema.tables
+                if (str_contains($sql, 'FROM information_schema.tables')) {
                     $this->callOrder[] = 'tables';
 
                     return [['TABLE_NAME' => 'users']];
@@ -522,6 +1105,8 @@ describe('MySqlIntrospector', function (): void {
                             'IS_NULLABLE' => 'NO',
                             'COLUMN_DEFAULT' => null,
                             'EXTRA' => 'auto_increment',
+                            'COLUMN_TYPE' => 'int',
+                            'COLLATION_NAME' => null,
                         ],
                     ];
                 }
@@ -529,9 +1114,7 @@ describe('MySqlIntrospector', function (): void {
                 if (str_contains($sql, 'information_schema.statistics')) {
                     $this->callOrder[] = 'indexes';
 
-                    // Return a non-unique index (not filtered out)
-                    // Single-column unique indexes are represented by the column's
-                    // unique property and are filtered from the indexes list
+                    // Return a non-unique index
                     return [
                         [
                             'INDEX_NAME' => 'idx_id',
@@ -567,6 +1150,17 @@ describe('MySqlIntrospector', function (): void {
             public function driverName(): string
             {
                 return 'sqlite';
+            }
+
+            public function supportsReturning(): bool
+            {
+                return false;
+            }
+
+            public function quoteIdentifier(
+                string $identifier,
+            ): string {
+                return '"' . str_replace('"', '""', $identifier) . '"';
             }
         };
 
@@ -710,5 +1304,28 @@ describe('MySqlIntrospector', function (): void {
         $foreignKeys = $introspector->getForeignKeys('standalone_table');
 
         expect($foreignKeys)->toBe([]);
+    });
+});
+
+describe('MySqlIntrospector server detection', function (): void {
+    it('reads the server version once across several getColumns calls', function (): void {
+        $connection = new RecordingTransactionalConnection(serverVersion: '11.8.7-MariaDB');
+        $introspector = new MySqlIntrospector($connection, 'testdb');
+
+        $introspector->getColumns('users');
+        $introspector->getColumns('posts');
+        $introspector->getColumns('comments');
+
+        expect($connection->versionQueries)->toBe(1);
+    });
+
+    it('uses the MySqlServer it is given', function (): void {
+        $connection = new RecordingTransactionalConnection();
+        $server = new MySqlServer(new RecordingTransactionalConnection(serverVersion: '11.8.7-MariaDB'));
+
+        new MySqlIntrospector($connection, 'testdb', $server)->getColumns('users');
+
+        expect($connection->versionQueries)->toBe(0)
+            ->and($server->isMariaDb())->toBeTrue();
     });
 });

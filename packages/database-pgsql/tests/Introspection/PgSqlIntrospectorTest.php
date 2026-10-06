@@ -9,10 +9,13 @@ use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Diff\DiffCalculator;
 use Marko\Database\Introspection\IntrospectorInterface;
 use Marko\Database\PgSql\Introspection\PgSqlIntrospector;
+use Marko\Database\PgSql\Sql\PgSqlGenerator;
 use Marko\Database\Schema\Column;
+use Marko\Database\Schema\Expression;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Index;
 use Marko\Database\Schema\IndexType;
+use Marko\Database\Schema\Literal;
 use Marko\Database\Schema\Table;
 use ReflectionClass;
 use RuntimeException;
@@ -245,13 +248,49 @@ describe('PgSqlIntrospector', function (): void {
 
         expect($columns[0]->default)->toBe('active')
             ->and($columns[1]->default)->toBe(0)
-            ->and($columns[2]->default)->toBe('CURRENT_TIMESTAMP')
+            ->and($columns[2]->default)->toEqual(new Expression('CURRENT_TIMESTAMP'))
             // Sequence defaults should be treated as auto_increment, not as regular defaults
             ->and($columns[3]->autoIncrement)->toBeTrue()
             ->and($columns[3]->default)->toBeNull()
             ->and($columns[4]->default)->toBeTrue()
             ->and($columns[5]->default)->toBeFalse()
             ->and($columns[6]->default)->toBe(10.50);
+    });
+
+    it('reads a function default as an expression', function (): void {
+        $columns = pgsqlColumnsWithDefaults(['gen_random_uuid()'], 'uuid');
+
+        expect($columns[0]->default)->toEqual(new Expression('gen_random_uuid()'));
+    });
+
+    it('reads CURRENT_TIMESTAMP as an expression', function (): void {
+        $columns = pgsqlColumnsWithDefaults(
+            ['CURRENT_TIMESTAMP', "(now() + '1 day'::interval)"],
+            'timestamp without time zone',
+        );
+
+        expect($columns[0]->default)->toEqual(new Expression('CURRENT_TIMESTAMP'))
+            ->and($columns[1]->default)->toEqual(new Expression("(now() + '1 day'::interval)"));
+    });
+
+    it('reads a quoted literal that looks like a function as a literal', function (): void {
+        $columns = pgsqlColumnsWithDefaults(["'now()'::character varying", "'draft'::character varying"]);
+
+        expect($columns[0]->default)->toEqual(new Literal('now()'))
+            ->and($columns[1]->default)->toBe('draft');
+    });
+
+    it('unescapes doubled quotes in a string literal default', function (): void {
+        $columns = pgsqlColumnsWithDefaults(["'it''s'::character varying", "('a'::text || 'b'::text)"]);
+
+        expect($columns[0]->default)->toBe("it's")
+            ->and($columns[1]->default)->toEqual(new Expression("('a'::text || 'b'::text)"));
+    });
+
+    it('reads an explicit NULL default as no default', function (): void {
+        $columns = pgsqlColumnsWithDefaults(['NULL::character varying']);
+
+        expect($columns[0]->default)->toBeNull();
     });
 
     it('detects serial/identity columns', function (): void {
@@ -333,6 +372,105 @@ describe('PgSqlIntrospector', function (): void {
 
         expect($indexes[0]->type)->toBe(IndexType::Unique)
             ->and($indexes[1]->type)->toBe(IndexType::Btree);
+    });
+
+    it('reads the WHERE predicate of a partial index', function (): void {
+        $connection = createTestConnection(function (string $sql): array {
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    [
+                        'indexname' => 'shows_live_idx',
+                        'indexdef' => "CREATE INDEX shows_live_idx ON public.shows USING btree (status) WHERE ((status)::text = 'live'::text)",
+                    ],
+                    ['indexname' => 'shows_name_idx', 'indexdef' => 'CREATE INDEX shows_name_idx ON public.shows USING btree (name)'],
+                ];
+            }
+
+            return [];
+        });
+
+        $indexes = new PgSqlIntrospector($connection)->getIndexes('shows');
+
+        expect($indexes[0]->where)->toBe("(status)::text = 'live'::text")
+            ->and($indexes[1]->where)->toBeNull();
+    });
+
+    it('keeps parentheses that do not wrap the whole predicate', function (): void {
+        $connection = createTestConnection(function (string $sql): array {
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    [
+                        'indexname' => 'shows_flagged_idx',
+                        'indexdef' => 'CREATE INDEX shows_flagged_idx ON public.shows USING btree (status) WHERE (a = 1) OR (b = 2)',
+                    ],
+                ];
+            }
+
+            return [];
+        });
+
+        $indexes = new PgSqlIntrospector($connection)->getIndexes('shows');
+
+        expect($indexes[0]->where)->toBe('(a = 1) OR (b = 2)');
+    });
+
+    it('parses columns of a partial index without the predicate', function (): void {
+        $connection = createTestConnection(function (string $sql): array {
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    [
+                        'indexname' => 'shows_live_idx',
+                        'indexdef' => 'CREATE UNIQUE INDEX shows_live_idx ON public.shows USING btree (slug, status) WHERE (deleted_at IS NULL)',
+                    ],
+                ];
+            }
+
+            return [];
+        });
+
+        $indexes = new PgSqlIntrospector($connection)->getIndexes('shows');
+
+        expect($indexes[0]->columns)->toBe(['slug', 'status'])
+            ->and($indexes[0]->type)->toBe(IndexType::Unique)
+            ->and($indexes[0]->where)->toBe('deleted_at IS NULL');
+    });
+
+    it('produces an empty diff when the partial index already exists', function (): void {
+        $entityIndex = new Index(name: 'shows_live_idx', columns: ['status'], where: "status = 'live'");
+        $entitySchema = [
+            'shows' => new Table(
+                name: 'shows',
+                columns: [new Column(name: 'status', type: 'varchar', length: 20)],
+                indexes: [$entityIndex],
+            ),
+        ];
+        $generatedSql = new PgSqlGenerator()->generateAddIndex('shows', $entityIndex);
+
+        $connection = createTestConnection(function (string $sql): array {
+            if (str_contains($sql, 'information_schema.columns')) {
+                return [
+                    ['column_name' => 'status', 'data_type' => 'character varying', 'character_maximum_length' => 20, 'is_nullable' => 'NO', 'column_default' => null, 'is_identity' => 'NO', 'identity_generation' => null],
+                ];
+            }
+
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    [
+                        'indexname' => 'shows_live_idx',
+                        'indexdef' => "CREATE INDEX shows_live_idx ON public.shows USING btree (status) WHERE ((status)::text = 'live'::text)",
+                    ],
+                ];
+            }
+
+            return [];
+        });
+        $databaseSchema = ['shows' => new PgSqlIntrospector($connection)->getTable('shows')];
+
+        $diff = new DiffCalculator()->calculate($entitySchema, $databaseSchema);
+
+        expect($generatedSql)->toContain("WHERE status = 'live'")
+            ->and($databaseSchema['shows']->indexes[0]->where)->not->toBeNull()
+            ->and($diff->isEmpty())->toBeTrue();
     });
 
     it('reads foreign keys from information_schema.table_constraints', function (): void {
@@ -499,18 +637,18 @@ describe('PgSqlIntrospector', function (): void {
                 ];
             }
 
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    ['indexname' => 'users_name_idx', 'indexdef' => 'CREATE INDEX users_name_idx ON public.users USING btree (name)'],
+                ];
+            }
+
             if (str_contains($sql, 'pg_constraint') && str_contains($sql, "'p'")) {
                 return [['column_name' => 'id']];
             }
 
             if (str_contains($sql, 'pg_constraint') && str_contains($sql, "'u'")) {
                 return [];
-            }
-
-            if (str_contains($sql, 'pg_indexes')) {
-                return [
-                    ['indexname' => 'users_name_idx', 'indexdef' => 'CREATE INDEX users_name_idx ON public.users USING btree (name)'],
-                ];
             }
 
             return [];
@@ -605,6 +743,46 @@ describe('PgSqlIntrospector', function (): void {
         expect($columns[0]->primaryKey)->toBeTrue()
             ->and($columns[1]->primaryKey)->toBeFalse();
     });
+    it('marks an index that backs a unique constraint as a constraint', function (): void {
+        $connection = createTestConnection(function (string $sql): array {
+            if (str_contains($sql, 'pg_indexes')) {
+                return [
+                    [
+                        'indexname' => 'users_email_key',
+                        'indexdef' => 'CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)',
+                        'is_constraint' => true,
+                    ],
+                    [
+                        'indexname' => 'users_name_unique',
+                        'indexdef' => 'CREATE UNIQUE INDEX users_name_unique ON public.users USING btree (name)',
+                        'is_constraint' => false,
+                    ],
+                ];
+            }
+
+            return [];
+        });
+
+        $indexes = new PgSqlIntrospector($connection)->getIndexes('users');
+
+        expect($indexes[0]->constraint)->toBeTrue()
+            ->and($indexes[1]->constraint)->toBeFalse();
+    });
+
+    it('asks pg_constraint which indexes back a unique constraint in the same query', function (): void {
+        $queries = [];
+        $connection = createTestConnection(function (string $sql) use (&$queries): array {
+            $queries[] = $sql;
+
+            return [];
+        });
+
+        new PgSqlIntrospector($connection)->getIndexes('users');
+        $indexQuery = array_find($queries, static fn (string $sql): bool => str_contains($sql, 'pg_indexes'));
+
+        expect($indexQuery)->toContain('pg_constraint')
+            ->and($indexQuery)->toContain("contype = 'u'");
+    });
 });
 
 /**
@@ -673,5 +851,49 @@ function createTestConnection(
         {
             return 'pgsql';
         }
+
+        public function supportsReturning(): bool
+        {
+            return true;
+        }
+
+        public function quoteIdentifier(
+            string $identifier,
+        ): string {
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        }
     };
+}
+
+/**
+ * The columns of a table whose columns have the given defaults, as information_schema reports them.
+ *
+ * @param list<string> $defaults
+ * @return array<Column>
+ */
+function pgsqlColumnsWithDefaults(
+    array $defaults,
+    string $dataType = 'character varying',
+): array {
+    $connection = createTestConnection(function (string $sql) use ($defaults, $dataType): array {
+        if (!str_contains($sql, 'information_schema.columns')) {
+            return [];
+        }
+
+        return array_map(
+            static fn (string $default, int $index): array => [
+                'column_name' => "col_$index",
+                'data_type' => $dataType,
+                'character_maximum_length' => null,
+                'is_nullable' => 'NO',
+                'column_default' => $default,
+                'is_identity' => 'NO',
+                'identity_generation' => null,
+            ],
+            $defaults,
+            array_keys($defaults),
+        );
+    });
+
+    return new PgSqlIntrospector($connection)->getColumns('posts');
 }

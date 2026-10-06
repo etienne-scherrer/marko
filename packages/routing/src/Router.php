@@ -4,14 +4,20 @@ declare(strict_types=1);
 
 namespace Marko\Routing;
 
+use JsonException;
 use Marko\Core\Container\ContainerInterface;
 use Marko\Core\Plugin\PluginInterceptedInterface;
+use Marko\Routing\Attributes\RunsOnUnmatched;
+use Marko\Routing\Exceptions\HttpException;
 use Marko\Routing\Exceptions\InvalidRouteParameterException;
+use Marko\Routing\Exceptions\MalformedJsonException;
+use Marko\Routing\Http\ExceptionRenderer;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use Marko\Routing\Middleware\MiddlewareInterface;
 use Marko\Routing\Middleware\MiddlewarePipeline;
 use Psr\Container\ContainerExceptionInterface;
+use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
@@ -28,20 +34,44 @@ readonly class Router
         private RouteMatcherInterface $matcher,
         private ContainerInterface $container,
         private array $globalMiddleware = [],
+        ExceptionRenderer $exceptionRenderer = new ExceptionRenderer(),
     ) {
-        $this->pipeline = new MiddlewarePipeline($container);
+        $this->pipeline = new MiddlewarePipeline($container, $exceptionRenderer);
     }
 
     /**
-     * @throws ContainerExceptionInterface|ReflectionException
+     * Dispatch a request through global middleware (and route middleware when a route matches).
+     *
+     * Unmatched requests run only the global middleware marked
+     * #[RunsOnUnmatched] (CORS, for example), never session, CSRF or auth;
+     * the terminal handler answers them with a 404, a 405 carrying `Allow`,
+     * or — for OPTIONS — an automatic 204 with `Allow`. Responses to HEAD
+     * never carry a body.
+     *
+     * @throws ContainerExceptionInterface|ReflectionException|JsonException
      */
     public function handle(
+        Request $request,
+    ): Response {
+        $response = $this->dispatch($request);
+
+        return $request->method() === 'HEAD' ? $response->withoutBody() : $response;
+    }
+
+    /**
+     * @throws ContainerExceptionInterface|ReflectionException|JsonException
+     */
+    private function dispatch(
         Request $request,
     ): Response {
         $matched = $this->matcher->match($request->method(), $request->path());
 
         if ($matched === null) {
-            return new Response('Not Found', 404);
+            return $this->pipeline->process(
+                $this->unmatchedMiddleware(),
+                $request,
+                $this->unmatchedHandler($request),
+            );
         }
 
         $request = $request->withRoute($matched->route->controller, $matched->route->action);
@@ -49,37 +79,94 @@ readonly class Router
         $handler = function (Request $request) use ($matched): Response {
             $controller = $this->container->get($matched->route->controller);
 
-            try {
-                $parameters = $this->resolveParameters(
-                    $controller,
-                    $matched->route->action,
-                    $matched->parameters,
-                    $request,
-                );
-            } catch (InvalidRouteParameterException $e) {
-                return new Response($e->getMessage(), 400);
-            }
+            $parameters = $this->resolveParameters(
+                $controller,
+                $matched->route->action,
+                $matched->parameters,
+                $request,
+            );
 
             $result = $controller->{$matched->route->action}(...$parameters);
 
             return $this->wrapResult($result);
         };
 
-        $middleware = [...$this->globalMiddleware, ...$matched->route->middleware];
-
         return $this->pipeline->process(
-            $middleware,
+            $this->middlewareFor($matched->route),
             $request,
             $handler,
         );
     }
 
     /**
-     * Resolve controller method parameters from route params, POST data, and query string.
+     * Global then route middleware, minus anything the route excludes with
+     * #[WithoutMiddleware].
+     *
+     * @return array<int, string>
+     */
+    private function middlewareFor(
+        RouteDefinition $route,
+    ): array {
+        $middleware = [...$this->globalMiddleware, ...$route->middleware];
+
+        if ($route->withoutMiddleware === []) {
+            return $middleware;
+        }
+
+        return array_values(array_diff($middleware, $route->withoutMiddleware));
+    }
+
+    /**
+     * The global middleware that opted in to requests no route matched with
+     * #[RunsOnUnmatched], in declaration order. A class that cannot be loaded
+     * cannot carry the attribute, so it is skipped here; matched routes still
+     * fail loudly when the container resolves it.
+     *
+     * @return array<int, string>
+     */
+    private function unmatchedMiddleware(): array
+    {
+        return array_values(array_filter(
+            $this->globalMiddleware,
+            fn (string $middleware): bool => class_exists($middleware)
+                && new ReflectionClass($middleware)->getAttributes(RunsOnUnmatched::class) !== [],
+        ));
+    }
+
+    /**
+     * Terminal handler for a request no route matched.
+     *
+     * @return callable(Request): Response
+     */
+    private function unmatchedHandler(
+        Request $request,
+    ): callable {
+        $allowedMethods = $this->matcher->allowedMethods($request->path());
+
+        /** @throws HttpException */
+        return function (Request $request) use ($allowedMethods): Response {
+            if ($allowedMethods === []) {
+                throw HttpException::notFound();
+            }
+
+            if ($request->method() === 'OPTIONS') {
+                return new Response(
+                    body: '',
+                    statusCode: 204,
+                    headers: ['Allow' => implode(', ', $allowedMethods)],
+                );
+            }
+
+            throw HttpException::methodNotAllowed($allowedMethods);
+        };
+    }
+
+    /**
+     * Resolve controller method parameters from route params, the request body (JSON or form data), and query string.
      *
      * @param array<string, mixed> $routeParams
      * @return array<mixed>
-     * @throws ReflectionException|InvalidRouteParameterException
+     * @throws ReflectionException|InvalidRouteParameterException|MalformedJsonException
      */
     private function resolveParameters(
         object $controller,
@@ -104,13 +191,11 @@ readonly class Router
                 continue;
             }
 
-            // Priority: route params > POST data > query string > default
+            // Priority: route params > body (JSON or form data) > query string > default
             if (array_key_exists($name, $routeParams)) {
                 $parameters[] = $this->castToType($routeParams[$name], $type);
-            } elseif (($postValue = $request->post($name)) !== null) {
-                $parameters[] = $this->castToType($postValue, $type);
-            } elseif (($queryValue = $request->query($name)) !== null) {
-                $parameters[] = $this->castToType($queryValue, $type);
+            } elseif (($inputValue = $request->input($name)) !== null) {
+                $parameters[] = $this->castToType($inputValue, $type);
             } elseif ($param->isDefaultValueAvailable()) {
                 $parameters[] = $param->getDefaultValue();
             } elseif ($this->isRequiredTypedScalar($type)) {

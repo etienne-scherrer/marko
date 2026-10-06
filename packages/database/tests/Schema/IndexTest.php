@@ -46,4 +46,29 @@ describe('Index', function (): void {
         $reflection = new ReflectionClass($btreeIndex);
         expect($reflection->isReadOnly())->toBeTrue();
     });
+
+    it('treats indexes with different where predicates as not equal', function (): void {
+        $partial = new Index(name: 'idx_live', columns: ['status'], where: "status = 'live'");
+        $samePartial = new Index(name: 'idx_live', columns: ['status'], where: "status = 'live'");
+        $otherPartial = new Index(name: 'idx_live', columns: ['status'], where: "status = 'draft'");
+        $full = new Index(name: 'idx_live', columns: ['status']);
+
+        expect($partial->equals($samePartial))->toBeTrue()
+            ->and($partial->equals($otherPartial))->toBeFalse()
+            ->and($partial->equals($full))->toBeFalse();
+    });
+
+    it('ignores whether an index backs a constraint when comparing', function (): void {
+        $index = new Index(name: 'users_email_key', columns: ['email'], type: IndexType::Unique);
+        $constraint = new Index(
+            name: 'users_email_key',
+            columns: ['email'],
+            type: IndexType::Unique,
+            constraint: true,
+        );
+
+        expect($index->constraint)->toBeFalse()
+            ->and($constraint->constraint)->toBeTrue()
+            ->and($index->equals($constraint))->toBeTrue();
+    });
 });

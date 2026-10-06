@@ -20,6 +20,11 @@ class Session implements SessionInterface, ResettableInterface
 
     private string $id = '';
 
+    /**
+     * Prepared by SessionMiddleware to start on first access.
+     */
+    private bool $armed = false;
+
     private ?FlashBag $flashBag = null;
 
     private bool $handlerRegistered = false;
@@ -28,6 +33,15 @@ class Session implements SessionInterface, ResettableInterface
      * @var array<string, mixed>
      */
     private array $data = [];
+
+    /**
+     * Snapshot of the data loaded by start(), compared by isModified().
+     *
+     * @var array<string, mixed>
+     */
+    private array $loadedData = [];
+
+    private string $loadedId = '';
 
     public function __construct(
         private readonly SessionHandlerInterface $handler,
@@ -70,12 +84,31 @@ class Session implements SessionInterface, ResettableInterface
 
         $this->id = session_id();
         $this->data = $_SESSION ?? [];
+        $this->loadedData = $this->data;
+        $this->loadedId = $this->id;
         $this->flashBag = new FlashBag($this->data);
         $this->started = true;
+        $this->armed = false;
+    }
+
+    public function arm(): void
+    {
+        $this->armed = true;
+    }
+
+    public function isAvailable(): bool
+    {
+        return $this->started || $this->armed;
+    }
+
+    public function isModified(): bool
+    {
+        return $this->started
+            && ($this->data !== $this->loadedData || $this->id !== $this->loadedId);
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function get(
         string $key,
@@ -87,7 +120,7 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function set(
         string $key,
@@ -99,7 +132,7 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function has(
         string $key,
@@ -110,7 +143,7 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function remove(
         string $key,
@@ -121,7 +154,7 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function clear(): void
     {
@@ -134,7 +167,7 @@ class Session implements SessionInterface, ResettableInterface
     /**
      * @return array<string, mixed>
      *
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function all(): array
     {
@@ -163,10 +196,17 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function destroy(): void
     {
+        if (!$this->started && $this->armed) {
+            // Nothing was started, so there is nothing stored to destroy.
+            $this->armed = false;
+
+            return;
+        }
+
         $this->ensureStarted('destroy');
 
         $this->data = [];
@@ -175,6 +215,7 @@ class Session implements SessionInterface, ResettableInterface
         session_destroy();
 
         $this->started = false;
+        $this->armed = false;
         $this->id = '';
     }
 
@@ -205,7 +246,7 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * @throws SessionNotStartedException|SessionException
      */
     public function flash(): FlashBag
     {
@@ -216,6 +257,8 @@ class Session implements SessionInterface, ResettableInterface
 
     public function save(): void
     {
+        $this->armed = false;
+
         if (!$this->started) {
             return;
         }
@@ -225,11 +268,26 @@ class Session implements SessionInterface, ResettableInterface
         $this->started = false;
     }
 
+    public function discard(): void
+    {
+        $this->armed = false;
+
+        if (!$this->started) {
+            return;
+        }
+
+        session_abort();
+        $this->started = false;
+    }
+
     #[Override]
     public function reset(): void
     {
+        $this->armed = false;
         $this->id = '';
         $this->data = [];
+        $this->loadedData = [];
+        $this->loadedId = '';
         $this->flashBag = null;
     }
 
@@ -239,7 +297,12 @@ class Session implements SessionInterface, ResettableInterface
         ini_set('session.gc_maxlifetime', (string) ($this->config->lifetime() * 60));
         ini_set('session.gc_probability', (string) $this->config->gcProbability());
         ini_set('session.gc_divisor', (string) $this->config->gcDivisor());
+        // Strict mode makes PHP ask the handler's validateId() before resuming
+        // an inbound id, so an unknown or expired id gets a fresh one instead
+        // of being adopted. Lazy writes make PHP call updateTimestamp()
+        // rather than write() when the data is unchanged.
         ini_set('session.use_strict_mode', '1');
+        ini_set('session.lazy_write', '1');
         ini_set('session.use_cookies', '0');
         ini_set('session.use_only_cookies', '1');
 
@@ -257,14 +320,24 @@ class Session implements SessionInterface, ResettableInterface
     }
 
     /**
-     * @throws SessionNotStartedException
+     * Start an armed session on first access. A session nobody armed fails
+     * loudly: only SessionMiddleware prepares a session, so access outside it
+     * never starts one behind the caller's back.
+     *
+     * @throws SessionNotStartedException|SessionException
      */
     private function ensureStarted(
         string $operation,
     ): void {
-        if (!$this->started) {
+        if ($this->started) {
+            return;
+        }
+
+        if (!$this->armed) {
             throw SessionNotStartedException::forOperation($operation);
         }
+
+        $this->start();
     }
 
     private function validateId(

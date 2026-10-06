@@ -24,7 +24,10 @@ use Marko\Database\Tests\Schema\Fixtures\ProductEntity;
 use Marko\Database\Tests\Schema\Fixtures\ProductExtenderEntity;
 use Marko\Database\Tests\Schema\Fixtures\ProductFkExtenderEntity;
 use Marko\Database\Tests\Schema\Fixtures\ProductIndexExtenderEntity;
+use Marko\Database\Tests\Schema\Fixtures\ProductLongIndexExtenderEntity;
+use Marko\Database\Tests\Schema\Fixtures\ProductPartialIndexExtenderEntity;
 use Marko\Database\Tests\Schema\Fixtures\ProductSecondExtenderEntity;
+use Marko\Database\Tests\Schema\Fixtures\ProductSynonymExtenderEntity;
 
 beforeEach(function (): void {
     $this->metadataFactory = new EntityMetadataFactory();
@@ -197,6 +200,14 @@ it('registers a parent entity with one extender and merges columns into the pare
         ->and(array_map(fn ($c) => $c->name, $table->columns))->toContain('sku');
 });
 
+it('builds extender columns through the schema builder', function (): void {
+    $this->registry->registerEntities([ProductEntity::class, ProductSynonymExtenderEntity::class]);
+
+    $stock = array_find($this->registry->getTable('products')->columns, fn ($column) => $column->name === 'stock');
+
+    expect($stock->type)->toBe('integer');
+});
+
 it('registers a parent entity with multiple extenders and merges columns from all', function (): void {
     $this->registry->registerEntities([
         ProductEntity::class,
@@ -219,6 +230,28 @@ it('merges extender indexes into the parent table', function (): void {
 
     expect($table->indexes)->toHaveCount(1)
         ->and($table->indexes[0]->name)->toBe('idx_products_sku');
+});
+
+it('rejects an over-long index name declared by an extender', function (): void {
+    expect(fn () => $this->registry->registerEntities([ProductEntity::class, ProductLongIndexExtenderEntity::class]))
+        ->toThrow(EntityException::class, ProductLongIndexExtenderEntity::class);
+});
+
+it('keeps the where predicate on indexes merged from extenders', function (): void {
+    $this->registry->registerEntities([ProductEntity::class, ProductPartialIndexExtenderEntity::class]);
+
+    $table = $this->registry->getTable('products');
+
+    expect($table->indexes)->toHaveCount(1)
+        ->and($table->indexes[0]->where)->toBe('sku IS NOT NULL');
+});
+
+it('merges unmanagedIndexes declared on an extender into the parent table', function (): void {
+    $this->registry->registerEntities([ProductEntity::class, ProductPartialIndexExtenderEntity::class]);
+
+    $table = $this->registry->getTable('products');
+
+    expect($table->unmanagedIndexes)->toBe(['products_search_gin_idx']);
 });
 
 it('preserves the parent primary key in the merged table', function (): void {

@@ -22,7 +22,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Guards define how users are authenticated for each request.
-    | Each guard has a driver and a provider.
+    | Each guard has a driver and a provider. The 'session' driver is
+    | built in; the 'token' driver comes from marko/authentication-token.
+    | Packages register more drivers with GuardDriverRegistry::extend().
     |
     */
     'guards' => [
@@ -73,11 +75,21 @@ return [
     | Remember Me
     |--------------------------------------------------------------------------
     |
-    | Configuration for "remember me" functionality. Expiration is in minutes.
+    | Configuration for "remember me" functionality. The lifetime is in
+    | minutes. Each guard writes its own cookie named {prefix}{guard}, e.g.
+    | remember_session. Set 'secure' to null to follow the session cookie's
+    | secure flag (session.cookie.secure).
     |
     */
     'remember' => [
-        'expiration' => 43200, // 30 days
-        'cookie' => 'remember_token',
+        'lifetime' => 43200, // 30 days
+        'cookie' => [
+            'prefix' => 'remember_',
+            'path' => '/',
+            'domain' => '',
+            'secure' => null,
+            'http_only' => true,
+            'same_site' => 'Lax',
+        ],
     ],
 ];

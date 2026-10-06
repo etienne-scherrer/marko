@@ -4,30 +4,39 @@ declare(strict_types=1);
 
 namespace Marko\Authorization\Tests\Unit\Middleware;
 
+use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Contracts\StatelessGuardInterface;
+use Marko\Authentication\Exceptions\UnauthenticatedException;
 use Marko\Authorization\Attributes\Can;
 use Marko\Authorization\AuthorizableInterface;
 use Marko\Authorization\Contracts\GateInterface;
+use Marko\Authorization\Exceptions\AuthorizationException;
 use Marko\Authorization\Gate;
 use Marko\Authorization\Middleware\AuthorizationMiddleware;
 use Marko\Authorization\PolicyRegistry;
+use Marko\Routing\Exceptions\HttpException;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 use Marko\Testing\Fake\FakeGuard;
+use RuntimeException;
 
 // Test controllers
 class PostController
 {
+    /** @noinspection PhpUnused - Read via reflection by the middleware */
     #[Can('create-post')]
     public function create(): Response
     {
         return new Response(body: 'created', statusCode: 200);
     }
 
+    /** @noinspection PhpUnused - Read via reflection by the middleware */
     public function index(): Response
     {
         return new Response(body: 'index', statusCode: 200);
     }
 
+    /** @noinspection PhpUnused - Read via reflection by the middleware */
     #[Can('update', 'App\\Entity\\Post')]
     public function update(): Response
     {
@@ -79,6 +88,15 @@ class MiddlewareStubUser implements AuthorizableInterface
     }
 }
 
+// Stands in for a token guard: stateless, with a Bearer challenge
+class MiddlewareStatelessGuard extends FakeGuard implements StatelessGuardInterface
+{
+    public function getChallenge(): string
+    {
+        return 'Bearer';
+    }
+}
+
 function createMiddlewareGate(
     ?FakeGuard $guard = null,
 ): Gate {
@@ -91,15 +109,53 @@ function createMiddlewareGate(
 function createAuthMiddleware(
     GateInterface $gate,
     FakeGuard $guard,
-    ?string $controller = null,
-    ?string $action = null,
 ): AuthorizationMiddleware {
     return new AuthorizationMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: $controller,
-        action: $action,
+        gate: fn (): GateInterface => $gate,
+        guard: fn (): GuardInterface => $guard,
     );
+}
+
+/**
+ * Counts how often each factory runs. The factories fail the test if a
+ * route without #[Can] ever calls them.
+ */
+class FactorySpy
+{
+    public int $gateCalls = 0;
+
+    public int $guardCalls = 0;
+
+    public function __construct(
+        private readonly GateInterface $gate,
+        private readonly GuardInterface $guard,
+    ) {}
+
+    public function middleware(): AuthorizationMiddleware
+    {
+        return new AuthorizationMiddleware(
+            gate: function (): GateInterface {
+                $this->gateCalls++;
+
+                return $this->gate;
+            },
+            guard: function (): GuardInterface {
+                $this->guardCalls++;
+
+                return $this->guard;
+            },
+        );
+    }
+}
+
+/**
+ * @param array<string, mixed> $server
+ */
+function createRoutedRequest(
+    string $action,
+    array $server = [],
+): Request {
+    return new Request(server: $server)->withRoute(PostController::class, $action);
 }
 
 function createSuccessfulNext(): callable
@@ -114,64 +170,45 @@ it('allows request when gate allows the ability', function (): void {
     $gate = createMiddlewareGate(guard: $guard);
     $gate->define('create-post', fn (?AuthorizableInterface $user): bool => true);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request();
+    $request = createRoutedRequest('create');
     $response = $middleware->handle($request, createSuccessfulNext());
 
     expect($response->statusCode())->toBe(200)
         ->and($response->body())->toBe('success');
 });
 
-it('returns 403 when gate denies the ability', function (): void {
+it('throws a 403 AuthorizationException when gate denies the ability', function (): void {
     $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
     $guard->setUser(new MiddlewareStubUser());
 
     $gate = createMiddlewareGate(guard: $guard);
     $gate->define('create-post', fn (?AuthorizableInterface $user): bool => false);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request();
-    $response = $middleware->handle($request, createSuccessfulNext());
-
-    expect($response->statusCode())->toBe(403)
-        ->and($response->body())->toBe('Forbidden');
+    expect(fn () => $middleware->handle(createRoutedRequest('create'), createSuccessfulNext()))
+        ->toThrow(AuthorizationException::class);
 });
 
-it('returns JSON 403 for API requests when denied', function (): void {
+it('carries the ability and entity class on the thrown AuthorizationException', function (): void {
     $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
     $guard->setUser(new MiddlewareStubUser());
 
     $gate = createMiddlewareGate(guard: $guard);
-    $gate->define('create-post', fn (?AuthorizableInterface $user): bool => false);
+    $gate->define('update', fn (?AuthorizableInterface $user, mixed ...$args): bool => false);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request(server: [
-        'HTTP_ACCEPT' => 'application/json',
-    ]);
-    $response = $middleware->handle($request, createSuccessfulNext());
-
-    expect($response->statusCode())->toBe(403)
-        ->and($response->headers())->toHaveKey('Content-Type')
-        ->and($response->headers()['Content-Type'])->toBe('application/json')
-        ->and(json_decode($response->body(), true))->toBe(['error' => 'Forbidden']);
+    try {
+        $middleware->handle(createRoutedRequest('update'), createSuccessfulNext());
+        $this->fail('Expected AuthorizationException');
+    } catch (AuthorizationException $exception) {
+        expect($exception->getStatusCode())->toBe(403)
+            ->and($exception->getAbility())->toBe('update')
+            ->and($exception->getResource())->toBe('App\\Entity\\Post');
+    }
 });
 
 it('skips authorization when no Can attribute is present', function (): void {
@@ -180,14 +217,9 @@ it('skips authorization when no Can attribute is present', function (): void {
 
     $gate = createMiddlewareGate(guard: $guard);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'index',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request();
+    $request = createRoutedRequest('index');
     $response = $middleware->handle($request, createSuccessfulNext());
 
     expect($response->statusCode())->toBe(200)
@@ -202,58 +234,58 @@ it('reads Can attribute from controller method via reflection', function (): voi
     // Define the ability that matches the #[Can('create-post')] attribute
     $gate->define('create-post', fn (?AuthorizableInterface $user): bool => true);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request();
+    $request = createRoutedRequest('create');
     $response = $middleware->handle($request, createSuccessfulNext());
 
     // If attribute was read correctly, the gate allows it
     expect($response->statusCode())->toBe(200);
 });
 
-it('returns 401 when user is not authenticated', function (): void {
+it('throws a 401 HttpException when user is not authenticated', function (): void {
     $guard = new FakeGuard(name: 'middleware-test', attemptResult: false); // No user set
 
     $gate = createMiddlewareGate(guard: $guard);
     $gate->define('create-post', fn (?AuthorizableInterface $user): bool => true);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request(server: [
-        'HTTP_ACCEPT' => 'application/json',
-    ]);
-    $response = $middleware->handle($request, createSuccessfulNext());
-
-    expect($response->statusCode())->toBe(401);
+    try {
+        $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+        $this->fail('Expected HttpException');
+    } catch (HttpException $exception) {
+        expect($exception->getStatusCode())->toBe(401);
+    }
 });
 
-it('returns plain 401 for web requests when not authenticated', function (): void {
-    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false); // No user set
+it("sends the stateless guard's WWW-Authenticate challenge on a 401 for a guest", function (): void {
+    $guard = new MiddlewareStatelessGuard(name: 'api', attemptResult: false); // No user set
 
-    $gate = createMiddlewareGate(guard: $guard);
+    $middleware = createAuthMiddleware(gate: createMiddlewareGate(guard: $guard), guard: $guard);
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'create',
-    );
+    try {
+        $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+        $this->fail('Expected UnauthenticatedException');
+    } catch (UnauthenticatedException $exception) {
+        expect($exception->getStatusCode())->toBe(401)
+            ->and($exception->getMessage())->toBe('Unauthorized.')
+            ->and($exception->getHeaders())->toBe(['WWW-Authenticate' => 'Bearer']);
+    }
+});
 
-    $request = new Request();
-    $response = $middleware->handle($request, createSuccessfulNext());
+it('sends no WWW-Authenticate header on a 401 for a guest on a stateful guard', function (): void {
+    $guard = new FakeGuard(name: 'web', attemptResult: false); // No user set
 
-    expect($response->statusCode())->toBe(401)
-        ->and($response->body())->toBe('Unauthorized');
+    $middleware = createAuthMiddleware(gate: createMiddlewareGate(guard: $guard), guard: $guard);
+
+    try {
+        $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+        $this->fail('Expected UnauthenticatedException');
+    } catch (UnauthenticatedException $exception) {
+        expect($exception->getStatusCode())->toBe(401)
+            ->and($exception->getHeaders())->toBe([]);
+    }
 });
 
 it('passes entity class from Can attribute to gate', function (): void {
@@ -270,16 +302,123 @@ it('passes entity class from Can attribute to gate', function (): void {
         return true;
     });
 
-    $middleware = createAuthMiddleware(
-        gate: $gate,
-        guard: $guard,
-        controller: PostController::class,
-        action: 'update',
-    );
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
 
-    $request = new Request();
+    $request = createRoutedRequest('update');
     $response = $middleware->handle($request, createSuccessfulNext());
 
     expect($response->statusCode())->toBe(200)
         ->and($receivedArgs)->toBe(['App\\Entity\\Post']);
+});
+
+it('passes through when the request has no matched route', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false); // No user set
+
+    $middleware = createAuthMiddleware(gate: createMiddlewareGate(guard: $guard), guard: $guard);
+
+    $response = $middleware->handle(new Request(), createSuccessfulNext());
+
+    expect($response->statusCode())->toBe(200)
+        ->and($response->body())->toBe('success');
+});
+
+it('reuses the resolved Can attribute for repeated requests to the same action', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
+    $guard->setUser(new MiddlewareStubUser());
+
+    $gate = createMiddlewareGate(guard: $guard);
+    $gate->define('create-post', fn (?AuthorizableInterface $user): bool => false);
+
+    $middleware = createAuthMiddleware(gate: $gate, guard: $guard);
+
+    $denied = 0;
+
+    foreach ([1, 2] as $ignored) {
+        try {
+            $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+        } catch (AuthorizationException) {
+            $denied++;
+        }
+    }
+
+    $unprotected = $middleware->handle(createRoutedRequest('index'), createSuccessfulNext());
+
+    expect($denied)->toBe(2)
+        ->and($unprotected->statusCode())->toBe(200);
+});
+
+it('never calls the gate or guard factory for a route without Can', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
+    $spy = new FactorySpy(gate: createMiddlewareGate(guard: $guard), guard: $guard);
+    $middleware = $spy->middleware();
+
+    $response = $middleware->handle(createRoutedRequest('index'), createSuccessfulNext());
+
+    expect($response->statusCode())->toBe(200)
+        ->and($spy->gateCalls)->toBe(0)
+        ->and($spy->guardCalls)->toBe(0);
+});
+
+it('never calls the gate or guard factory for an unmatched request', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
+    $spy = new FactorySpy(gate: createMiddlewareGate(guard: $guard), guard: $guard);
+    $middleware = $spy->middleware();
+
+    $response = $middleware->handle(new Request(), createSuccessfulNext());
+
+    expect($response->statusCode())->toBe(200)
+        ->and($spy->gateCalls)->toBe(0)
+        ->and($spy->guardCalls)->toBe(0);
+});
+
+it('resolves the gate and guard once across repeated Can requests', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
+    $guard->setUser(new MiddlewareStubUser());
+    $gate = createMiddlewareGate(guard: $guard);
+    $gate->define('create-post', fn (?AuthorizableInterface $user): bool => true);
+    $spy = new FactorySpy(gate: $gate, guard: $guard);
+    $middleware = $spy->middleware();
+
+    $first = $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+    $second = $middleware->handle(createRoutedRequest('create'), createSuccessfulNext());
+
+    expect($first->statusCode())->toBe(200)
+        ->and($second->statusCode())->toBe(200)
+        ->and($spy->gateCalls)->toBe(1)
+        ->and($spy->guardCalls)->toBe(1);
+});
+
+it('never calls the gate factory when the guard reports a guest', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false); // No user set
+    $spy = new FactorySpy(gate: createMiddlewareGate(guard: $guard), guard: $guard);
+    $middleware = $spy->middleware();
+
+    expect(fn () => $middleware->handle(createRoutedRequest('create'), createSuccessfulNext()))
+        ->toThrow(HttpException::class)
+        ->and($spy->guardCalls)->toBe(1)
+        ->and($spy->gateCalls)->toBe(0);
+});
+
+it('retries a factory that threw on the next Can request instead of caching the failure', function (): void {
+    $guard = new FakeGuard(name: 'middleware-test', attemptResult: false);
+    $guard->setUser(new MiddlewareStubUser());
+    $gate = createMiddlewareGate(guard: $guard);
+    $gate->define('create-post', fn (?AuthorizableInterface $user): bool => true);
+    $guardCalls = 0;
+
+    $middleware = new AuthorizationMiddleware(
+        gate: fn (): GateInterface => $gate,
+        guard: function () use (&$guardCalls, $guard): GuardInterface {
+            if (++$guardCalls === 1) {
+                throw new RuntimeException('Guard not configured yet');
+            }
+
+            return $guard;
+        },
+    );
+
+    expect(fn () => $middleware->handle(createRoutedRequest('create'), createSuccessfulNext()))
+        ->toThrow(RuntimeException::class, 'Guard not configured yet')
+        ->and($middleware->handle(createRoutedRequest('create'), createSuccessfulNext())->statusCode())->toBe(200)
+        ->and($guardCalls)->toBe(2);
 });

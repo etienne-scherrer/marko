@@ -75,6 +75,101 @@ Because they mutate the working directory, they're excluded from `composer test`
 
 Running the destructive group updates your working directory's `composer.lock` (whatever `composer update` currently resolves). Commit any intended lock changes, or `git checkout composer.lock vendor/` to restore if you didn't mean to bump.
 
+## Integration Tests (`integration-services` Group)
+
+Unit tests build classes by hand with fakes. They cannot catch wiring bugs in `module.php` or bugs that only show up with a real driver. The `integration-services` group covers those. Every test that needs a real service belongs to this one group:
+
+- **The fixture app** (`tests/Integration/App`): boots a real application through `Application::boot()`, with the real module discovery and `module.php` wiring, against real Postgres and Redis.
+- **Driver integration tests** (`packages/database-pgsql/tests/Integration`, `packages/database-mysql/tests/Integration`): savepoints, row locks, upsert, constraint violations, concurrency errors and migrations against a real PostgreSQL or MySQL server.
+- **Live Redis tests** (`packages/pubsub-redis/tests/Integration/SharedConnectionLiveTest.php`, `packages/broadcasting-amphp/tests/Feature/RedisLiveTest.php`).
+
+### Layout
+
+| Path | Purpose |
+|------|---------|
+| `tests/Integration/App/Fixture/` | The fixture project: the `app/integration` module (entities, repositories, seeder, jobs, observers, scheduled tasks, routes), `config/*.php` and `database/migrations/` |
+| `tests/Integration/App/Helpers.php` | Harness functions, autoloaded through `autoload-dev.files` |
+| `tests/Integration/App/HarnessTest.php` | Tests for the harness itself. Needs no services, so it always runs |
+| `tests/Integration/App/*Test.php` | Cases grouped by topic (`ServicesTest`, `TransactionsTest`, `QueueTest`, `SchedulerTest`, `RateLimitTest`, `AuthTest`, `ErrorMappingTest`, ...), each tagged `->issue(N)` with the ticket it covers |
+| `tests/Integration/App/QueueSessionFixture/` | A third fixture with only marko/queue-database, marko/session-database and one database driver. `QueueSessionTablesPgSqlTest` (fixture server, its own `_tables` database) and `QueueSessionTablesMySqlTest` (`MARKO_TEST_MYSQL_*` server, its own `<database>_tables` database) run a fresh `db:migrate` against it and share their cases from `QueueSessionTables.php` |
+| `tests/Integration/App/DatabaseTestingFixture/` | A second, smaller fixture for `RefreshDatabaseTest` and `TruncateDatabaseTest`. `databaseTestingProject()` builds it once per process with its own `_dbtesting` database, because `TestDatabase` boots and migrates once and keeps its connection open |
+| `tests/Integration/compose.yml` | Postgres 17, MySQL 8.4 and Redis 7 for local runs, plus MariaDB 11.8 under the `mariadb` profile |
+| `tests/Integration/postgres-init/` | Creates the `marko_test` database the pgsql driver tests use |
+
+Each fixture test copies the fixture into a fresh temporary directory and links the packages listed in `INTEGRATION_MODULES` into its `vendor/marko/` as symlinks. The test then drops and recreates its Postgres database and boots the app. Nothing is written into the repository. Each parallel worker gets its own database (`marko_integration_<TEST_TOKEN>`). The driver tests create and drop their own tables in `marko_test`, a separate database, because the fixture drops `marko_integration` before every case.
+
+### Environment variables
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` | Fixture app (Postgres) | unset (skip), `5432`, `marko`, `marko`, `marko_integration` |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Fixture app, pubsub-redis and broadcasting-amphp live tests | unset (skip), `6379`, none |
+| `MARKO_TEST_PGSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-pgsql` driver tests | unset (skip), `5432`, `marko_test`, `postgres`, empty |
+| `MARKO_TEST_MYSQL_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD` | `database-mysql` driver tests | unset (skip), `3306`, `marko_test`, `root`, empty |
+| `MARKO_TEST_MYSQL_SERVER` | `database-mysql` driver tests | unset: no check. `mysql` or `mariadb`: a run that reached the other server fails |
+| `MARKO_INTEGRATION_REQUIRED` | Every suite in the group | unset: a missing or unreachable service skips. `1`: it fails |
+
+### Running locally
+
+```bash
+docker compose -f tests/Integration/compose.yml up -d --wait
+
+DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 \
+MARKO_TEST_PGSQL_HOST=127.0.0.1 MARKO_TEST_PGSQL_USERNAME=marko MARKO_TEST_PGSQL_PASSWORD=marko \
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
+composer test:integration
+```
+
+Export only the variables for the services you need: a suite whose host variable is unset skips. To run one part of the group:
+
+```bash
+# Fixture app only
+DB_HOST=127.0.0.1 REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml tests/Integration/App
+
+# One driver
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PASSWORD=marko \
+  ./vendor/bin/pest -c phpunit.xml packages/database-mysql/tests/Integration
+
+# Live Redis tests
+REDIS_HOST=127.0.0.1 ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/pubsub-redis packages/broadcasting-amphp
+```
+
+The `database-mysql` driver tests also run against MariaDB, together with the other MySQL suites: `packages/admin-auth/tests/Integration/MySql`, `packages/queue-database/tests/Integration/MySqlRoundTripTest.php`, `packages/session-database/tests/Integration/MySql`, `packages/search/tests/Integration/MySql` and `tests/Integration/App/QueueSessionTablesMySqlTest.php`. CI runs them again against MariaDB 11.8 on port 3307 and MariaDB 10.11 on port 3308, with `MARKO_TEST_MYSQL_SERVER=mariadb`; tests whose expectations differ between the servers branch on `IntegrationDatabase::isMariaDb()`, and the MariaDB-only `1020` snapshot-conflict tests skip on MySQL. Locally (port 3308 for 10.11):
+
+```bash
+docker compose -f tests/Integration/compose.yml --profile mariadb up -d --wait
+
+MARKO_TEST_MYSQL_HOST=127.0.0.1 MARKO_TEST_MYSQL_PORT=3307 MARKO_TEST_MYSQL_PASSWORD=marko \
+MARKO_TEST_MYSQL_SERVER=mariadb \
+  ./vendor/bin/pest -c phpunit.xml --group=integration-services packages/database-mysql/tests/Integration
+```
+
+If port 5432, 6379 or 3306 is already taken, start the services with `DB_PORT=55432 REDIS_PORT=56379 MYSQL_PORT=53306 docker compose -f tests/Integration/compose.yml up -d --wait` and export the same ports when running the suite (`DB_PORT`, `REDIS_PORT`, `MARKO_TEST_PGSQL_PORT=55432`, `MARKO_TEST_MYSQL_PORT=53306`).
+
+### Skipping and required mode
+
+- Every fixture case calls `setUpIntegrationTest($this)` in `beforeEach`, which calls `integrationServicesSkipReason()`. If `DB_HOST` or `REDIS_HOST` is unset or unreachable, the case is **skipped** with the reason and the compose command. The driver tests do the same through their package's `tests/Fixtures/IntegrationDatabase::config()`, and the live Redis tests through their own skip-reason function. This is why `composer test` stays green on a machine with no services.
+- The CI **Integration** job sets `MARKO_INTEGRATION_REQUIRED=1`. In that mode the same condition **fails** the case, so the job can never pass by skipping everything.
+
+### CI
+
+The **Integration** job in `.github/workflows/ci.yml` runs `composer test:integration` against `postgres:17`, `mysql:8.4` and `redis:7` service containers, with every variable above set and `marko_test` created on the Postgres service before the run. It runs serially, because the driver tests share their databases. `tests/CiWorkflowTest.php` asserts the services and variables, so dropping one fails `composer test`.
+
+The required checks on `develop` are `Tests`, `Lint` and `Static analysis`. Whether `Integration` becomes a required check is a maintainer decision, tracked in #226.
+
+### Adding a case
+
+1. If the case needs new behaviour from the fixture, add it to `Fixture/app/integration` (a route, job, observer or entity) or to `Fixture/config`. If the case needs a package outside `INTEGRATION_MODULES`, add the package there. Don't add a second driver for an interface that is already bound: two drivers fail boot with a binding conflict.
+2. Start the file with `pest()->group('integration-services');`, then add `beforeEach(fn () => setUpIntegrationTest($this));` and `afterEach(fn () => tearDownIntegrationTest($this));`. This gives the test `$this->app` (migrated) and `$this->project` (the temp project path). Pass `migrate: false` to `setUpIntegrationTest()` for a test that must start from an empty schema.
+3. Send requests with `$this->app->router->handle(integrationRequest('GET', '/path'))`. Run console commands with `runIntegrationCommand($this->app, 'queue:work', ['--once'])`. Both go through the real router and the real `CommandRunner`.
+4. Don't hand-construct services. Resolve them from `$this->app->container`.
+5. Tag the case `->issue(N)` with the ticket whose behaviour it proves. `HarnessTest` checks that every ticket in the #187 hand-off table is still referenced.
+6. Redis is shared by every run and never flushed. Use unique keys (and unique client addresses for rate limits), or a rerun inside a TTL starts from the previous run's state.
+
+### Known gaps
+
+Don't park a known bug as a `->todo()` row. `HarnessTest` fails on any todo in the integration suite. Write the failing test in the ticket that fixes the bug instead.
+
 ## TDD Workflow Commands
 
 Optimized commands for fast feedback during TDD cycles:
@@ -498,6 +593,23 @@ Each test should be independent and not rely on state from other tests.
 
 ### 4. Test the Contract
 For interfaces, test against the interface contract, not specific implementations.
+
+### 5. Deterministic Under Parallel Load
+`composer test` runs a paratest worker on every core, so a test must pass on a saturated machine as well as on an idle laptop.
+
+- **Poll for the condition. Never assert after a fixed delay.** `delay(1.2)` followed by an assertion breaks as soon as the machine is busy. Wait for the condition you're about to assert, with a generous timeout (5s or more). The timeout is only an upper bound: a passing test returns as soon as the condition holds. In amphp tests use `Marko\Broadcasting\Amphp\Tests\Support\Poll::until($condition, 'what is awaited')`. It polls with `delay()`, so the event loop keeps running. A fixed delay is fine only when the test has to prove that something stays true for a period of time, such as a stream outliving a timeout or nothing being logged.
+- **Give subprocess tests their own temp state.** A test that starts another process (Pest, Composer, a server) writes into a temp directory unique to that run, such as `sys_get_temp_dir() . '/name-' . bin2hex(random_bytes(8))`, and removes it afterwards. Never write to a fixed path: concurrent runs in worktrees, or `composer test` running next to `composer ci`, would share it.
+- **Pass the parent environment, minus the paratest variables.** Strip `PARATEST`, `TEST_TOKEN`, `UNIQUE_TEST_TOKEN` and `PEST_PARALLEL*` so the child doesn't act as a worker of the parent run. Keep everything else, including `TMPDIR`. Pass `-d memory_limit=...` explicitly when the child needs it.
+- **Boot a subprocess once per file** when several tests read the same result. Memoise the result in a `static` (see `packages/testing/tests/Feature/PestPluginRegistrationTest.php`).
+- **Put the subprocess output in every failure message**, e.g. `expect(str_contains($output, '...'))->toBeTrue($output)`. Pest's `toContain()` takes no message argument.
+
+### 6. Clean Runs: No Notices, Deprecations, Risky Tests or Warnings
+`phpunit.xml` sets `failOnDeprecation`, `failOnNotice`, `failOnPhpunitDeprecation`, `failOnPhpunitNotice`, `failOnRisky` and `failOnWarning`, so any of them fails `composer test` and the integration jobs, the same as a failing test. `tests/PhpunitConfigTest.php` keeps the flags on. Skipped tests still pass (`failOnSkipped` is off), because the integration tests skip without their services. `<source ignoreIndirectDeprecations="true">` limits `failOnDeprecation` to deprecations Marko's own code triggers, so a deprecation raised inside a third-party vendor package doesn't fail the run.
+
+- **Stubs via `createStub()`.** Use `createMock()` only for a double that gets `expects()` (or a `with()` rule). A mock with no expectation triggers a PHPUnit notice. Don't silence it with `#[AllowMockObjectsWithoutExpectations]`. When a shared double needs `expects()` in only some tests, stub it in the shared setup and create a mock in those tests.
+- **Every test asserts.** A test that performs no assertion is risky. Test helpers that check something go through `PHPUnit\Framework\Assert` (`Assert::assertSame()`, `Assert::assertArrayHasKey()`, ...), never a hand-thrown `AssertionFailedError`, so a passing check still counts.
+- **No raw PHP warnings from code under test.** Don't hide them with `@`. Run the failing call through `Marko\Core\Support\ErrorCapture::run($reason, fn () => ...)`, fold `$reason` into the loud exception, then assert the reason in the test. Don't use `@` + `error_get_last()`: PHPUnit still records the suppressed warning, and `error_get_last()` can return a stale, unrelated error.
+- **Find issues** with `--display-notices --display-deprecations --display-warnings --display-phpunit-deprecations --display-phpunit-notices`.
 
 ## Pest 4 Features
 

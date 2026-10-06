@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Mail\Message;
@@ -12,6 +13,7 @@ use Marko\Notification\Contracts\ChannelInterface;
 use Marko\Notification\Contracts\NotifiableInterface;
 use Marko\Notification\Contracts\NotificationInterface;
 use Marko\Notification\Exceptions\ChannelException;
+use Marko\Testing\Fake\FakeClock;
 
 // Hand-written stub for ConnectionInterface that records execute() calls
 class BatchTestConnection implements ConnectionInterface
@@ -47,8 +49,9 @@ class BatchTestConnection implements ConnectionInterface
         return count($bindings) / 7;
     }
 
-    public function prepare(string $sql): StatementInterface
-    {
+    public function prepare(
+        string $sql,
+    ): StatementInterface {
         throw new RuntimeException('Not implemented in test stub');
     }
 
@@ -61,10 +64,23 @@ class BatchTestConnection implements ConnectionInterface
     {
         return 'mysql';
     }
+
+    public function supportsReturning(): bool
+    {
+        return false;
+    }
+
+    public function quoteIdentifier(
+        string $identifier,
+    ): string {
+        return '"' . str_replace('"', '""', $identifier) . '"';
+    }
 }
 
-function makeBatchNotifiable(string $type = 'App\\Entity\\User', int|string $id = 1): NotifiableInterface
-{
+function makeBatchNotifiable(
+    string $type = 'App\\Entity\\User',
+    int|string $id = 1,
+): NotifiableInterface {
     return new readonly class ($type, $id) implements NotifiableInterface
     {
         public function __construct(
@@ -72,8 +88,9 @@ function makeBatchNotifiable(string $type = 'App\\Entity\\User', int|string $id 
             private int|string $id,
         ) {}
 
-        public function routeNotificationFor(string $channel): mixed
-        {
+        public function routeNotificationFor(
+            string $channel,
+        ): mixed {
             return null;
         }
 
@@ -89,8 +106,9 @@ function makeBatchNotifiable(string $type = 'App\\Entity\\User', int|string $id 
     };
 }
 
-function makeNotification(array $data = ['message' => 'Hello']): NotificationInterface
-{
+function makeNotification(
+    array $data = ['message' => 'Hello'],
+): NotificationInterface {
     return new readonly class ($data) implements NotificationInterface
     {
         public function __construct(
@@ -98,19 +116,22 @@ function makeNotification(array $data = ['message' => 'Hello']): NotificationInt
         ) {}
 
         /** @return array<string> */
-        public function channels(NotifiableInterface $notifiable): array
-        {
+        public function channels(
+            NotifiableInterface $notifiable,
+        ): array {
             return ['database'];
         }
 
-        public function toMail(NotifiableInterface $notifiable): Message
-        {
+        public function toMail(
+            NotifiableInterface $notifiable,
+        ): Message {
             return new Message();
         }
 
         /** @return array<string, mixed> */
-        public function toDatabase(NotifiableInterface $notifiable): array
-        {
+        public function toDatabase(
+            NotifiableInterface $notifiable,
+        ): array {
             return $this->data;
         }
     };
@@ -118,7 +139,7 @@ function makeNotification(array $data = ['message' => 'Hello']): NotificationInt
 
 test('it persists a notification for every recipient on the database channel', function (): void {
     $connection = new BatchTestConnection();
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification();
 
     $notifiables = [
@@ -138,7 +159,7 @@ test('it persists a notification for every recipient on the database channel', f
 
 test('it issues a single multi-row insert when all recipients fit one chunk', function (): void {
     $connection = new BatchTestConnection();
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification();
 
     $notifiables = [
@@ -154,7 +175,7 @@ test('it issues a single multi-row insert when all recipients fit one chunk', fu
 
 test('it issues one insert per chunk when recipients exceed the chunk size', function (): void {
     $connection = new BatchTestConnection();
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification();
 
     // Create enough notifiables to exceed one chunk
@@ -174,7 +195,7 @@ test('it issues one insert per chunk when recipients exceed the chunk size', fun
 
 test('it writes the same column data per row as the single-recipient send', function (): void {
     $connection = new BatchTestConnection();
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification(['key' => 'value', 'order_id' => 42]);
 
     $notifiable = makeBatchNotifiable(type: 'App\\Entity\\User', id: 99);
@@ -195,7 +216,7 @@ test('it writes the same column data per row as the single-recipient send', func
 
 test('it generates a distinct id for each persisted notification row', function (): void {
     $connection = new BatchTestConnection();
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification();
 
     $notifiables = [
@@ -228,7 +249,7 @@ test('it wraps a batch insert failure in a channel exception', function (): void
         }
     };
 
-    $channel = new DatabaseChannel($connection);
+    $channel = new DatabaseChannel($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $notification = makeNotification();
 
     $notifiables = [makeBatchNotifiable(id: 1), makeBatchNotifiable(id: 2)];

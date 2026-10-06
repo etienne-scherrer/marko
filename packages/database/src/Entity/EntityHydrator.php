@@ -4,10 +4,18 @@ declare(strict_types=1);
 
 namespace Marko\Database\Entity;
 
-use BackedEnum;
 use DateTimeImmutable;
-use JsonException;
+use DateTimeInterface;
+use Marko\Database\Entity\Cast\CastInterface;
+use Marko\Database\Entity\Cast\CastResolver;
+use Marko\Database\Entity\Cast\DateTimeCast;
+use Marko\Database\Entity\Cast\EncryptedCast;
+use Marko\Database\Entity\Cast\EnumCast;
+use Marko\Database\Entity\Cast\EquatableCastInterface;
+use Marko\Database\Entity\Cast\JsonCast;
+use Marko\Database\Entity\Cast\ScalarCast;
 use Marko\Database\Exceptions\EntityException;
+use Marko\Encryption\Exceptions\EncryptionException;
 use ReflectionClass;
 use WeakMap;
 
@@ -23,10 +31,23 @@ class EntityHydrator
      */
     private WeakMap $originalValues;
 
+    /**
+     * Stores the (unencrypted) database representation of cast and encrypted properties,
+     * so in-place mutation of mutable value objects can be detected.
+     *
+     * @var WeakMap<Entity, array<string, mixed>>
+     */
+    private WeakMap $originalDatabaseValues;
+
+    private CastResolver $castResolver;
+
     public function __construct(
         private readonly ?EntityMetadataFactory $metadataFactory = null,
+        ?CastResolver $castResolver = null,
     ) {
         $this->originalValues = new WeakMap();
+        $this->originalDatabaseValues = new WeakMap();
+        $this->castResolver = $castResolver ?? new CastResolver();
     }
 
     /**
@@ -48,6 +69,7 @@ class EntityHydrator
         $entity = $reflection->newInstanceWithoutConstructor();
 
         $originalValues = [];
+        $originalDatabaseValues = [];
 
         foreach ($metadata->properties as $propName => $propMeta) {
             $columnName = $propMeta->columnName;
@@ -57,15 +79,25 @@ class EntityHydrator
             }
 
             $dbValue = $row[$columnName];
-            $phpValue = $this->convertToPhpType($dbValue, $propMeta);
+
+            try {
+                $phpValue = $this->toPhpValue($dbValue, $propMeta);
+            } catch (EncryptionException $e) {
+                throw EntityException::decryptionFailed($entityClass, $propName, $columnName, $e);
+            }
 
             $property = $reflection->getProperty($propName);
             $property->setValue($entity, $phpValue);
 
             $originalValues[$propName] = $phpValue;
+
+            if ($this->tracksDatabaseValue($propMeta)) {
+                $originalDatabaseValues[$propName] = $this->castOnlyDatabaseValue($phpValue, $propMeta);
+            }
         }
 
         $this->originalValues[$entity] = $originalValues;
+        $this->originalDatabaseValues[$entity] = $originalDatabaseValues;
 
         if ($metadata->extenders !== []) {
             if ($this->metadataFactory === null) {
@@ -88,6 +120,7 @@ class EntityHydrator
                 $extenderReflection = new ReflectionClass($extenderClass);
                 $companion = $extenderReflection->newInstanceWithoutConstructor();
                 $companionOriginalValues = [];
+                $companionDatabaseValues = [];
 
                 foreach ($extenderMetadata->properties as $propName => $propMeta) {
                     $columnName = $propMeta->columnName;
@@ -97,7 +130,12 @@ class EntityHydrator
                     }
 
                     $dbValue = $row[$columnName];
-                    $phpValue = $this->convertToPhpType($dbValue, $propMeta);
+
+                    try {
+                        $phpValue = $this->toPhpValue($dbValue, $propMeta);
+                    } catch (EncryptionException $e) {
+                        throw EntityException::decryptionFailed($extenderClass, $propName, $columnName, $e);
+                    }
 
                     if ($phpValue === null && !$propMeta->nullable) {
                         continue;
@@ -107,9 +145,14 @@ class EntityHydrator
                     $property->setValue($companion, $phpValue);
 
                     $companionOriginalValues[$propName] = $phpValue;
+
+                    if ($this->tracksDatabaseValue($propMeta)) {
+                        $companionDatabaseValues[$propName] = $this->castOnlyDatabaseValue($phpValue, $propMeta);
+                    }
                 }
 
                 $this->originalValues[$companion] = $companionOriginalValues;
+                $this->originalDatabaseValues[$companion] = $companionDatabaseValues;
                 $this->attachCompanion($entity, $companion);
             }
         }
@@ -120,7 +163,12 @@ class EntityHydrator
     /**
      * Extract entity data to a row array for persistence.
      *
+     * An uninitialized primary key is left out of the row, so the caller can
+     * let the database generate it or report that it was never set.
+     *
      * @return array<string, mixed> Column name => value
+     *
+     * @throws EntityException
      */
     public function extract(
         Entity $entity,
@@ -131,9 +179,14 @@ class EntityHydrator
 
         foreach ($metadata->properties as $propName => $propMeta) {
             $property = $reflection->getProperty($propName);
+
+            if ($propMeta->isPrimaryKey && !$property->isInitialized($entity)) {
+                continue;
+            }
+
             $value = $property->getValue($entity);
 
-            $row[$propMeta->columnName] = $this->convertToDbValue($value, $propMeta);
+            $row[$propMeta->columnName] = $this->toDatabaseValue($value, $propMeta);
         }
 
         return $row;
@@ -208,6 +261,8 @@ class EntityHydrator
      *
      * Enables dirty-checking for entities that never passed through hydrate(),
      * such as freshly inserted entities. Idempotent — overwrites any prior snapshot.
+     *
+     * @throws EntityException
      */
     public function registerOriginalValues(
         Entity $entity,
@@ -215,6 +270,7 @@ class EntityHydrator
     ): void {
         $reflection = new ReflectionClass($entity);
         $values = [];
+        $databaseValues = [];
 
         foreach ($metadata->properties as $propName => $propMeta) {
             $property = $reflection->getProperty($propName);
@@ -224,9 +280,14 @@ class EntityHydrator
             }
 
             $values[$propName] = $property->getValue($entity);
+
+            if ($this->tracksDatabaseValue($propMeta)) {
+                $databaseValues[$propName] = $this->castOnlyDatabaseValue($values[$propName], $propMeta);
+            }
         }
 
         $this->originalValues[$entity] = $values;
+        $this->originalDatabaseValues[$entity] = $databaseValues;
     }
 
     /**
@@ -255,6 +316,8 @@ class EntityHydrator
 
     /**
      * Check if the entity has any changed properties.
+     *
+     * @throws EntityException
      */
     public function isDirty(
         Entity $entity,
@@ -267,12 +330,15 @@ class EntityHydrator
      * Get the list of property names that have changed.
      *
      * @return array<string>
+     *
+     * @throws EntityException
      */
     public function getDirtyProperties(
         Entity $entity,
         EntityMetadata $metadata,
     ): array {
         $originalValues = $this->originalValues[$entity] ?? [];
+        $originalDatabaseValues = $this->originalDatabaseValues[$entity] ?? [];
         $reflection = new ReflectionClass($entity);
         $dirty = [];
 
@@ -290,7 +356,16 @@ class EntityHydrator
             $currentValue = $property->getValue($entity);
             $originalValue = $originalValues[$propName];
 
-            if (!$this->valuesEqual($currentValue, $originalValue)) {
+            $changed = array_key_exists($propName, $originalDatabaseValues)
+                ? !$this->trackedValueUnchanged(
+                    $propMeta,
+                    $currentValue,
+                    $originalValue,
+                    $originalDatabaseValues[$propName],
+                )
+                : !$this->valuesEqual($propMeta, $currentValue, $originalValue);
+
+            if ($changed) {
                 $dirty[] = $propName;
             }
         }
@@ -299,133 +374,182 @@ class EntityHydrator
     }
 
     /**
-     * Convert a database value to the appropriate PHP type.
+     * Convert a database value to the PHP value assigned to the property.
      *
-     * @throws EntityException
+     * This is the single read path: every hydrated value goes through here.
+     *
+     * @throws EntityException|EncryptionException
      */
-    private function convertToPhpType(
+    public function toPhpValue(
         mixed $value,
-        PropertyMetadata $propMeta,
+        PropertyMetadata $meta,
     ): mixed {
         if ($value === null) {
             return null;
         }
 
-        // Handle JSON columns
-        if ($propMeta->columnType === 'json') {
-            return $this->decodeJson($value);
+        if ($meta->encrypted) {
+            $value = $this->castResolver->resolve(EncryptedCast::class)->toPhp($value, $meta);
         }
 
-        // Handle enums
-        if ($propMeta->enumClass !== null) {
-            return $this->convertToEnum($value, $propMeta->enumClass);
+        $cast = $this->castFor($meta);
+
+        return $cast !== null ? $cast->toPhp($value, $meta) : $value;
+    }
+
+    /**
+     * Convert a PHP property value to the value bound in INSERT and UPDATE statements.
+     *
+     * This is the single write path: inserts, batch inserts and updates all go through here.
+     *
+     * @throws EntityException|EncryptionException
+     */
+    public function toDatabaseValue(
+        mixed $value,
+        PropertyMetadata $meta,
+    ): mixed {
+        if ($value === null) {
+            return null;
         }
 
-        // Handle DateTimeImmutable
-        if ($propMeta->type === DateTimeImmutable::class) {
-            return new DateTimeImmutable($value);
+        $cast = $this->castFor($meta);
+        $dbValue = $cast !== null ? $cast->toDatabase($value, $meta) : $value;
+
+        if ($meta->encrypted && $dbValue !== null) {
+            return $this->castResolver->resolve(EncryptedCast::class)->toDatabase($dbValue, $meta);
         }
 
-        // Handle scalar types
-        return match ($propMeta->type) {
-            'int' => (int) $value,
-            'float' => (float) $value,
-            'bool' => (bool) $value,
-            'string' => (string) $value,
-            default => $value,
+        return $dbValue;
+    }
+
+    /**
+     * Whether a property's database representation is snapshotted for dirty checking.
+     */
+    private function tracksDatabaseValue(
+        PropertyMetadata $meta,
+    ): bool {
+        return $meta->castClass !== null || $meta->encrypted;
+    }
+
+    /**
+     * The database representation of a PHP value produced by the cast alone (before encryption).
+     *
+     * @throws EntityException
+     */
+    private function castOnlyDatabaseValue(
+        mixed $value,
+        PropertyMetadata $meta,
+    ): mixed {
+        if ($value === null) {
+            return null;
+        }
+
+        $cast = $this->castFor($meta);
+
+        return $cast !== null ? $cast->toDatabase($value, $meta) : $value;
+    }
+
+    /**
+     * Compare a tracked property against its snapshot.
+     *
+     * Equatable casts decide via equals(); otherwise the current value's database
+     * representation is compared with the snapshot, which also catches in-place
+     * mutation of mutable value objects.
+     *
+     * @throws EntityException
+     */
+    private function trackedValueUnchanged(
+        PropertyMetadata $meta,
+        mixed $current,
+        mixed $originalPhp,
+        mixed $originalDatabase,
+    ): bool {
+        if ($current === null || $originalPhp === null) {
+            return $current === $originalPhp;
+        }
+
+        $cast = $this->castFor($meta);
+
+        if ($cast instanceof EquatableCastInterface) {
+            return $current === $originalPhp || $cast->equals($current, $originalPhp, $meta);
+        }
+
+        return $this->castOnlyDatabaseValue($current, $meta) === $originalDatabase;
+    }
+
+    /**
+     * Resolve the cast for a property: its #[Cast] class, or the built-in cast for its type.
+     *
+     * @throws EntityException
+     */
+    private function castFor(
+        PropertyMetadata $meta,
+    ): ?CastInterface {
+        $castClass = $meta->castClass ?? $this->builtInCastClass($meta);
+
+        return $castClass !== null ? $this->castResolver->resolve($castClass) : null;
+    }
+
+    /**
+     * @return class-string<CastInterface>|null
+     */
+    private function builtInCastClass(
+        PropertyMetadata $meta,
+    ): ?string {
+        if ($meta->columnType === 'json' || ($meta->columnType === null && $meta->type === 'array')) {
+            return JsonCast::class;
+        }
+
+        if ($meta->enumClass !== null) {
+            return EnumCast::class;
+        }
+
+        if ($meta->type === DateTimeImmutable::class) {
+            return DateTimeCast::class;
+        }
+
+        return match ($meta->type) {
+            'int', 'float', 'bool', 'string' => ScalarCast::class,
+            default => null,
         };
     }
 
     /**
-     * Decode a JSON string into a PHP array.
+     * Compare two PHP values of a property for dirty checking.
+     *
+     * Identical values are equal. Otherwise a cast implementing EquatableCastInterface
+     * decides; objects handled by any other cast are equal when their database
+     * representations are identical, so an unchanged value object is never dirty.
      *
      * @throws EntityException
-     */
-    private function decodeJson(mixed $value): array
-    {
-        try {
-            $decoded = json_decode((string) $value, associative: true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException $e) {
-            throw EntityException::invalidJsonFromDatabase($value, $e->getMessage());
-        }
-
-        return $decoded;
-    }
-
-    /**
-     * Convert a PHP value to a database-compatible value.
-     *
-     * @throws EntityException
-     */
-    private function convertToDbValue(
-        mixed $value,
-        PropertyMetadata $propMeta,
-    ): mixed {
-        if ($value === null) {
-            return null;
-        }
-
-        // Handle JSON columns
-        if ($propMeta->columnType === 'json') {
-            return $this->encodeJson($value);
-        }
-
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if ($value instanceof BackedEnum) {
-            return $value->value;
-        }
-
-        if ($value instanceof DateTimeImmutable) {
-            return $value->format('Y-m-d H:i:s');
-        }
-
-        return $value;
-    }
-
-    /**
-     * Encode a PHP array to a JSON string.
-     *
-     * @throws EntityException
-     */
-    private function encodeJson(mixed $value): string
-    {
-        try {
-            return json_encode($value, flags: JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        } catch (JsonException $e) {
-            throw EntityException::invalidJsonEncode($e->getMessage());
-        }
-    }
-
-    /**
-     * Convert a string/int value to a BackedEnum instance.
-     *
-     * @param class-string<BackedEnum> $enumClass
-     */
-    private function convertToEnum(
-        mixed $value,
-        string $enumClass,
-    ): BackedEnum {
-        return $enumClass::from($value);
-    }
-
-    /**
-     * Compare two values for equality, handling special cases.
      */
     private function valuesEqual(
+        PropertyMetadata $meta,
         mixed $a,
         mixed $b,
     ): bool {
-        if ($a instanceof DateTimeImmutable && $b instanceof DateTimeImmutable) {
+        if ($a === $b) {
+            return true;
+        }
+
+        if ($a === null || $b === null) {
+            return false;
+        }
+
+        $cast = $this->castFor($meta);
+
+        if ($cast instanceof EquatableCastInterface) {
+            return $cast->equals($a, $b, $meta);
+        }
+
+        if ($cast !== null && (is_object($a) || is_object($b))) {
+            return $cast->toDatabase($a, $meta) === $cast->toDatabase($b, $meta);
+        }
+
+        if ($a instanceof DateTimeInterface && $b instanceof DateTimeInterface) {
             return $a->getTimestamp() === $b->getTimestamp();
         }
 
-        if ($a instanceof BackedEnum && $b instanceof BackedEnum) {
-            return $a === $b;
-        }
-
-        return $a === $b;
+        return false;
     }
 }

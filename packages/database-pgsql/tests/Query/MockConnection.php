@@ -86,4 +86,15 @@ class MockConnection implements ConnectionInterface
     {
         return 'pgsql';
     }
+
+    public function supportsReturning(): bool
+    {
+        return true;
+    }
+
+    public function quoteIdentifier(
+        string $identifier,
+    ): string {
+        return '"' . str_replace('"', '""', $identifier) . '"';
+    }
 }

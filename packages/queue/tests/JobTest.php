@@ -19,7 +19,7 @@ class TestJob extends Job
 
 class CustomMaxAttemptsJob extends Job
 {
-    public protected(set) int $maxAttempts = 10;
+    public protected(set) ?int $maxAttempts = 10;
 
     public function handle(): void
     {
@@ -27,7 +27,30 @@ class CustomMaxAttemptsJob extends Job
     }
 }
 
+class FixedBackoffJob extends Job
+{
+    public protected(set) array|int|null $backoff = 5;
+
+    public function handle(): void {}
+}
+
+class ListBackoffJob extends Job
+{
+    public protected(set) array|int|null $backoff = [5, 30, 120];
+
+    public function handle(): void {}
+}
+
 describe('Job', function (): void {
+    it('defaults backoff to null so the queue.backoff config applies', function (): void {
+        expect((new TestJob())->backoff)->toBeNull();
+    });
+
+    it('lets a job subclass declare an int or list backoff', function (): void {
+        expect((new FixedBackoffJob())->backoff)->toBe(5)
+            ->and((new ListBackoffJob())->backoff)->toBe([5, 30, 120]);
+    });
+
     it('implements JobInterface', function (): void {
         $reflection = new ReflectionClass(Job::class);
 
@@ -67,10 +90,10 @@ describe('Job', function (): void {
         expect($job->attempts)->toBe(3);
     });
 
-    it('has default max attempts of 3', function (): void {
+    it('defaults Job maxAttempts to null so the config default applies', function (): void {
         $job = new TestJob();
 
-        expect($job->maxAttempts)->toBe(3);
+        expect($job->maxAttempts)->toBeNull();
     });
 
     it('returns null id by default', function (): void {
@@ -89,7 +112,7 @@ describe('Job', function (): void {
     it('Job handles custom maxAttempts', function (): void {
         $customJob = new class () extends Job
         {
-            public protected(set) int $maxAttempts = 5;
+            public protected(set) ?int $maxAttempts = 5;
 
             public function handle(): void
             {
@@ -102,7 +125,7 @@ describe('Job', function (): void {
         // Test another custom value
         $singleAttemptJob = new class () extends Job
         {
-            public protected(set) int $maxAttempts = 1;
+            public protected(set) ?int $maxAttempts = 1;
 
             public function handle(): void {}
         };

@@ -9,10 +9,10 @@ use Marko\Database\Config\DatabaseConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Database\Connection\StatementInterface;
 use Marko\Database\Connection\TransactionInterface;
-use Marko\Database\Exceptions\TransactionException;
 use Marko\Database\PgSql\Connection\PgSqlConnection;
 use Marko\Database\PgSql\Exceptions\ConnectionException;
 use PDO;
+use PDOException;
 use RuntimeException;
 
 function createTestPgSqlConfig(
@@ -25,6 +25,7 @@ function createTestPgSqlConfig(
     ?string $sslCa = null,
     ?string $sslCert = null,
     ?string $sslKey = null,
+    ?string $timezone = null,
 ): DatabaseConfig {
     $tempDir = sys_get_temp_dir() . '/marko_pgsql_test_' . bin2hex(random_bytes(8));
     mkdir($tempDir . '/config', recursive: true);
@@ -54,6 +55,10 @@ function createTestPgSqlConfig(
         $configArray['ssl_key'] = $sslKey;
     }
 
+    if ($timezone !== null) {
+        $configArray['timezone'] = $timezone;
+    }
+
     file_put_contents(
         $tempDir . '/config/database.php',
         '<?php return ' . var_export($configArray, true) . ';',
@@ -71,7 +76,7 @@ function createTestPgSqlConfig(
 }
 
 /**
- * Create a mock PDO that handles SET NAMES for PostgreSQL tests.
+ * Create a mock PDO that ignores the session SET statements for PostgreSQL tests.
  */
 function createSqliteMockPdo(
     array $options = [],
@@ -88,8 +93,8 @@ function createSqliteMockPdo(
         public function exec(
             string $statement,
         ): int|false {
-            // Skip SET NAMES query (not supported in SQLite)
-            if (str_starts_with($statement, 'SET NAMES')) {
+            // Skip the SET NAMES and SET TIME ZONE session statements (not supported in SQLite)
+            if (str_starts_with($statement, 'SET ')) {
                 return 0;
             }
 
@@ -98,12 +103,118 @@ function createSqliteMockPdo(
     };
 }
 
+/**
+ * A SQLite-backed PDO that records the statements passed to exec() and ignores the session SET statements.
+ *
+ * @param list<string> $statements
+ */
+function createStatementRecordingPdo(
+    array &$statements,
+): PDO {
+    return new class ($statements) extends PDO
+    {
+        /** @param list<string> $statements */
+        public function __construct(
+            private array &$statements,
+        ) {
+            parent::__construct('sqlite::memory:');
+        }
+
+        public function exec(
+            string $statement,
+        ): int|false {
+            $this->statements[] = $statement;
+
+            return str_starts_with($statement, 'SET ') ? 0 : parent::exec($statement);
+        }
+    };
+}
+
+/**
+ * A PDO whose server rejects the SET TIME ZONE statement the way PostgreSQL rejects an unknown zone.
+ */
+function createTimezoneRejectingPdo(): PDO
+{
+    return new class () extends PDO
+    {
+        public function __construct()
+        {
+            parent::__construct('sqlite::memory:');
+        }
+
+        public function exec(
+            string $statement,
+        ): int|false {
+            if (!str_starts_with($statement, 'SET TIME ZONE')) {
+                return 0;
+            }
+
+            $exception = new PDOException(
+                'SQLSTATE[22023]: Invalid parameter value: 7 ERROR:  invalid value for parameter "TimeZone": "America/New_York"',
+            );
+            $exception->errorInfo = ['22023', 7, 'ERROR:  invalid value for parameter "TimeZone": "America/New_York"'];
+
+            throw $exception;
+        }
+    };
+}
+
+/**
+ * Connect a PgSqlConnection and return the statements it ran on connect.
+ *
+ * @return list<string>
+ */
+function connectAndCaptureSessionStatements(
+    DatabaseConfig $config,
+): array {
+    $statements = [];
+    $connection = new class ($config, $statements) extends PgSqlConnection
+    {
+        /** @param list<string> $statements */
+        public function __construct(
+            DatabaseConfig $config,
+            private array &$statements,
+        ) {
+            parent::__construct($config);
+        }
+
+        protected function createPdo(
+            string $dsn,
+            string $username,
+            string $password,
+            array $options,
+        ): PDO {
+            return createStatementRecordingPdo($this->statements);
+        }
+    };
+
+    $connection->connect();
+
+    return $statements;
+}
+
 describe('PgSqlConnection', function (): void {
     it('implements ConnectionInterface', function (): void {
         $config = createTestPgSqlConfig();
         $connection = new PgSqlConnection($config);
 
         expect($connection)->toBeInstanceOf(ConnectionInterface::class);
+    });
+
+    it('reports that PostgreSQL connections support RETURNING', function (): void {
+        $connection = new PgSqlConnection(createTestPgSqlConfig());
+
+        expect($connection->supportsReturning())->toBeTrue()
+            ->and($connection->isConnected())->toBeFalse();
+    });
+
+    it('quotes identifiers with double quotes without connecting', function (): void {
+        $connection = new PgSqlConnection(createTestPgSqlConfig());
+
+        expect($connection->quoteIdentifier('group'))->toBe('"group"')
+            ->and($connection->quoteIdentifier('permissions.createdAt'))->toBe('"permissions"."createdAt"')
+            ->and($connection->quoteIdentifier('we"ird'))->toBe('"we""ird"')
+            ->and($connection->isConnected())->toBeFalse();
     });
 
     it('constructs proper PostgreSQL DSN from config', function (): void {
@@ -666,26 +777,6 @@ describe('PgSqlConnection', function (): void {
         expect($connection->getDsn())->not->toContain('sslkey');
     });
 
-    it('prevents nested transactions (throws exception)', function (): void {
-        $config = createTestPgSqlConfig();
-        $connection = new class ($config) extends PgSqlConnection
-        {
-            protected function createPdo(
-                string $dsn,
-                string $username,
-                string $password,
-                array $options,
-            ): PDO {
-                return createSqliteMockPdo($options);
-            }
-        };
-
-        $connection->beginTransaction();
-
-        expect(fn () => $connection->beginTransaction())
-            ->toThrow(TransactionException::class, 'Nested transactions are not supported');
-    });
-
     it('JSON-encodes array bindings instead of casting them to the string "Array"', function (): void {
         $config = createTestPgSqlConfig();
         $connection = new class ($config) extends PgSqlConnection
@@ -736,5 +827,102 @@ describe('PgSqlConnection', function (): void {
             'INSERT INTO items (metadata) VALUES (?)',
             [[NAN]],
         ))->toThrow(ConnectionException::class, "Failed to JSON-encode array bound to parameter '1'");
+    });
+
+    it('sets the session time zone to UTC on connect when the database timezone is UTC', function (): void {
+        expect(connectAndCaptureSessionStatements(createTestPgSqlConfig()))
+            ->toBe(["SET NAMES 'utf8'", "SET TIME ZONE 'UTC'"]);
+    });
+
+    it('sets the session time zone to the named zone on connect', function (): void {
+        expect(connectAndCaptureSessionStatements(createTestPgSqlConfig(timezone: 'America/New_York')))
+            ->toBe(["SET NAMES 'utf8'", "SET TIME ZONE 'America/New_York'"]);
+    });
+
+    it('sets a fixed offset as an ISO interval so PostgreSQL does not invert its sign', function (): void {
+        expect(connectAndCaptureSessionStatements(createTestPgSqlConfig(timezone: '+05:30'))[1])
+            ->toBe("SET TIME ZONE INTERVAL '+05:30' HOUR TO MINUTE")
+            ->and(connectAndCaptureSessionStatements(createTestPgSqlConfig(timezone: 'CEST'))[1])
+            ->toBe("SET TIME ZONE INTERVAL '+02:00' HOUR TO MINUTE")
+            ->and(connectAndCaptureSessionStatements(createTestPgSqlConfig(timezone: 'utc'))[1])
+            ->toBe("SET TIME ZONE 'UTC'");
+    });
+
+    it('sets the session time zone again after a reconnect', function (): void {
+        $statements = [];
+        $connection = new class (createTestPgSqlConfig(timezone: 'Europe/Paris'), $statements) extends PgSqlConnection
+        {
+            /** @param list<string> $statements */
+            public function __construct(
+                DatabaseConfig $config,
+                private array &$statements,
+            ) {
+                parent::__construct($config);
+            }
+
+            protected function createPdo(
+                string $dsn,
+                string $username,
+                string $password,
+                array $options,
+            ): PDO {
+                return createStatementRecordingPdo($this->statements);
+            }
+        };
+
+        $connection->connect();
+        $connection->disconnect();
+        $connection->connect();
+
+        expect(array_values(array_filter(
+            $statements,
+            static fn (string $statement): bool => str_starts_with($statement, 'SET TIME ZONE'),
+        )))->toBe(["SET TIME ZONE 'Europe/Paris'", "SET TIME ZONE 'Europe/Paris'"]);
+    });
+
+    it('throws ConnectionException naming the zone when the server rejects the time zone', function (): void {
+        $connection = new class (createTestPgSqlConfig(timezone: 'America/New_York')) extends PgSqlConnection
+        {
+            protected function createPdo(
+                string $dsn,
+                string $username,
+                string $password,
+                array $options,
+            ): PDO {
+                return createTimezoneRejectingPdo();
+            }
+        };
+
+        try {
+            $connection->connect();
+            expect(true)->toBeFalse('Should have thrown ConnectionException');
+        } catch (ConnectionException $e) {
+            expect($e->getMessage())->toContain("'America/New_York'")
+                ->and($e->getSuggestion())->toContain('pg_timezone_names')
+                ->and($e->getPrevious())->toBeInstanceOf(PDOException::class);
+        }
+    });
+
+    it('stays disconnected after a failed session setup so the next connect retries it', function (): void {
+        $connection = new class (createTestPgSqlConfig(timezone: 'America/New_York')) extends PgSqlConnection
+        {
+            public int $pdoCount = 0;
+
+            protected function createPdo(
+                string $dsn,
+                string $username,
+                string $password,
+                array $options,
+            ): PDO {
+                $this->pdoCount++;
+
+                return createTimezoneRejectingPdo();
+            }
+        };
+
+        expect(fn () => $connection->connect())->toThrow(ConnectionException::class)
+            ->and($connection->isConnected())->toBeFalse()
+            ->and(fn () => $connection->connect())->toThrow(ConnectionException::class)
+            ->and($connection->pdoCount)->toBe(2);
     });
 });

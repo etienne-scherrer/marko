@@ -41,11 +41,8 @@ it('has Command attribute with name route:list', function (): void {
     $reflection = new ReflectionClass(RouteListCommand::class);
     $attributes = $reflection->getAttributes(Command::class);
 
-    expect($attributes)->toHaveCount(1);
-
-    $command = $attributes[0]->newInstance();
-
-    expect($command->name)->toBe('route:list');
+    expect($attributes)->toHaveCount(1)
+        ->and($attributes[0]->newInstance()->name)->toBe('route:list');
 });
 
 it('has Command attribute with description Show all registered routes', function (): void {
@@ -122,9 +119,9 @@ it('displays middleware as short class names', function (): void {
         ->and($result)->not->toContain('App\\Middleware\\AuthMiddleware');
 });
 
-it('sorts routes by path then by method', function (): void {
+it('groups routes by method in a fixed method order', function (): void {
     $result = runCommand(makeCollection([
-        new RouteDefinition('GET', '/users', 'App\\Controllers\\UserController', 'index'),
+        new RouteDefinition('DELETE', '/users/{id}', 'App\\Controllers\\UserController', 'destroy'),
         new RouteDefinition('POST', '/articles', 'App\\Controllers\\ArticleController', 'store'),
         new RouteDefinition('GET', '/articles', 'App\\Controllers\\ArticleController', 'index'),
     ]));
@@ -132,11 +129,25 @@ it('sorts routes by path then by method', function (): void {
     $lines = explode("\n", trim($result));
 
     // Header is line 0; data rows follow
-    expect($lines[1])->toContain('/articles')
-        ->and($lines[1])->toContain('GET')
-        ->and($lines[2])->toContain('/articles')
-        ->and($lines[2])->toContain('POST')
-        ->and($lines[3])->toContain('/users');
+    expect($lines[1])->toStartWith('GET')
+        ->and($lines[2])->toStartWith('POST')
+        ->and($lines[3])->toStartWith('DELETE');
+});
+
+it('lists routes of a method in effective match order', function (): void {
+    $result = runCommand(makeCollection([
+        new RouteDefinition('GET', '/shows/{id}', 'App\\Controllers\\ShowController', 'show'),
+        new RouteDefinition('GET', '/a/{x}/{y}', 'App\\Controllers\\AController', 'generic'),
+        new RouteDefinition('GET', '/a/{x}/c', 'App\\Controllers\\AController', 'specific'),
+        new RouteDefinition('GET', '/shows/live', 'App\\Controllers\\ShowController', 'live'),
+    ]));
+
+    $lines = explode("\n", trim($result));
+
+    expect($lines[1])->toContain('/shows/live')
+        ->and($lines[2])->toContain('/a/{x}/c')
+        ->and($lines[3])->toContain('/shows/{id}')
+        ->and($lines[4])->toContain('/a/{x}/{y}');
 });
 
 it('displays No routes registered when collection is empty', function (): void {
@@ -165,14 +176,11 @@ it('formats output with aligned columns', function (): void {
 
     $lines = explode("\n", trim($result));
 
-    expect($lines[0])->toMatch('/^METHOD\s+PATH\s+ACTION\s+MIDDLEWARE$/');
-
     $headerPathPos = strpos($lines[0], 'PATH');
-    $row1PathPos = strpos($lines[1], '/articles');
-    $row2PathPos = strpos($lines[2], '/users');
 
-    expect($row1PathPos)->toBe($headerPathPos)
-        ->and($row2PathPos)->toBe($headerPathPos);
+    expect($lines[0])->toMatch('/^METHOD\s+PATH\s+NAME\s+ACTION\s+MIDDLEWARE$/')
+        ->and(strpos($lines[1], '/users'))->toBe($headerPathPos)
+        ->and(strpos($lines[2], '/articles'))->toBe($headerPathPos);
 });
 
 it('returns exit code 0', function (): void {
@@ -255,4 +263,55 @@ it('filters routes by method when --method option is provided', function (): voi
 
     expect($result)->toContain('GET')
         ->and($result)->not->toContain('POST');
+});
+
+it('shows a NAME column with each route name', function (): void {
+    $result = runCommand(makeCollection([
+        new RouteDefinition('GET', '/shows/{id}', 'App\\Controllers\\ShowController', 'show', name: 'shows.show'),
+    ]));
+
+    $lines = explode("\n", trim($result));
+
+    expect($lines[0])->toContain('NAME')
+        ->and(strpos($lines[1], 'shows.show'))->toBe(strpos($lines[0], 'NAME'));
+});
+
+it('shows the full prefixed path', function (): void {
+    $result = runCommand(makeCollection([
+        new RouteDefinition(
+            'GET',
+            '/api/v1/shows/{id:\d+}',
+            'App\\Controllers\\ShowController',
+            'show',
+            name: 'api.v1.shows.show',
+        ),
+    ]));
+
+    expect($result)->toContain('/api/v1/shows/{id:\d+}')
+        ->and($result)->toContain('api.v1.shows.show');
+});
+
+it('leaves the name blank for unnamed routes', function (): void {
+    $result = runCommand(makeCollection([
+        new RouteDefinition('GET', '/users', 'App\\Controllers\\UserController', 'index'),
+    ]));
+
+    $lines = explode("\n", trim($result));
+
+    expect($lines[1])->toMatch('/^GET\s+\/users\s+UserController::index$/');
+});
+
+it('shows excluded middleware with a minus sign', function (): void {
+    $result = runCommand(makeCollection([
+        new RouteDefinition(
+            'POST',
+            '/webhooks',
+            'App\\Controllers\\WebhookController',
+            'receive',
+            middleware: ['App\\Middleware\\VerifySignature'],
+            withoutMiddleware: ['Marko\\Session\\Middleware\\SessionMiddleware'],
+        ),
+    ]));
+
+    expect($result)->toContain('VerifySignature, -SessionMiddleware');
 });

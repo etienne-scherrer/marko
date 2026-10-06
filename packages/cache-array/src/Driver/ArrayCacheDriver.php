@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Marko\Cache\Memory\Driver;
 
-use DateTimeImmutable;
 use Marko\Cache\CacheItem;
 use Marko\Cache\Config\CacheConfig;
 use Marko\Cache\Contracts\CacheInterface;
 use Marko\Cache\Contracts\CacheItemInterface;
 use Marko\Cache\Exceptions\InvalidKeyException;
+use Psr\Clock\ClockInterface;
 
 /**
  * In-memory array cache driver.
@@ -32,6 +32,7 @@ class ArrayCacheDriver implements CacheInterface
 
     public function __construct(
         private readonly CacheConfig $config,
+        private readonly ClockInterface $clock,
     ) {}
 
     /**
@@ -67,12 +68,12 @@ class ArrayCacheDriver implements CacheInterface
         $this->validateKey($key);
 
         $ttl ??= $this->config->defaultTtl();
-        $expiresAt = $ttl > 0 ? time() + $ttl : null;
+        $now = $this->clock->now()->getTimestamp();
 
         $this->storage[$key] = [
             'value' => $value,
-            'expires_at' => $expiresAt,
-            'created_at' => time(),
+            'expires_at' => $ttl > 0 ? $now + $ttl : null,
+            'created_at' => $now,
         ];
 
         return true;
@@ -139,7 +140,7 @@ class ArrayCacheDriver implements CacheInterface
 
         $data = $this->storage[$key];
         $expiresAt = $data['expires_at'] !== null
-            ? (new DateTimeImmutable())->setTimestamp($data['expires_at'])
+            ? $this->clock->now()->setTimestamp($data['expires_at'])
             : null;
 
         return CacheItem::hit($key, $data['value'], $expiresAt);
@@ -198,11 +199,11 @@ class ArrayCacheDriver implements CacheInterface
         $this->validateKey($key);
 
         if (!isset($this->storage[$key]) || $this->isExpired($this->storage[$key])) {
-            $expiresAt = $ttl > 0 ? time() + $ttl : null;
+            $now = $this->clock->now()->getTimestamp();
             $this->storage[$key] = [
                 'value' => 1,
-                'expires_at' => $expiresAt,
-                'created_at' => time(),
+                'expires_at' => $ttl > 0 ? $now + $ttl : null,
+                'created_at' => $now,
             ];
 
             return 1;
@@ -238,6 +239,6 @@ class ArrayCacheDriver implements CacheInterface
             return false;
         }
 
-        return time() > $data['expires_at'];
+        return $this->clock->now()->getTimestamp() > $data['expires_at'];
     }
 }

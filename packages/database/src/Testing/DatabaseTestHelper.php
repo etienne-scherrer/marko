@@ -10,8 +10,14 @@ use Marko\Database\Connection\TransactionInterface;
 /**
  * Helper class for database testing utilities.
  *
- * Provides transaction-based test isolation and common database operations.
- * Instantiate this class explicitly in your tests for clear, visible dependencies.
+ * Provides transaction-based test isolation and common database operations
+ * on a connection you construct yourself.
+ *
+ * For application tests, prefer Marko\Testing\Database\RefreshDatabase from
+ * marko/testing: it boots and migrates the application once per process and
+ * wraps each test in a transaction on the shared connection, so writes made
+ * through repositories and HTTP requests are rolled back too. Its
+ * TestDatabase delegates seedTable() and getTableRowCount() to this class.
  *
  * Usage in a Pest test file:
  *
@@ -126,8 +132,8 @@ class DatabaseTestHelper
 
             $sql = sprintf(
                 'INSERT INTO %s (%s) VALUES (%s)',
-                $tableName,
-                implode(', ', $columns),
+                $this->connection->quoteIdentifier($tableName),
+                implode(', ', array_map($this->connection->quoteIdentifier(...), $columns)),
                 implode(', ', $placeholders),
             );
 
@@ -143,7 +149,7 @@ class DatabaseTestHelper
     public function truncateTable(
         string $tableName,
     ): void {
-        $this->connection->execute("DELETE FROM $tableName");
+        $this->connection->execute('DELETE FROM ' . $this->connection->quoteIdentifier($tableName));
     }
 
     /**
@@ -155,7 +161,9 @@ class DatabaseTestHelper
     public function getTableRowCount(
         string $tableName,
     ): int {
-        $result = $this->connection->query("SELECT COUNT(*) as count FROM $tableName");
+        $result = $this->connection->query(
+            'SELECT COUNT(*) as count FROM ' . $this->connection->quoteIdentifier($tableName),
+        );
 
         return (int) ($result[0]['count'] ?? 0);
     }

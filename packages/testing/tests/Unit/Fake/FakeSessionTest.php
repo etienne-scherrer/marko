@@ -131,3 +131,97 @@ it('FakeSession clears all stored values', function (): void {
     expect($session->all())->toBeEmpty()
         ->and($session->has('key1'))->toBeFalse();
 });
+
+it('FakeSession reports itself unmodified until a value is written', function (): void {
+    $session = new FakeSession();
+    $session->start();
+    $session->get('key');
+
+    expect($session->isModified())->toBeFalse();
+
+    $session->set('key', 'value');
+
+    expect($session->isModified())->toBeTrue();
+});
+
+it('FakeSession reports itself modified after a flash message or regeneration', function (): void {
+    $flashed = new FakeSession();
+    $flashed->start();
+    $flashed->flash()->add('success', 'Saved');
+
+    $regenerated = new FakeSession();
+    $regenerated->start();
+    $regenerated->regenerate();
+
+    expect($flashed->isModified())->toBeTrue()
+        ->and($regenerated->isModified())->toBeTrue();
+});
+
+it('FakeSession records a discard without saving', function (): void {
+    $session = new FakeSession();
+    $session->start();
+
+    $session->discard();
+
+    expect($session->discarded)->toBeTrue()
+        ->and($session->saved)->toBeFalse()
+        ->and($session->started)->toBeFalse();
+});
+
+it('FakeSession is not available until armed or started', function (): void {
+    $session = new FakeSession();
+
+    expect($session->isAvailable())->toBeFalse();
+
+    $session->start();
+
+    expect($session->isAvailable())->toBeTrue();
+});
+
+it('FakeSession records that it was armed', function (): void {
+    $session = new FakeSession();
+
+    $session->arm();
+
+    expect($session->armed)->toBeTrue()
+        ->and($session->isAvailable())->toBeTrue()
+        ->and($session->started)->toBeFalse();
+});
+
+it('FakeSession starts lazily on first access once armed', function (): void {
+    $session = new FakeSession();
+    $session->arm();
+
+    $session->get('key');
+
+    expect($session->started)->toBeTrue();
+});
+
+it('FakeSession stays unstarted when accessed without being armed', function (): void {
+    $session = new FakeSession();
+
+    $session->set('key', 'value');
+
+    expect($session->started)->toBeFalse()
+        ->and($session->get('key'))->toBe('value');
+});
+
+it('FakeSession is no longer armed after save', function (): void {
+    $session = new FakeSession();
+    $session->arm();
+
+    $session->save();
+
+    expect($session->armed)->toBeFalse()
+        ->and($session->isAvailable())->toBeFalse();
+});
+
+it('FakeSession is no longer armed after discard', function (): void {
+    $session = new FakeSession();
+    $session->arm();
+
+    $session->discard();
+
+    expect($session->armed)->toBeFalse()
+        ->and($session->isAvailable())->toBeFalse();
+});

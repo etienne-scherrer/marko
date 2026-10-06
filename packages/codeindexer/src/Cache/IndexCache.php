@@ -21,6 +21,7 @@ use Marko\CodeIndexer\ValueObject\TemplateEntry;
 use Marko\CodeIndexer\ValueObject\TranslationEntry;
 use Marko\CodeIndexer\Views\TemplateScanner;
 use Marko\Core\Path\ProjectPaths;
+use Marko\Core\Support\ErrorCapture;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
@@ -91,14 +92,19 @@ class IndexCache implements IndexCacheInterface
     {
         $cacheDir = $this->rootPath . '/.marko';
 
-        if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0755, true)) {
-            throw IndexCacheException::cacheDirUnwritable($cacheDir);
+        if (!is_dir($cacheDir)
+            && !ErrorCapture::run($reason, fn (): bool => mkdir($cacheDir, 0755, true))
+            && !is_dir($cacheDir)
+        ) {
+            throw IndexCacheException::cacheDirUnwritable($cacheDir, $reason);
         }
 
         $cachePath = $this->rootPath . '/' . self::CACHE_FILE;
 
-        if (@file_put_contents($cachePath, serialize($this->data)) === false) {
-            throw IndexCacheException::cacheDirUnwritable($cachePath);
+        $payload = serialize($this->data);
+
+        if (ErrorCapture::run($reason, fn (): int|false => file_put_contents($cachePath, $payload)) === false) {
+            throw IndexCacheException::cacheDirUnwritable($cachePath, $reason);
         }
     }
 
@@ -114,19 +120,16 @@ class IndexCache implements IndexCacheInterface
             return false;
         }
 
-        $result = @unserialize((string) file_get_contents($cachePath), [
-            'allowed_classes' => [
-                CommandEntry::class,
-                ConfigKeyEntry::class,
-                ModuleInfo::class,
-                ObserverEntry::class,
-                PluginEntry::class,
-                PreferenceEntry::class,
-                RouteEntry::class,
-                TemplateEntry::class,
-                TranslationEntry::class,
-            ],
-        ]);
+        // A corrupt or unreadable cache is not an error: load() returns false and the
+        // caller rebuilds. Capture the warnings so they are not emitted; the reason
+        // is intentionally discarded.
+        $raw = ErrorCapture::run($reason, fn (): string|false => file_get_contents($cachePath));
+
+        if ($raw === false) {
+            return false;
+        }
+
+        $result = $this->unserializeCache($raw);
 
         if (!is_array($result)) {
             return false;
@@ -269,25 +272,13 @@ class IndexCache implements IndexCacheInterface
      */
     private function loadTrackedPathsFromDisk(string $cachePath): ?array
     {
-        $raw = @file_get_contents($cachePath);
+        $raw = ErrorCapture::run($reason, fn (): string|false => file_get_contents($cachePath));
 
         if ($raw === false) {
             return null;
         }
 
-        $data = @unserialize($raw, [
-            'allowed_classes' => [
-                CommandEntry::class,
-                ConfigKeyEntry::class,
-                ModuleInfo::class,
-                ObserverEntry::class,
-                PluginEntry::class,
-                PreferenceEntry::class,
-                RouteEntry::class,
-                TemplateEntry::class,
-                TranslationEntry::class,
-            ],
-        ]);
+        $data = $this->unserializeCache($raw);
 
         if (!is_array($data) || !array_key_exists('trackedPaths', $data)) {
             return null;
@@ -446,12 +437,38 @@ class IndexCache implements IndexCacheInterface
         return isset($this->data[$key]);
     }
 
+    /**
+     * Unserialize a cache payload restricted to the indexer value objects.
+     *
+     * A corrupt payload makes unserialize() return false with a notice; the notice
+     * is captured (not emitted) because a corrupt cache simply triggers a rebuild.
+     */
+    private function unserializeCache(string $raw): mixed
+    {
+        return ErrorCapture::run($reason, fn (): mixed => unserialize($raw, [
+            'allowed_classes' => [
+                CommandEntry::class,
+                ConfigKeyEntry::class,
+                ModuleInfo::class,
+                ObserverEntry::class,
+                PluginEntry::class,
+                PreferenceEntry::class,
+                RouteEntry::class,
+                TemplateEntry::class,
+                TranslationEntry::class,
+            ],
+        ]));
+    }
+
+    /** @throws IndexCacheException */
     public function invalidate(): void
     {
         $cachePath = $this->rootPath . '/' . self::CACHE_FILE;
 
         if (is_file($cachePath)) {
-            @unlink($cachePath);
+            if (!ErrorCapture::run($reason, fn (): bool => unlink($cachePath))) {
+                throw IndexCacheException::cacheNotRemovable($cachePath, $reason);
+            }
         }
 
         $this->data = null;

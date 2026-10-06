@@ -12,24 +12,27 @@ use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Migration\Migrator;
 
 /** @noinspection PhpUnused */
-#[Command(name: 'db:rebuild', description: 'Reset and re-run all migrations (clean slate)')]
+#[Command(name: 'db:rebuild', description: 'Reset and re-run all migrations (clean slate)', flags: ['force'])]
 readonly class RebuildCommand implements CommandInterface
 {
     public function __construct(
         private Migrator $migrator,
-        private bool $isProduction = false,
+        private DestructiveCommandGuard $destructiveCommandGuard,
     ) {}
 
     public function execute(
         Input $input,
         Output $output,
     ): int {
-        // Block in production - no --force flag support
-        if ($this->isProduction) {
-            $output->writeLine('Error: Rebuild cannot be run in production environment.');
-            $output->writeLine('This command drops all tables and is never allowed in production.');
+        $refusal = $this->destructiveCommandGuard->check(
+            'db:rebuild',
+            'drops every table and re-runs all migrations',
+            $input,
+            $output,
+        );
 
-            return 1;
+        if ($refusal !== null) {
+            return $refusal;
         }
 
         try {

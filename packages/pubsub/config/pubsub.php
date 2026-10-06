@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'driver' => $_ENV['PUBSUB_DRIVER'] ?? 'redis',
-    'prefix' => $_ENV['PUBSUB_PREFIX'] ?? 'marko:',
+    'driver' => Env::string('PUBSUB_DRIVER', 'redis'),
+    'prefix' => Env::string('PUBSUB_PREFIX', 'marko:'),
 ];

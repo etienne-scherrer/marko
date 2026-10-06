@@ -5,12 +5,14 @@ declare(strict_types=1);
 use Marko\Core\Path\ProjectPaths;
 use Marko\Database\Diff\SchemaDiff;
 use Marko\Database\Diff\TableDiff;
+use Marko\Database\Exceptions\MigrationException;
 use Marko\Database\Migration\Migration;
 use Marko\Database\Migration\MigrationGenerator;
 use Marko\Database\Schema\Column;
 use Marko\Database\Schema\ForeignKey;
 use Marko\Database\Schema\Table;
 use Marko\Database\Tests\Migration\Helpers;
+use Marko\Testing\Fake\FakeClock;
 
 describe('MigrationGenerator', function (): void {
     beforeEach(function (): void {
@@ -27,6 +29,31 @@ describe('MigrationGenerator', function (): void {
 
         expect($paths)->toHaveCount(1)
             ->and(basename($paths[0]))->toMatch('/^\d{14}_/');
+    });
+
+    it('names migration files from the injected clock', function (): void {
+        ['paths' => $paths] = Helpers::generateTestMigration(
+            $this->tempDir,
+            clock: new FakeClock('2026-03-14 15:09:26'),
+        );
+
+        expect(basename($paths[0]))->toBe('20260314150926_create_posts.php');
+    });
+
+    it('increments migration file timestamps by one second per file from the injected clock', function (): void {
+        $diff = new SchemaDiff(tablesToCreate: [
+            new Table('posts', [new Column('id', 'INT')]),
+            new Table('tags', [new Column('id', 'INT')]),
+        ]);
+
+        ['paths' => $paths] = Helpers::generateTestMigration(
+            $this->tempDir,
+            $diff,
+            clock: new FakeClock('2026-03-14 15:09:59'),
+        );
+
+        expect(array_map(fn (string $path): string => substr(basename($path), 0, 14), $paths))
+            ->toBe(['20260314150959', '20260314151000']);
     });
 
     it('generates migration filename with descriptive suffix from changes', function (): void {
@@ -102,7 +129,7 @@ describe('MigrationGenerator', function (): void {
 
         $sqlGenerator = Helpers::createSqlGeneratorStub();
         $paths = new ProjectPaths($this->tempDir);
-        $generator = new MigrationGenerator($sqlGenerator, $paths);
+        $generator = new MigrationGenerator($sqlGenerator, $paths, new FakeClock());
         $generator->generate(Helpers::createPostsTableDiff());
 
         expect(is_dir($this->tempDir . '/database/migrations'))->toBeTrue();
@@ -322,6 +349,70 @@ describe('MigrationGenerator', function (): void {
 
         expect($paths)->toHaveCount(1)
             ->and(basename($paths[0]))->toContain('alter_posts');
+    });
+
+    it('refuses to write an alter migration whose up and down are both empty', function (): void {
+        $diff = new SchemaDiff(tablesToAlter: ['posts' => new TableDiff(
+            tableName: 'posts',
+            columnsToModify: ['title' => new Column('title', 'varchar')],
+            columnsToModifyFrom: ['title' => new Column('title', 'varchar', length: 255)],
+        )]);
+
+        expect(fn () => Helpers::generateTestMigration($this->tempDir, $diff, [], []))
+            ->toThrow(MigrationException::class);
+    });
+
+    it('names the table and the reported changes in the error', function (): void {
+        $diff = new SchemaDiff(tablesToAlter: ['posts' => new TableDiff(
+            tableName: 'posts',
+            columnsToModify: ['title' => new Column('title', 'varchar')],
+            columnsToModifyFrom: ['title' => new Column('title', 'varchar', length: 255)],
+        )]);
+
+        try {
+            Helpers::generateTestMigration($this->tempDir, $diff, [], []);
+            $message = null;
+        } catch (MigrationException $exception) {
+            $message = $exception->getMessage() . ' ' . $exception->getContext();
+        }
+
+        expect($message)->toContain("'posts'")
+            ->and($message)->toContain('Modify column: title');
+    });
+
+    it('writes no file when it refuses an alter migration', function (): void {
+        $diff = new SchemaDiff(tablesToAlter: ['posts' => new TableDiff(
+            tableName: 'posts',
+            columnsToModify: ['title' => new Column('title', 'varchar')],
+            columnsToModifyFrom: ['title' => new Column('title', 'varchar', length: 255)],
+        )]);
+
+        try {
+            Helpers::generateTestMigration($this->tempDir, $diff, [], []);
+        } catch (MigrationException) {
+            // Expected
+        }
+
+        expect(glob($this->tempDir . '/database/migrations/*.php'))->toBe([]);
+    });
+
+    it('writes no create migration either when an alter migration in the same diff is refused', function (): void {
+        $diff = new SchemaDiff(
+            tablesToCreate: [new Table('tags', [new Column('id', 'integer')])],
+            tablesToAlter: ['posts' => new TableDiff(
+                tableName: 'posts',
+                columnsToModify: ['title' => new Column('title', 'varchar')],
+                columnsToModifyFrom: ['title' => new Column('title', 'varchar', length: 255)],
+            )],
+        );
+
+        try {
+            Helpers::generateTestMigration($this->tempDir, $diff, [], []);
+        } catch (MigrationException) {
+            // Expected
+        }
+
+        expect(glob($this->tempDir . '/database/migrations/*.php'))->toBe([]);
     });
 
     it('generates migration for drop table operations', function (): void {

@@ -12,6 +12,7 @@ use Marko\Session\Config\SessionConfig;
 use Marko\Session\Contracts\SessionInterface;
 use Marko\Session\Flash\FlashBag;
 use Marko\Session\Middleware\SessionMiddleware;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 function makeRepeatVisitSession(): SessionInterface
@@ -26,6 +27,13 @@ function makeRepeatVisitSession(): SessionInterface
         public function start(): void
         {
             $this->started = true;
+        }
+
+        public function arm(): void {}
+
+        public function isAvailable(): bool
+        {
+            return $this->started;
         }
 
         public function get(
@@ -82,6 +90,13 @@ function makeRepeatVisitSession(): SessionInterface
         }
 
         public function save(): void {}
+
+        public function isModified(): bool
+        {
+            return false;
+        }
+
+        public function discard(): void {}
     };
 }
 
@@ -89,6 +104,12 @@ function makePageCacheabilityChecker(): CacheabilityChecker
 {
     $matcher = new class () implements RouteMatcherInterface
     {
+        public function allowedMethods(
+            string $path,
+        ): array {
+            return [];
+        }
+
         public function match(
             string $method,
             string $path,
@@ -128,7 +149,7 @@ it(
     function (): void {
         $session = makeRepeatVisitSession();
         $sessionConfig = makeSessionConfig();
-        $middleware = new SessionMiddleware($session, $sessionConfig);
+        $middleware = new SessionMiddleware($session, $sessionConfig, new FakeClock());
         $request = new Request(
             server: ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/'],
             cookies: [$sessionConfig->cookieName() => 'existing-session-id'],

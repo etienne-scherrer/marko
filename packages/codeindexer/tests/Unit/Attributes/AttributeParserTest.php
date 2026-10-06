@@ -166,7 +166,7 @@ it(
 
         $active = array_values(array_filter($routes, fn ($e) => $e->method !== 'DISABLED'));
 
-        expect($active)->toHaveCount(6);
+        expect($active)->toHaveCount(8);
 
         $byAction = [];
         foreach ($active as $entry) {
@@ -183,6 +183,20 @@ it(
             ->and($byAction['destroy']->method)->toBe('DELETE');
     },
 );
+
+it('indexes Head and Options route attributes', function () use ($fixtureModule): void {
+    $routes = new AttributeParser()->routes($fixtureModule);
+
+    $byAction = [];
+    foreach ($routes as $entry) {
+        $byAction[$entry->action] = $entry;
+    }
+
+    expect($byAction['head']->method)->toBe('HEAD')
+        ->and($byAction['head']->path)->toBe('/posts/{id}')
+        ->and($byAction['options']->method)->toBe('OPTIONS')
+        ->and($byAction['options']->path)->toBe('/posts');
+});
 
 it('parses Command attributes from class-level declarations', function () use ($fixtureModule): void {
     $parser = new AttributeParser();

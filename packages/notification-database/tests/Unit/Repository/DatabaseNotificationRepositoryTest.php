@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Database\Connection\ConnectionInterface;
 use Marko\Notification\Contracts\NotifiableInterface;
 use Marko\Notification\Database\Entity\DatabaseNotification;
 use Marko\Notification\Database\Repository\DatabaseNotificationRepository;
 use Marko\Notification\Database\Repository\NotificationRepositoryInterface;
+use Marko\Testing\Fake\FakeClock;
 
 function makeNotifiable(): NotifiableInterface
 {
@@ -44,7 +46,9 @@ test('it returns all notifications for a notifiable ordered by created_at desc',
     $capturedSql = null;
     $capturedBindings = null;
 
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStub(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->method('query')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql, &$capturedBindings) {
             $capturedSql = $sql;
@@ -73,10 +77,10 @@ test('it returns all notifications for a notifiable ordered by created_at desc',
         });
 
     $notifiable = makeNotifiable();
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $result = $repo->forNotifiable($notifiable);
 
-    expect($capturedSql)->toContain('SELECT * FROM notifications')
+    expect($capturedSql)->toContain('SELECT * FROM "notifications"')
         ->and($capturedSql)->toContain('notifiable_type = ?')
         ->and($capturedSql)->toContain('notifiable_id = ?')
         ->and($capturedSql)->toContain('ORDER BY created_at DESC')
@@ -90,7 +94,9 @@ test('it returns all notifications for a notifiable ordered by created_at desc',
 test('it returns only unread notifications for a notifiable', function (): void {
     $capturedSql = null;
 
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStub(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->method('query')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql) {
             $capturedSql = $sql;
@@ -109,7 +115,7 @@ test('it returns only unread notifications for a notifiable', function (): void 
         });
 
     $notifiable = makeNotifiable();
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $result = $repo->unread($notifiable);
 
     expect($capturedSql)->toContain('read_at IS NULL')
@@ -123,6 +129,8 @@ test('it marks a single notification as read', function (): void {
     $capturedBindings = null;
 
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->expects($this->once())
         ->method('execute')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql, &$capturedBindings) {
@@ -132,10 +140,10 @@ test('it marks a single notification as read', function (): void {
             return 1;
         });
 
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $repo->markAsRead('uuid-123');
 
-    expect($capturedSql)->toContain('UPDATE notifications SET read_at')
+    expect($capturedSql)->toContain('UPDATE "notifications" SET read_at')
         ->and($capturedSql)->toContain('WHERE id = ?')
         ->and($capturedBindings[1])->toBe('uuid-123');
 });
@@ -145,6 +153,8 @@ test('it marks all notifications as read for a notifiable', function (): void {
     $capturedBindings = null;
 
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->expects($this->once())
         ->method('execute')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql, &$capturedBindings) {
@@ -155,10 +165,10 @@ test('it marks all notifications as read for a notifiable', function (): void {
         });
 
     $notifiable = makeNotifiable();
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $repo->markAllAsRead($notifiable);
 
-    expect($capturedSql)->toContain('UPDATE notifications SET read_at')
+    expect($capturedSql)->toContain('UPDATE "notifications" SET read_at')
         ->and($capturedSql)->toContain('notifiable_type = ?')
         ->and($capturedSql)->toContain('notifiable_id = ?')
         ->and($capturedSql)->toContain('read_at IS NULL')
@@ -171,6 +181,8 @@ test('it deletes a single notification by id', function (): void {
     $capturedBindings = null;
 
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->expects($this->once())
         ->method('execute')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql, &$capturedBindings) {
@@ -180,10 +192,10 @@ test('it deletes a single notification by id', function (): void {
             return 1;
         });
 
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $repo->delete('uuid-456');
 
-    expect($capturedSql)->toContain('DELETE FROM notifications WHERE id = ?')
+    expect($capturedSql)->toContain('DELETE FROM "notifications" WHERE id = ?')
         ->and($capturedBindings)->toBe(['uuid-456']);
 });
 
@@ -192,6 +204,8 @@ test('it deletes all notifications for a notifiable', function (): void {
     $capturedBindings = null;
 
     $connection = $this->createMock(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->expects($this->once())
         ->method('execute')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql, &$capturedBindings) {
@@ -202,17 +216,19 @@ test('it deletes all notifications for a notifiable', function (): void {
         });
 
     $notifiable = makeNotifiable();
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $repo->deleteAll($notifiable);
 
-    expect($capturedSql)->toContain('DELETE FROM notifications WHERE notifiable_type = ? AND notifiable_id = ?')
+    expect($capturedSql)->toContain('DELETE FROM "notifications" WHERE notifiable_type = ? AND notifiable_id = ?')
         ->and($capturedBindings)->toBe(['App\\Entity\\User', '42']);
 });
 
 test('it counts unread notifications for a notifiable', function (): void {
     $capturedSql = null;
 
-    $connection = $this->createMock(ConnectionInterface::class);
+    $connection = $this->createStub(ConnectionInterface::class);
+
+    $connection->method('quoteIdentifier')->willReturnCallback(fn (string $name): string => "\"$name\"");
     $connection->method('query')
         ->willReturnCallback(function (string $sql, array $bindings) use (&$capturedSql) {
             $capturedSql = $sql;
@@ -221,7 +237,7 @@ test('it counts unread notifications for a notifiable', function (): void {
         });
 
     $notifiable = makeNotifiable();
-    $repo = new DatabaseNotificationRepository($connection);
+    $repo = new DatabaseNotificationRepository($connection, new FakeClock(), DatabaseTimezoneConfig::fromName('UTC'));
     $count = $repo->unreadCount($notifiable);
 
     expect($capturedSql)->toContain('SELECT COUNT(*)')

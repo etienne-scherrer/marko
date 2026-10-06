@@ -244,60 +244,15 @@ INSERT INTO admin_user_roles (user_id, role_id) VALUES (1, 1);
 
 ## Step 5: Register Permissions
 
-Permissions are registered in the `PermissionRegistryInterface` and can be discovered automatically from `#[AdminPermission]` attributes on admin section classes. You can also register them manually:
+You declare permissions with `#[AdminPermission]` attributes on an admin section class, which you'll create in the next step (`posts.view`, `posts.create`, `posts.edit` and `posts.delete`). You don't register them yourself: at boot, `marko/admin-auth` registers every `#[AdminPermission]` in `PermissionRegistryInterface`, grouped by the first segment of the key (`posts`). Registering the same key again by hand fails boot with an `AdminAuthException`.
 
-```php title="app/admin/src/Setup/RegisterPermissions.php"
-<?php
+Boot keeps permissions in memory and never writes to the database. To assign them to roles, write them to the `permissions` table once the section exists, and again after each deploy that changes permissions:
 
-declare(strict_types=1);
-
-namespace App\Admin\Setup;
-
-use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
-
-readonly class RegisterPermissions
-{
-    public function __construct(
-        private PermissionRegistryInterface $permissionRegistry,
-    ) {}
-
-    public function register(): void
-    {
-        $this->permissionRegistry->register(
-            key: 'posts.view',
-            label: 'View Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.create',
-            label: 'Create Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.edit',
-            label: 'Edit Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.delete',
-            label: 'Delete Posts',
-            group: 'posts',
-        );
-    }
-}
+```bash
+marko admin-auth:permissions:sync
 ```
 
-After registering permissions in the registry, sync them to the database so they can be assigned to roles:
-
-```php
-use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
-use Marko\AdminAuth\Repository\PermissionRepositoryInterface;
-
-$permissionRepository->syncFromRegistry($permissionRegistry);
-```
+The command inserts the permissions that are missing from the table and updates changed labels and groups. It lists permissions that are no longer registered, but deletes them only when you add `--prune` (see [Syncing Permissions to the Database](/docs/packages/admin-auth/#syncing-permissions-to-the-database)).
 
 ## Step 6: Create an Admin Section
 
@@ -370,13 +325,7 @@ class PostsSection implements AdminSectionInterface
 }
 ```
 
-Register the section in the admin section registry:
-
-```php
-use Marko\Admin\Contracts\AdminSectionRegistryInterface;
-
-$sectionRegistry->register(new PostsSection());
-```
+There is nothing to register. At boot, `marko/admin` finds every `#[AdminSection]` class in your modules' `src/` directories and registers it in the shared `AdminSectionRegistryInterface`. The section is built through the container the first time the admin needs it, not at boot, so its constructor can inject repositories without slowing down or breaking other requests and CLI commands. `getId()` must return the same id as the attribute (`posts`), or the first admin page that builds the section fails with an `AdminException`. In production, run `marko discovery:cache` after adding or changing a section so the cached section list stays current.
 
 The `AdminMenuBuilder` from `marko/admin-panel` automatically filters menu items based on the current user's permissions --- users only see items they have access to.
 
@@ -507,7 +456,7 @@ Templates use the `admin-panel::layout/base` layout provided by `marko/admin-pan
 
 The `#[Middleware(AdminAuthMiddleware::class)]` attribute on the class applies authentication to every route in this controller. The `AdminAuthMiddleware` does two things:
 
-1. Checks that the user is logged in --- unauthenticated users are redirected to `/admin/login`
+1. Checks that the user is logged in --- an unauthenticated browser request on the session guard is redirected to `/admin/login`, while a request that wants JSON, or any request on a stateless guard such as the token guard, gets a 401
 2. Checks the `#[RequiresPermission]` attribute on each action --- users without the required permission get a 403 Forbidden response
 
 Super admin users (those with a role where `isSuperAdmin` is true) automatically bypass all permission checks.
@@ -664,11 +613,9 @@ The `ApiResponse` class provides these factory methods:
 |---|---|---|
 | `ApiResponse::success()` | 200 | Successful read/update |
 | `ApiResponse::created()` | 201 | Resource created |
-| `ApiResponse::error()` | 400 (configurable) | Validation or client errors |
 | `ApiResponse::paginated()` | 200 | Paginated list responses |
-| `ApiResponse::notFound()` | 404 | Resource not found |
-| `ApiResponse::forbidden()` | 403 | Permission denied |
-| `ApiResponse::unauthorized()` | 401 | Not authenticated |
+
+For errors, throw an `HttpException` instead (for example `throw HttpException::notFound('Post not found.');`). The routing pipeline renders it as `{"message": ...}`, the same shape the admin auth middleware uses for its `401` and `403` responses. See [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
 
 ## Step 11: Manage Roles and Permissions
 

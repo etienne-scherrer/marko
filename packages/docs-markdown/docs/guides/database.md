@@ -18,13 +18,15 @@ Configure your connection in `config/database.php`:
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
     'driver' => 'pgsql',
-    'host' => env('DB_HOST', 'localhost'),
-    'port' => (int) env('DB_PORT', '5432'),
-    'database' => env('DB_DATABASE', 'marko'),
-    'username' => env('DB_USERNAME', 'marko'),
-    'password' => env('DB_PASSWORD', ''),
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 5432, min: 1, max: 65535),
+    'database' => Env::string('DB_DATABASE', 'marko'),
+    'username' => Env::string('DB_USERNAME', 'marko'),
+    'password' => Env::string('DB_PASSWORD', ''),
 ];
 ```
 
@@ -93,6 +95,8 @@ marko db:reset
 # Check migration status
 marko db:status
 ```
+
+`db:migrate` generates migrations only when `APP_ENV` is `development`, `dev` or `local`. In every other environment, including an unset `APP_ENV`, it applies the committed files and warns about drift; `db:rollback`, `db:reset`, `db:rebuild` and `db:seed` run freely only in development and testing (`testing`, `test`), need `--force` in any other environment such as `staging`, and are always refused in production. See [Environment Behaviour](/docs/packages/database/#environment-behaviour).
 
 ## Querying
 
