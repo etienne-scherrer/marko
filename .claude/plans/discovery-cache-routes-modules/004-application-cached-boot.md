@@ -1,6 +1,6 @@
 # Task 004: Application cached boot + CLI bypass
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 001, 002, 003
 **Retry count**: 0
 
@@ -18,17 +18,17 @@ Decide the cache gate before module discovery. On a cached boot build modules fr
 - Update existing `ApplicationDiscoveryCacheTest` helpers to write v3 payloads.
 
 ## Requirements (Test Descriptions)
-- [ ] `it boots from a warm cache without calling ModuleDiscovery, ManifestParser::parse or ClassFileParser`
-- [ ] `it boots the same modules in the same order from the cache as from live discovery`
-- [ ] `it registers PSR-4 autoloaders for app and modules modules from the cache`
-- [ ] `it binds CachedDiscovery with the cached sections, and an uncached one on a live boot`
-- [ ] `it throws stale when a cached module's module.php now disables it`
-- [ ] `it throws stale when a cached module's sequence or global middleware changed in module.php`
-- [ ] `it uses the cached global middleware order on a cached boot`
-- [ ] `it throws missingSection when a cached boot asks for an absent section`
-- [ ] `it autowires an uncached CachedDiscovery when constructed with no arguments`
-- [ ] `it ignores the cache when initialize is called with useDiscoveryCache false`
-- [ ] `it runs discovery:cache and discovery:clear with the cache bypassed in the CLI`
+- [x] `it boots from a warm cache without calling ModuleDiscovery, ManifestParser::parse or ClassFileParser`
+- [x] `it boots the same modules in the same order from the cache as from live discovery`
+- [x] `it registers PSR-4 autoloaders for app and modules modules from the cache`
+- [x] `it binds CachedDiscovery with the cached sections, and an uncached one on a live boot`
+- [x] `it throws stale when a cached module's module.php now disables it`
+- [x] `it throws stale when a cached module's sequence or global middleware changed in module.php`
+- [x] `it uses the cached global middleware order on a cached boot`
+- [x] `it throws missingSection when a cached boot asks for an absent section`
+- [x] `it autowires an uncached CachedDiscovery when constructed with no arguments`
+- [x] `it ignores the cache when initialize is called with useDiscoveryCache false`
+- [x] `it runs discovery:cache and discovery:clear with the cache bypassed in the CLI`
 
 ## Acceptance Criteria
 - All requirements have passing tests; existing ApplicationDiscoveryCache and CliKernel tests pass (updated to the v3 payload)

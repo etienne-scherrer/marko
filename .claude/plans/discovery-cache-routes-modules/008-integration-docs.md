@@ -1,6 +1,6 @@
 # Task 008: Integration test and docs
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 005, 006, 007
 **Retry count**: 0
 
@@ -13,7 +13,7 @@ Replace the #173 todo in KnownGapsTest with a real integration test (routes iden
 - Docs: state that module.php edits to `enabled`/`sequence`/`globalMiddleware` throw stale, enabling a previously disabled module is NOT detected, and `discovery:cache` must run on every deploy.
 
 ## Requirements (Test Descriptions)
-- [ ] `it routes identically with the discovery cache warm and cold`
+- [x] `it routes identically with the discovery cache warm and cold`
 
 ## Acceptance Criteria
 - Docs follow docs/DOCS-STANDARDS.md

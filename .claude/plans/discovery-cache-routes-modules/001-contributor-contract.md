@@ -1,6 +1,6 @@
 # Task 001: Contributor contract, manifest `discovery` key, cached manifest parsing
 
-**Status**: pending
+**Status**: completed
 **Depends on**: none
 **Retry count**: 0
 
@@ -14,12 +14,12 @@ Add `Marko\Core\Discovery\DiscoveryCacheContributorInterface` (`key(): string`, 
 - Extend `CachedModule` with module.php snapshot fields `after`, `before`, `globalMiddleware` (default `[]`, copied in `fromManifest()`); `parseCached()` ignores them (they come from live module.php) — task 004 compares them for stale detection.
 
 ## Requirements (Test Descriptions)
-- [ ] `it parses the discovery contributor list from module.php`
-- [ ] `it defaults the discovery contributor list to empty`
-- [ ] `it builds a manifest from a cached module without reading composer.json`
-- [ ] `it keeps module.php closures live when building a manifest from a cached module`
-- [ ] `it keeps the discovery list when ModuleDiscovery sets path and source`
-- [ ] `it snapshots sequence and global middleware when building a CachedModule from a manifest`
+- [x] `it parses the discovery contributor list from module.php`
+- [x] `it defaults the discovery contributor list to empty`
+- [x] `it builds a manifest from a cached module without reading composer.json`
+- [x] `it keeps module.php closures live when building a manifest from a cached module`
+- [x] `it keeps the discovery list when ModuleDiscovery sets path and source`
+- [x] `it snapshots sequence and global middleware when building a CachedModule from a manifest`
 
 ## Acceptance Criteria
 - All requirements have passing tests

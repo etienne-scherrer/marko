@@ -1,6 +1,6 @@
 # Task 007: Benchmark script
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 005
 **Retry count**: 0
 
@@ -13,8 +13,8 @@
 - Tests (under `tests/`) must be fast: tiny fixture (e.g. 2 modules/10 classes, 1 run) with `--min-ratio=0` for the print test and `--min-ratio=1000` for the failure test. Clean up temp dirs without following vendor symlinks.
 
 ## Requirements (Test Descriptions)
-- [ ] `it prints uncached and cached medians and the ratio`
-- [ ] `it fails when cached is less than 3x faster`
+- [x] `it prints uncached and cached medians and the ratio`
+- [x] `it fails when cached is less than 3x faster`
 
 ## Acceptance Criteria
 - Script runs locally; numbers recorded in the PR

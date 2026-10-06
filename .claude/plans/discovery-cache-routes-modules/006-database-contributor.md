@@ -1,6 +1,6 @@
 # Task 006: Database entity contributor
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 004
 **Retry count**: 0
 
@@ -12,9 +12,9 @@ Add `EntityCacheContributor` (key `entities`) returning the discovered entity cl
 - The contributor ignores `$modules` and uses `EntityDiscovery` over `ProjectPaths`, matching the current boot callback.
 
 ## Requirements (Test Descriptions)
-- [ ] `it compiles the discovered entity classes`
-- [ ] `it links extenders from the cached entity list without scanning`
-- [ ] `it declares the entity contributor in module.php`
+- [x] `it compiles the discovered entity classes`
+- [x] `it links extenders from the cached entity list without scanning`
+- [x] `it declares the entity contributor in module.php`
 
 ## Acceptance Criteria
 - All requirements have passing tests

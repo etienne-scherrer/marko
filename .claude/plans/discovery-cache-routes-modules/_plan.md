@@ -4,7 +4,7 @@
 2026-10-05
 
 ## Status
-ready
+completed
 
 ## Objective
 Extend the existing `marko discovery:cache` so a production request with a warm cache skips module discovery, route discovery, global middleware resolution and entity discovery, and detects a stale cache loudly.
@@ -39,27 +39,27 @@ Closes #173
 - Seeder discovery (runs lazily in a binding closure, not per request).
 
 ## Success Criteria
-- [ ] Warm cache + `APP_ENV=production`: zero ModuleDiscovery/ManifestParser::parse/ClassFileParser calls during boot + dispatch
-- [ ] Unmatched controllers are not loaded after dispatch
-- [ ] Cached routes identical to live discovery (order, names, middleware, constraints, Preference-inherited routes)
-- [ ] Entity list and global middleware order hydrate from the cache
-- [ ] Changing installed.json after caching throws `DiscoveryCacheException` on boot
-- [ ] Old-version cache files throw `versionMismatch`
-- [ ] Benchmark: cached boot + 404 at least 3x faster on the 600-class fixture
-- [ ] Docs updated (core, routing, database; "Deploying to production")
-- [ ] All tests passing; `composer ci` green
+- [x] Warm cache + `APP_ENV=production`: zero ModuleDiscovery/ManifestParser::parse/ClassFileParser calls during boot + dispatch
+- [x] Unmatched controllers are not loaded after dispatch
+- [x] Cached routes identical to live discovery (order, names, middleware, constraints, Preference-inherited routes)
+- [x] Entity list and global middleware order hydrate from the cache
+- [x] Changing installed.json after caching throws `DiscoveryCacheException` on boot
+- [x] Old-version cache files throw `versionMismatch`
+- [x] Benchmark: cached boot + 404 at least 3x faster on the 600-class fixture
+- [x] Docs updated (core, routing, database; "Deploying to production")
+- [x] All tests passing; `composer ci` green
 
 ## Task Overview
 | Task | Description | Depends On | Status |
 |------|-------------|------------|--------|
-| 001 | Contributor contract, manifest `discovery` key, cached manifest parsing | - | pending |
-| 002 | Cache format v3: modules, middleware, sections, fingerprint, stale | 001 | pending |
-| 003 | DiscoveryCompiler runs contributors; discovery:cache output | 001, 002 | pending |
-| 004 | Application cached boot + CliKernel bypass | 001, 002, 003 | pending |
-| 005 | Routing contributor + hydration | 004 | pending |
-| 006 | Database entity contributor | 004 | pending |
-| 007 | Benchmark script | 005 | pending |
-| 008 | Integration test + docs | 005, 006, 007 | pending |
+| 001 | Contributor contract, manifest `discovery` key, cached manifest parsing | - | completed |
+| 002 | Cache format v3: modules, middleware, sections, fingerprint, stale | 001 | completed |
+| 003 | DiscoveryCompiler runs contributors; discovery:cache output | 001, 002 | completed |
+| 004 | Application cached boot + CliKernel bypass | 001, 002, 003 | completed |
+| 005 | Routing contributor + hydration | 004 | completed |
+| 006 | Database entity contributor | 004 | completed |
+| 007 | Benchmark script | 005 | completed |
+| 008 | Integration test + docs | 005, 006, 007 | completed |
 
 ## Architecture Notes
 - Core never imports routing/database classes beyond the existing `class_exists(RoutingBootstrapper::class)` guard and `GlobalMiddlewareResolver`.

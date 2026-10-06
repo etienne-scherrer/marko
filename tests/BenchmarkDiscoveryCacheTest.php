@@ -7,8 +7,9 @@ declare(strict_types=1);
  *
  * @return array{exitCode: int, output: string}
  */
-function runDiscoveryCacheBenchmark(string $minRatio): array
-{
+function runDiscoveryCacheBenchmark(
+    string $minRatio,
+): array {
     $script = dirname(__DIR__) . '/bin/benchmark-discovery-cache.php';
     $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script)
         . " --modules=2 --classes=6 --vendor-packages=2 --runs=1 --min-ratio=$minRatio 2>&1";

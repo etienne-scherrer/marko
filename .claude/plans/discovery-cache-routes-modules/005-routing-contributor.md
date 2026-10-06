@@ -1,6 +1,6 @@
 # Task 005: Routing contributor and hydration
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 004
 **Retry count**: 0
 
@@ -13,12 +13,12 @@ Extract live route discovery from RoutingBootstrapper into `RouteCollector`. Add
 - The "not loaded" test must generate uniquely named controller classes per test and assert `class_exists($class, false) === false`, otherwise classes loaded earlier in the process mask the result.
 
 ## Requirements (Test Descriptions)
-- [ ] `it hydrates routes identical to live discovery in order, names, middleware, constraints and exclusions`
-- [ ] `it caches routes inherited through a Preference`
-- [ ] `it does not load controllers that the request did not match`
-- [ ] `it throws malformed when a cached route record is invalid`
-- [ ] `it still rejects an excluded middleware missing from the stack on a cached boot`
-- [ ] `it declares the route contributor in module.php`
+- [x] `it hydrates routes identical to live discovery in order, names, middleware, constraints and exclusions`
+- [x] `it caches routes inherited through a Preference`
+- [x] `it does not load controllers that the request did not match`
+- [x] `it throws malformed when a cached route record is invalid`
+- [x] `it still rejects an excluded middleware missing from the stack on a cached boot`
+- [x] `it declares the route contributor in module.php`
 
 ## Acceptance Criteria
 - All requirements have passing tests

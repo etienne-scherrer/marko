@@ -38,8 +38,10 @@ function benchOptions(): array
     ];
 }
 
-function benchWrite(string $path, string $content): void
-{
+function benchWrite(
+    string $path,
+    string $content,
+): void {
     if (!is_dir(dirname($path)) && !mkdir(dirname($path), 0755, true) && !is_dir(dirname($path))) {
         throw new RuntimeException('Could not create ' . dirname($path));
     }
@@ -52,8 +54,11 @@ function benchWrite(string $path, string $content): void
 /**
  * @param array{modules: int, classes: int, vendorPackages: int, runs: int, minRatio: float, keep: bool} $options
  */
-function benchBuildProject(string $root, string $project, array $options): void
-{
+function benchBuildProject(
+    string $root,
+    string $project,
+    array $options,
+): void {
     foreach (BENCH_MARKO_PACKAGES as $package) {
         benchWrite("$project/vendor/marko/.keep", '');
         symlink("$root/packages/$package", "$project/vendor/marko/$package");
@@ -168,8 +173,11 @@ function benchBuildProject(string $root, string $project, array $options): void
  * @param array<string, string> $env
  * @return array{ms: float, memory: int}
  */
-function benchRequest(string $project, string $opcacheDir, array $env): array
-{
+function benchRequest(
+    string $project,
+    string $opcacheDir,
+    array $env,
+): array {
     $ini = function_exists('opcache_get_status')
         ? sprintf(
             // file_update_protection=0: the generated files are seconds old, and opcache
@@ -199,8 +207,9 @@ function benchRequest(string $project, string $opcacheDir, array $env): array
 /**
  * @param array<int, float> $values
  */
-function benchMedian(array $values): float
-{
+function benchMedian(
+    array $values,
+): float {
     sort($values);
     $count = count($values);
     $middle = intdiv($count, 2);
@@ -212,8 +221,12 @@ function benchMedian(array $values): float
  * @param array<string, string> $env
  * @return array{median: float, min: float, memory: int}
  */
-function benchMeasure(string $project, string $opcacheDir, array $env, int $runs): array
-{
+function benchMeasure(
+    string $project,
+    string $opcacheDir,
+    array $env,
+    int $runs,
+): array {
     // Warm the opcache file cache.
     benchRequest($project, $opcacheDir, $env);
     benchRequest($project, $opcacheDir, $env);
@@ -230,8 +243,9 @@ function benchMeasure(string $project, string $opcacheDir, array $env, int $runs
     return ['median' => benchMedian($times), 'min' => min($times), 'memory' => $memory];
 }
 
-function benchRemove(string $path): void
-{
+function benchRemove(
+    string $path,
+): void {
     if (is_link($path) || is_file($path)) {
         unlink($path);
 

@@ -1,6 +1,6 @@
 # Task 002: Cache format v3 — modules, global middleware, sections, fingerprint, stale detection
 
-**Status**: pending
+**Status**: completed
 **Depends on**: 001
 **Retry count**: 0
 
@@ -16,15 +16,15 @@ Bump `DiscoveryCache::CACHE_VERSION` to 3. `write()` additionally stores the ord
 - Add `DiscoveryCacheException::stale(string $path, string $reason)` and `::missingSection(string $key)` (used by CachedDiscovery in 004), each with a suggestion to run `marko discovery:cache`.
 
 ## Requirements (Test Descriptions)
-- [ ] `it round-trips the module list in order with paths relative to the project root`
-- [ ] `it round-trips global middleware and contributor sections`
-- [ ] `it throws a stale DiscoveryCacheException when installed.json changes after the cache is written`
-- [ ] `it throws a stale DiscoveryCacheException when a module directory is added under app or modules`
-- [ ] `it throws versionMismatch for a version 2 cache file`
-- [ ] `it throws malformed when a module record or section is invalid`
-- [ ] `it computes the same fingerprint without parsing any composer.json`
-- [ ] `it throws a stale DiscoveryCacheException when an app or modules composer.json changes`
-- [ ] `it stores module paths outside the project base as absolute paths`
+- [x] `it round-trips the module list in order with paths relative to the project root`
+- [x] `it round-trips global middleware and contributor sections`
+- [x] `it throws a stale DiscoveryCacheException when installed.json changes after the cache is written`
+- [x] `it throws a stale DiscoveryCacheException when a module directory is added under app or modules`
+- [x] `it throws versionMismatch for a version 2 cache file`
+- [x] `it throws malformed when a module record or section is invalid`
+- [x] `it computes the same fingerprint without parsing any composer.json`
+- [x] `it throws a stale DiscoveryCacheException when an app or modules composer.json changes`
+- [x] `it stores module paths outside the project base as absolute paths`
 
 ## Acceptance Criteria
 - All requirements have passing tests; existing DiscoveryCache tests updated to the new payload

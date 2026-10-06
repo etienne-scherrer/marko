@@ -49,8 +49,9 @@ afterEach(function (): void {
 /**
  * @return array<int, array<string, mixed>>
  */
-function discoveryCacheRoutes(Application $app): array
-{
+function discoveryCacheRoutes(
+    Application $app,
+): array {
     return array_map(fn (RouteDefinition $route): array => [
         'method' => $route->method,
         'path' => $route->path,
@@ -67,8 +68,9 @@ function discoveryCacheRoutes(Application $app): array
  *
  * @return array<string, array{int, string}>
  */
-function discoveryCacheResponses(Application $app): array
-{
+function discoveryCacheResponses(
+    Application $app,
+): array {
     $requests = [
         ['GET', '/health'],
         ['GET', '/visits'],
