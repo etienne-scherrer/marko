@@ -11,7 +11,7 @@ use Marko\Core\Command\CommandInterface;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 
-#[Command(name: 'indexer:rebuild', description: 'Rebuild the Marko code index cache')]
+#[Command(name: 'indexer:rebuild', description: 'Rebuild the Marko code index cache', destructive: true)]
 class RebuildIndexCommand implements CommandInterface
 {
     private const string CACHE_FILE = '.marko/index.cache';

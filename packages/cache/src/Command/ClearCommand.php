@@ -11,7 +11,7 @@ use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 
 /** @noinspection PhpUnused */
-#[Command(name: 'cache:clear', description: 'Clear all cached items')]
+#[Command(name: 'cache:clear', description: 'Clear all cached items', destructive: true)]
 readonly class ClearCommand implements CommandInterface
 {
     public function __construct(
