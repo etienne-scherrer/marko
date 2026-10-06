@@ -126,6 +126,19 @@ it('runs the queue and session MySQL suites against both MariaDB services', func
         ))->toHaveCount(2);
 })->issue(337);
 
+it('runs the search MySQL suite against both MariaDB services', function () use ($ci): void {
+    $steps = array_values(array_filter(
+        preg_split('/\n(?=      - name: )/', $ci) ?: [],
+        fn (string $step): bool => str_contains($step, 'MARKO_TEST_MYSQL_SERVER: mariadb'),
+    ));
+
+    expect($steps)->toHaveCount(2)
+        ->and(array_filter(
+            $steps,
+            fn (string $step): bool => str_contains($step, 'packages/search/tests/Integration/MySql'),
+        ))->toHaveCount(2);
+})->issue(338);
+
 it('points the mysql driver integration tests at the mysql service', function () use ($ci): void {
     $job = substr($ci, (int) strpos($ci, 'name: Integration'));
 
