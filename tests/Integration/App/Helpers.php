@@ -169,8 +169,9 @@ function integrationDatabaseName(
  *
  * @throws PDOException
  */
-function resetIntegrationDatabase(): void
-{
+function resetIntegrationDatabase(
+    ?string $database = null,
+): void {
     $env = getenv();
     $pdo = new PDO(
         sprintf('pgsql:host=%s;port=%d;dbname=postgres', $env['DB_HOST'], (int) ($env['DB_PORT'] ?? 5432)),
@@ -178,7 +179,7 @@ function resetIntegrationDatabase(): void
         $env['DB_PASSWORD'] ?? 'marko',
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
     );
-    $database = integrationDatabaseName($env);
+    $database ??= integrationDatabaseName($env);
 
     $pdo->exec("DROP DATABASE IF EXISTS \"$database\" WITH (FORCE)");
     $pdo->exec("CREATE DATABASE \"$database\"");
@@ -193,17 +194,18 @@ function resetIntegrationDatabase(): void
  */
 function buildIntegrationProject(
     ?string $fixturePath = null,
+    array $modules = INTEGRATION_MODULES,
 ): string {
     $root = dirname(__DIR__, 3);
     $project = sys_get_temp_dir() . '/marko-integration/' . bin2hex(random_bytes(8));
 
     copyIntegrationDirectory($fixturePath ?? integrationFixturePath(), $project);
 
-    foreach (INTEGRATION_MODULES as $module) {
+    foreach ($modules as $module) {
         $target = "$root/packages/$module";
 
         if (!is_dir($target)) {
-            throw new RuntimeException("INTEGRATION_MODULES lists '$module' but $target does not exist.");
+            throw new RuntimeException("The module list names '$module' but $target does not exist.");
         }
 
         makeIntegrationDirectory("$project/vendor/marko");
@@ -474,4 +476,50 @@ function runIntegrationCommand(
     fclose($stream);
 
     return ['exitCode' => $exitCode, 'output' => $output];
+}
+
+/**
+ * Packages the database-testing fixture needs: the database layer, the
+ * Postgres driver and routing for the TestClient requests.
+ */
+const DATABASE_TESTING_MODULES = [
+    'config',
+    'core',
+    'database',
+    'database-pgsql',
+    'routing',
+];
+
+/**
+ * The database the database-testing fixture uses: separate from the main
+ * fixture's, which is dropped before every integration test, because
+ * TestDatabase keeps one connection open for the whole process.
+ *
+ * @param array<string, string> $env
+ */
+function databaseTestingDatabaseName(
+    array $env,
+): string {
+    return integrationDatabaseName($env) . '_dbtesting';
+}
+
+/**
+ * The database-testing fixture project for this process: built, and its
+ * database created empty, on the first call, then reused so TestDatabase can
+ * boot and migrate it once. Removed when the process ends. Callers skip
+ * first via integrationServicesSkipReason().
+ *
+ * @throws RuntimeException|PDOException
+ */
+function databaseTestingProject(): string
+{
+    static $project = null;
+
+    if ($project === null) {
+        resetIntegrationDatabase(databaseTestingDatabaseName(getenv()));
+        $project = buildIntegrationProject(__DIR__ . '/DatabaseTestingFixture', DATABASE_TESTING_MODULES);
+        register_shutdown_function(static fn () => removeIntegrationProject($project));
+    }
+
+    return $project;
 }

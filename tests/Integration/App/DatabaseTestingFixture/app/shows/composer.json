@@ -1,0 +1,16 @@
+{
+    "name": "app/shows",
+    "description": "Fixture application module for the RefreshDatabase, TruncateDatabase and EntityFactory integration tests",
+    "type": "marko-module",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Marko\\Integration\\DatabaseTesting\\": "src/"
+        }
+    },
+    "extra": {
+        "marko": {
+            "module": true
+        }
+    }
+}
