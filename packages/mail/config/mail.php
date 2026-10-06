@@ -8,8 +8,8 @@ return [
     | Mail Driver
     |--------------------------------------------------------------------------
     |
-    | The default mail driver used for sending emails. Supported drivers
-    | include: "smtp", "sendmail", "log", "array"
+    | The default mail driver used for sending emails. Drivers ship as
+    | separate packages: "smtp" (marko/mail-smtp), "log" (marko/mail-log).
     |
     */
     'driver' => 'smtp',
@@ -43,17 +43,5 @@ return [
         'password' => null,
         'timeout' => 30,
         'auth_mode' => 'login',
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Sendmail Configuration
-    |--------------------------------------------------------------------------
-    |
-    | Configuration for the sendmail driver.
-    |
-    */
-    'sendmail' => [
-        'path' => '/usr/sbin/sendmail -bs',
     ],
 ];
