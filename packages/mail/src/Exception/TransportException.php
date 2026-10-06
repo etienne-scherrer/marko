@@ -56,4 +56,17 @@ class TransportException extends MailException
             suggestion: 'Check the recipient address and server error message for details.',
         );
     }
+
+    public static function commandInjection(
+        string $command,
+        string $address,
+    ): self {
+        $safe = addcslashes($address, "\r\n\0");
+
+        return new self(
+            message: "SMTP command injection attempt detected in $command address.",
+            context: "The $command address '$safe' contains CR, LF or NUL characters",
+            suggestion: 'Pass a single validated email address, for example by constructing a Marko\\Mail\\Address first',
+        );
+    }
 }

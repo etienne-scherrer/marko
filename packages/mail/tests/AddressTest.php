@@ -80,7 +80,7 @@ describe('Address', function (): void {
         expect($address->name)->toBe($name)
             ->and($address->toString())->toBe($expected);
     })->with([
-        'name with double quotes' => ['"John Doe"', '"John Doe" <user@example.com>'],
+        'name with double quotes' => ['"John Doe"', '"\\"John Doe\\"" <user@example.com>'],
         'name with single quotes' => ["O'Brien", "O'Brien <user@example.com>"],
         'name with special characters' => ['John & Jane Doe!', 'John & Jane Doe! <user@example.com>'],
         'name with unicode characters' => ['José García', 'José García <user@example.com>'],
@@ -89,9 +89,37 @@ describe('Address', function (): void {
             str_repeat('A', 100),
             str_repeat('A', 100) . ' <user@example.com>',
         ],
-        'name with angle brackets' => ['John <Admin> Doe', 'John <Admin> Doe <user@example.com>'],
-        'name with tab characters' => ["John\tDoe", "John\tDoe <user@example.com>"],
-        'empty string name' => ['', ' <user@example.com>'],
-        'whitespace only name' => ['   ', '    <user@example.com>'],
+        'name with angle brackets' => ['John <Admin> Doe', '"John <Admin> Doe" <user@example.com>'],
+        'name with tab characters' => ["John\tDoe", "\"John\tDoe\" <user@example.com>"],
+        'empty string name' => ['', '"" <user@example.com>'],
+        'whitespace only name' => ['   ', '"   " <user@example.com>'],
+    ]);
+
+    it('wraps a display name containing an address list in a single quoted-string', function (): void {
+        $address = new Address('real@example.com', 'x <attacker@evil.com>, y');
+
+        expect($address->toString())->toBe('"x <attacker@evil.com>, y" <real@example.com>');
+    });
+
+    it('quotes display names containing RFC 5322 specials', function (string $name, string $expected): void {
+        expect(new Address('user@example.com', $name)->formatDisplayName())->toBe($expected);
+    })->with([
+        'comma' => ['Doe, John', '"Doe, John"'],
+        'semicolon' => ['a;b', '"a;b"'],
+        'at sign' => ['team@work', '"team@work"'],
+        'period' => ['John Q. Public', '"John Q. Public"'],
+        'colon' => ['Re: x', '"Re: x"'],
+        'parentheses' => ['John (Admin)', '"John (Admin)"'],
+        'square brackets' => ['[bot]', '"[bot]"'],
+        'backslash and quote are escaped' => ['a\\b"c', '"a\\\\b\\"c"'],
+    ]);
+
+    it('leaves a plain atext display name unquoted', function (string $name): void {
+        expect(new Address('user@example.com', $name)->formatDisplayName())->toBe($name);
+    })->with([
+        'simple' => ['John Doe'],
+        'apostrophe' => ["O'Brien"],
+        'atext symbols' => ['John & Jane Doe!'],
+        'unicode' => ['José García'],
     ]);
 });
