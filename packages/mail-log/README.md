@@ -1,11 +1,11 @@
 # marko/mail-log
 
-Log-based mail driver--writes emails to the log instead of sending them, ideal for development and testing.
+Log-based mail driver--writes emails to the log instead of sending them, ideal for development and testing. Refuses to boot in production unless explicitly allowed.
 
 ## Installation
 
 ```bash
-composer require marko/mail-log
+composer require --dev marko/mail-log
 ```
 
 ## Quick Example

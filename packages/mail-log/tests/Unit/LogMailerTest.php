@@ -5,34 +5,39 @@ declare(strict_types=1);
 namespace Marko\Mail\Log\Tests\Unit;
 
 use Marko\Log\Contracts\LoggerInterface;
+use Marko\Log\LogLevel;
 use Marko\Mail\Contracts\MailerInterface;
-use Marko\Mail\Log\LogMailer;
+use Marko\Mail\Log\Config\MailLogConfig;
+use Marko\Mail\Log\Tests\Support\MailLogFactory;
 use Marko\Mail\Message;
+use Marko\Testing\Fake\FakeLogger;
 use ReflectionClass;
 
 test('it implements MailerInterface', function (): void {
     $logger = $this->createStub(LoggerInterface::class);
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     expect($mailer)->toBeInstanceOf(MailerInterface::class);
 });
 
-test('it accepts LoggerInterface via constructor', function (): void {
+test('it accepts LoggerInterface and MailLogConfig via constructor', function (): void {
     $logger = $this->createStub(LoggerInterface::class);
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $reflection = new ReflectionClass($mailer);
     $constructor = $reflection->getConstructor();
     $parameters = $constructor->getParameters();
 
-    expect($parameters)->toHaveCount(1);
+    expect($parameters)->toHaveCount(2);
     expect($parameters[0]->getName())->toBe('logger');
     expect($parameters[0]->getType()->getName())->toBe(LoggerInterface::class);
+    expect($parameters[1]->getName())->toBe('config');
+    expect($parameters[1]->getType()->getName())->toBe(MailLogConfig::class);
 });
 
 test('it returns true from send method', function (): void {
     $logger = $this->createStub(LoggerInterface::class);
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -47,7 +52,7 @@ test('it returns true from send method', function (): void {
 
 test('it returns true from sendRaw method', function (): void {
     $logger = $this->createStub(LoggerInterface::class);
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $rawMessage = "From: sender@example.com\r\n";
     $rawMessage .= "To: recipient@example.com\r\n";
@@ -66,7 +71,7 @@ test('it logs email sent message at info level', function (): void {
         ->method('info')
         ->with('Email sent', $this->isArray());
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -88,7 +93,7 @@ test('it includes from address in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -111,7 +116,7 @@ test('it includes to addresses in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -135,7 +140,7 @@ test('it includes cc addresses in log context when present', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -160,7 +165,7 @@ test('it includes bcc addresses in log context when present', function (): void 
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -184,7 +189,7 @@ test('it includes subject in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -206,7 +211,7 @@ test('it includes has_html flag in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -228,7 +233,7 @@ test('it includes has_text flag in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -250,7 +255,7 @@ test('it includes attachment count in log context', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     // Create temp files for attachments
     $tempFile1 = tempnam(sys_get_temp_dir(), 'attachment1_');
@@ -285,7 +290,7 @@ test('it logs text body at debug level', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -307,7 +312,7 @@ test('it logs html body at debug level', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $message = Message::create()
         ->from('sender@example.com')
@@ -346,7 +351,7 @@ test('it logs raw email content for sendRaw', function (): void {
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     $mailer->sendRaw('recipient@example.com', $rawContent);
 });
@@ -374,7 +379,7 @@ test('it includes attachment metadata without binary content', function (): void
             }),
         );
 
-    $mailer = new LogMailer($logger);
+    $mailer = MailLogFactory::mailer($logger);
 
     // Create temp file for attachment
     $tempFile = tempnam(sys_get_temp_dir(), 'attachment_');
@@ -392,4 +397,86 @@ test('it includes attachment metadata without binary content', function (): void
     } finally {
         unlink($tempFile);
     }
+});
+
+test('it logs only envelope metadata when include_body is false', function (): void {
+    $logger = new FakeLogger();
+    $mailer = MailLogFactory::mailer($logger, includeBody: false);
+
+    $tempFile = tempnam(sys_get_temp_dir(), 'attachment_');
+    file_put_contents($tempFile, 'test content');
+
+    try {
+        $message = Message::create()
+            ->from('sender@example.com')
+            ->to('recipient@example.com')
+            ->subject('Reset your password')
+            ->text('Reset: https://example.com/reset?token=secret-token')
+            ->html('<a href="https://example.com/reset?token=secret-token">Reset</a>')
+            ->attach($tempFile, 'invoice.pdf', 'application/pdf');
+
+        $mailer->send($message);
+    } finally {
+        unlink($tempFile);
+    }
+
+    expect($logger->entriesForLevel(LogLevel::Debug))->toBe([])
+        ->and($logger->entries)->toHaveCount(1)
+        ->and(json_encode($logger->entries))->not->toContain('secret-token');
+
+    $context = $logger->entries[0]['context'];
+
+    expect($context['from'])->toBe('sender@example.com')
+        ->and($context['to'])->toBe(['recipient@example.com'])
+        ->and($context['subject'])->toBe('Reset your password')
+        ->and($context['attachments'][0]['name'])->toBe('invoice.pdf');
+});
+
+test('it does not log raw content for sendRaw when include_body is false', function (): void {
+    $logger = new FakeLogger();
+    $mailer = MailLogFactory::mailer($logger, includeBody: false);
+
+    $raw = "To: recipient@example.com\r\n\r\nReset: https://example.com/reset?token=secret-token";
+
+    $mailer->sendRaw('recipient@example.com', $raw);
+
+    expect($logger->entriesForLevel(LogLevel::Debug))->toBe([])
+        ->and($logger->entries)->toHaveCount(1)
+        ->and($logger->entries[0]['context'])->toBe([
+            'to' => 'recipient@example.com',
+            'raw_length' => strlen($raw),
+        ]);
+});
+
+test('it logs bodies by default in development', function (): void {
+    $logger = new FakeLogger();
+    $mailer = MailLogFactory::mailer($logger, includeBody: null, environment: 'local');
+
+    $mailer->send(Message::create()->to('recipient@example.com')->subject('Test')->text('Hello'));
+
+    $logger->assertLogged('Email body (text)', LogLevel::Debug);
+
+    expect($logger->entriesForLevel(LogLevel::Debug))->toHaveCount(1);
+});
+
+test('it excludes bodies by default outside development', function (string $environment): void {
+    $logger = new FakeLogger();
+    $mailer = MailLogFactory::mailer($logger, includeBody: null, environment: $environment);
+
+    $mailer->send(Message::create()->to('recipient@example.com')->subject('Test')->text('Hello'));
+    $mailer->sendRaw('recipient@example.com', 'raw secret');
+
+    expect($logger->entriesForLevel(LogLevel::Debug))->toBe([])
+        ->and($logger->entriesForLevel(LogLevel::Info))->toHaveCount(2);
+})->with(['production', 'staging', 'testing']);
+
+test('it logs bodies outside development when include_body is explicitly true', function (): void {
+    $logger = new FakeLogger();
+    $mailer = MailLogFactory::mailer($logger, includeBody: true, environment: 'staging');
+
+    $mailer->send(Message::create()->to('recipient@example.com')->subject('Test')->text('Hello'));
+
+    $logger->assertLogged('Email body (text)', LogLevel::Debug);
+
+    expect($logger->entriesForLevel(LogLevel::Debug))->toHaveCount(1);
 });
