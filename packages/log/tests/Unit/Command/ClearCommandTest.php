@@ -6,6 +6,7 @@ use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 use Marko\Log\Command\ClearCommand;
 use Marko\Log\Config\LogConfig;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 
 /**
@@ -14,11 +15,12 @@ use Marko\Testing\Fake\FakeConfigRepository;
 function runLogClearCommand(
     string $logPath,
     array $args,
+    ?FakeClock $clock = null,
 ): string {
     $command = new ClearCommand(new LogConfig(new FakeConfigRepository([
         'log.path' => $logPath,
         'log.max_files' => 7,
-    ])));
+    ])), $clock ?? new FakeClock());
     $stream = fopen('php://memory', 'r+');
 
     $command->execute(new Input($args), new Output($stream));
@@ -55,4 +57,23 @@ it('accepts the days option as a separate value', function (): void {
     $written = runLogClearCommand($this->logPath, ['marko', 'log:clear', '--days', '3']);
 
     expect($written)->toContain('older than 3 days');
+});
+
+it('deletes only files older than the cutoff on the injected clock', function (): void {
+    $clock = new FakeClock('2026-01-21 12:00:00 UTC');
+    $now = $clock->now()->getTimestamp();
+    $old = $this->logPath . '/app-old.log';
+    $boundary = $this->logPath . '/app-boundary.log';
+    $recent = $this->logPath . '/app-recent.log';
+    touch($old, $now - 3 * 86400 - 1);
+    touch($boundary, $now - 3 * 86400);
+    touch($recent, $now - 86400);
+
+    $written = runLogClearCommand($this->logPath, ['marko', 'log:clear', '--days=3'], $clock);
+
+    $remaining = array_map(basename(...), glob($this->logPath . '/*.log'));
+    array_map(unlink(...), glob($this->logPath . '/*.log'));
+
+    expect($written)->toContain('Deleted 1 log file(s)')
+        ->and($remaining)->toEqualCanonicalizing(['app-boundary.log', 'app-recent.log']);
 });

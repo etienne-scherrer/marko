@@ -9,6 +9,7 @@ use Marko\Core\Command\CommandInterface;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 use Marko\Log\Config\LogConfig;
+use Psr\Clock\ClockInterface;
 
 /** @noinspection PhpUnused */
 #[Command(name: 'log:clear', description: 'Clear old log files')]
@@ -16,6 +17,7 @@ readonly class ClearCommand implements CommandInterface
 {
     public function __construct(
         private LogConfig $config,
+        private ClockInterface $clock,
     ) {}
 
     public function execute(
@@ -31,7 +33,7 @@ readonly class ClearCommand implements CommandInterface
             return 0;
         }
 
-        $cutoff = time() - ($days * 24 * 60 * 60);
+        $cutoff = $this->clock->now()->getTimestamp() - ($days * 24 * 60 * 60);
         $deletedCount = 0;
 
         $files = glob($logPath . '/*.log');
