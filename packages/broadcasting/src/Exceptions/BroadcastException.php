@@ -18,6 +18,26 @@ class BroadcastException extends MarkoException
         );
     }
 
+    public static function emptyPresenceMemberId(): self
+    {
+        return new self(
+            message: 'Presence member id must not be empty.',
+            context: 'While creating a PresenceMember',
+            suggestion: "Pass the user's identifier, such as \$user->getAuthIdentifier(), as the member id.",
+        );
+    }
+
+    public static function presenceChannelsUnsupported(
+        string $driver,
+        string $channel,
+    ): self {
+        return new self(
+            message: "Presence channel '$channel' is not supported by $driver.",
+            context: "The $driver driver cannot track presence channel members",
+            suggestion: 'Use a PrivateChannel instead, or switch to the Pusher driver (marko/broadcasting-pusher) for presence channels.',
+        );
+    }
+
     public static function emptyEventName(): self
     {
         return new self(

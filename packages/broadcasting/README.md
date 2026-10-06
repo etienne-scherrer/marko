@@ -31,6 +31,8 @@ class CustomerChannelAuthorizer implements ChannelAuthorizerInterface
 }
 ```
 
+Presence channels ("who's online") use `PresenceChannel` with a `PresenceChannelAuthorizerInterface` that returns a `PresenceMember`; the Pusher driver supports them.
+
 ## Documentation
 
 Full usage, API reference, and examples: [marko/broadcasting](https://marko.build/docs/packages/broadcasting/)

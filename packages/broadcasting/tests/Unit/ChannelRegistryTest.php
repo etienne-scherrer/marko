@@ -6,6 +6,8 @@ use Marko\Broadcasting\ChannelDefinition;
 use Marko\Broadcasting\ChannelRegistry;
 use Marko\Broadcasting\Discovery\BroadcastChannelDiscovery;
 use Marko\Broadcasting\Exceptions\ChannelAuthorizationException;
+use Marko\Broadcasting\PresenceMember;
+use Marko\Broadcasting\Tests\Fixtures\PresenceModule\RoomPresenceAuthorizer;
 use Marko\Broadcasting\Tests\Fixtures\ValidModule\AdminChannelAuthorizer;
 use Marko\Broadcasting\Tests\Fixtures\ValidModule\ShowChannelAuthorizer;
 use Marko\Core\Container\Container;
@@ -28,10 +30,10 @@ function broadcastChannelDiscovery(string $fixture): BroadcastChannelDiscovery
     );
 }
 
-function channelRegistry(): ChannelRegistry
+function channelRegistry(string $fixture = 'ValidModule'): ChannelRegistry
 {
     return new ChannelRegistry(
-        broadcastChannelDiscovery: broadcastChannelDiscovery('ValidModule'),
+        broadcastChannelDiscovery: broadcastChannelDiscovery($fixture),
         container: new Container(),
     );
 }
@@ -51,6 +53,14 @@ describe('BroadcastChannelDiscovery', function (): void {
                 'admin' => AdminChannelAuthorizer::class,
                 'shows.{showId}.seats.{seatId}' => ShowChannelAuthorizer::class,
             ]);
+    });
+
+    it('discovers presence channel authorizers', function (): void {
+        $definitions = broadcastChannelDiscovery('PresenceModule')->discover();
+
+        expect($definitions)->toHaveCount(1)
+            ->and($definitions[0]->pattern)->toBe('rooms.{roomId}')
+            ->and($definitions[0]->authorizerClass)->toBe(RoomPresenceAuthorizer::class);
     });
 
     it('throws when a BroadcastChannel class does not implement ChannelAuthorizerInterface', function (): void {
@@ -104,5 +114,53 @@ describe('ChannelRegistry', function (): void {
         sort($patterns);
 
         expect($patterns)->toBe(['admin', 'shows.{showId}.seats.{seatId}']);
+    });
+
+    it('returns the member when the presence authorizer allows the user', function (): void {
+        $member = channelRegistry('PresenceModule')->authorizePresence('rooms.7', new FakeAuthenticatable(id: 5));
+
+        expect($member)->toBeInstanceOf(PresenceMember::class)
+            ->and($member->id)->toBe(5);
+    });
+
+    it('returns null when the presence authorizer denies the user', function (): void {
+        expect(channelRegistry('PresenceModule')->authorizePresence('rooms.7', null))->toBeNull();
+    });
+
+    it('passes named pattern parameters to the presence authorizer', function (): void {
+        $member = channelRegistry('PresenceModule')->authorizePresence('rooms.lobby', new FakeAuthenticatable());
+
+        expect($member->info)->toBe(['room' => 'lobby']);
+    });
+
+    it('throws a clear exception when a private-only authorizer matches a presence channel', function (): void {
+        try {
+            channelRegistry()->authorizePresence('admin', new FakeAuthenticatable(id: 1));
+            $this->fail('Expected ChannelAuthorizationException');
+        } catch (ChannelAuthorizationException $exception) {
+            expect($exception->getMessage())->toContain(AdminChannelAuthorizer::class)
+                ->and($exception->getSuggestion())->toContain('PresenceChannelAuthorizerInterface');
+        }
+    });
+
+    it('throws a clear exception when a presence authorizer matches a private channel', function (): void {
+        try {
+            channelRegistry('PresenceModule')->authorize('rooms.7', new FakeAuthenticatable());
+            $this->fail('Expected ChannelAuthorizationException');
+        } catch (ChannelAuthorizationException $exception) {
+            expect($exception->getMessage())->toContain(RoomPresenceAuthorizer::class)
+                ->toContain("private channel 'rooms.7'")
+                ->and($exception->getSuggestion())->toContain('ChannelAuthorizerInterface');
+        }
+    });
+
+    it('throws ChannelAuthorizationException for an unknown presence channel', function (): void {
+        try {
+            channelRegistry('PresenceModule')->authorizePresence('lobbies.9', new FakeAuthenticatable());
+            $this->fail('Expected ChannelAuthorizationException');
+        } catch (ChannelAuthorizationException $exception) {
+            expect($exception->getMessage())->toContain("No authorizer is registered for presence channel 'lobbies.9'")
+                ->and($exception->getSuggestion())->toContain('PresenceChannelAuthorizerInterface');
+        }
     });
 });

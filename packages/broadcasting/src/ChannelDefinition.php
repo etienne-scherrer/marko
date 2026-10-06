@@ -7,7 +7,7 @@ namespace Marko\Broadcasting;
 readonly class ChannelDefinition
 {
     /**
-     * @param class-string<ChannelAuthorizerInterface> $authorizerClass
+     * @param class-string<ChannelAuthorizerInterface|PresenceChannelAuthorizerInterface> $authorizerClass
      */
     public function __construct(
         public string $pattern,

@@ -13,7 +13,7 @@ use Psr\Container\NotFoundExceptionInterface;
 use ReflectionException;
 
 /**
- * Authorizes private channel subscriptions against the discovered #[BroadcastChannel] authorizers.
+ * Authorizes private and presence channel subscriptions against the discovered #[BroadcastChannel] authorizers.
  *
  * Drivers call authorize() when they issue subscriber credentials. A channel with no matching
  * authorizer is denied loudly with an exception — private channels are never open by default.
@@ -44,13 +44,52 @@ class ChannelRegistry
                 continue;
             }
 
-            /** @var ChannelAuthorizerInterface $authorizer */
             $authorizer = $this->container->get($definition->authorizerClass);
 
+            if ($authorizer instanceof PresenceChannelAuthorizerInterface) {
+                throw ChannelAuthorizationException::privateAuthorizerRequired(
+                    $channelName,
+                    $definition->authorizerClass,
+                );
+            }
+
+            /** @var ChannelAuthorizerInterface $authorizer */
             return $authorizer->authorize($user, $params);
         }
 
         throw ChannelAuthorizationException::unknownChannel($channelName);
+    }
+
+    /**
+     * Authorize a presence channel subscription.
+     *
+     * @return PresenceMember|null The member to announce, or null when the user is denied
+     * @throws ChannelAuthorizationException|ReflectionException|ContainerExceptionInterface|NotFoundExceptionInterface
+     */
+    public function authorizePresence(
+        string $channelName,
+        ?AuthenticatableInterface $user,
+    ): ?PresenceMember {
+        foreach ($this->definitions() as $definition) {
+            $params = $definition->match($channelName);
+
+            if ($params === null) {
+                continue;
+            }
+
+            $authorizer = $this->container->get($definition->authorizerClass);
+
+            if (!$authorizer instanceof PresenceChannelAuthorizerInterface) {
+                throw ChannelAuthorizationException::presenceAuthorizerRequired(
+                    $channelName,
+                    $definition->authorizerClass,
+                );
+            }
+
+            return $authorizer->authorize($user, $params);
+        }
+
+        throw ChannelAuthorizationException::unknownPresenceChannel($channelName);
     }
 
     /**
