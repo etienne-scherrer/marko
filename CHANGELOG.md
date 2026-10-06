@@ -8,6 +8,86 @@ Entries from `0.4.0` onward are generated automatically by `bin/release.sh` from
 
 <!-- new-entries-below — do not remove this marker; bin/release.sh inserts new versions directly below it -->
 
+## [0.10.0] - 2026-10-06
+
+### Breaking Changes
+* fix!: filter when() and missing() in resource collections and nested resources by @markshust in https://github.com/marko-php/marko/pull/441
+* fix!: resolve session.path against the project root and refuse public/ by @markshust in https://github.com/marko-php/marko/pull/442
+* fix!: equalize login timing and reject non-string login credentials by @markshust in https://github.com/marko-php/marko/pull/444
+* fix!: enforce token tokenable_type and api token abilities in the gate by @markshust in https://github.com/marko-php/marko/pull/445
+* fix!: validate mail attachment header fields and stuff dots after bare lf by @markshust in https://github.com/marko-php/marko/pull/446
+* fix: preserve parameter default values in plugin interceptors by @markshust in https://github.com/marko-php/marko/pull/448
+* fix!: hmac-sign file cache entries before unserializing them by @markshust in https://github.com/marko-php/marko/pull/449
+* fix!: bind controller params from request input only via explicit attributes by @markshust in https://github.com/marko-php/marko/pull/450
+* fix!: keep credentialed requests out of the page cache by @markshust in https://github.com/marko-php/marko/pull/451
+* fix!: restrict url validation rule to http and https by default by @markshust in https://github.com/marko-php/marko/pull/452
+* fix!: reject empty and short webhook secrets by @markshust in https://github.com/marko-php/marko/pull/453
+* fix!: make mcp query_database read-only mode enforceable by @markshust in https://github.com/marko-php/marko/pull/454
+* fix!: measure numeric strings by length in min/max/between unless the field is numeric by @markshust in https://github.com/marko-php/marko/pull/455
+* fix!: compute amphp subscriber token mac over the encoded payload by @markshust in https://github.com/marko-php/marko/pull/456
+* fix!: confine local filesystem to its root and stop deleteDirectory following symlinks by @markshust in https://github.com/marko-php/marko/pull/457
+* fix!: restrict channel placeholder charset and refuse uri-template topics by @markshust in https://github.com/marko-php/marko/pull/458
+* fix!: register csrf middleware globally and support xsrf-token for spas by @markshust in https://github.com/marko-php/marko/pull/459
+* fix!: block ssrf in outgoing webhooks and stop following redirects by @markshust in https://github.com/marko-php/marko/pull/461
+* fix!: separate the admin guard and user provider from the frontend by @markshust in https://github.com/marko-php/marko/pull/463
+* fix!: sniff image format and set resource limits before imagick decodes input by @markshust in https://github.com/marko-php/marko/pull/464
+* fix!: limit database search to declared columns and escape like wildcards by @markshust in https://github.com/marko-php/marko/pull/465
+* fix!: stop leaking exception details from /health and enforce health.secret by @markshust in https://github.com/marko-php/marko/pull/466
+* fix!: reject bcrypt passwords over 72 bytes or containing nul by @markshust in https://github.com/marko-php/marko/pull/467
+* fix!: keep image/* wildcard in mimetypes from admitting svg by @markshust in https://github.com/marko-php/marko/pull/468
+* fix!: drop underscore header names in roadrunner request bridge by @markshust in https://github.com/marko-php/marko/pull/469
+* fix!: reject traversal values in route parameters by @markshust in https://github.com/marko-php/marko/pull/470
+* fix!: harden debugbar redaction, storage permissions and access control by @markshust in https://github.com/marko-php/marko/pull/472
+* fix!: give http-guzzle default timeouts, require guzzle ^7.9, and redact urls in exceptions by @markshust in https://github.com/marko-php/marko/pull/473
+* fix!: install a safe bootstrap error handler before application boot by @markshust in https://github.com/marko-php/marko/pull/475
+* fix!: default compiled-template cache to storage/views and refuse unsafe directories by @markshust in https://github.com/marko-php/marko/pull/477
+* fix!: guard mail-log against production and stop logging bodies outside dev by @markshust in https://github.com/marko-php/marko/pull/478
+* fix!: escape log control characters, restrict log file permissions, redact sensitive context by @markshust in https://github.com/marko-php/marko/pull/479
+* fix!: add owner-scoped markAsReadFor and deleteFor to notification repository by @markshust in https://github.com/marko-php/marko/pull/482
+* fix!: use native prepares and single statements on mysql by @markshust in https://github.com/marko-php/marko/pull/484
+* fix!: refuse untrusted discovery cache files and randomize temp names by @markshust in https://github.com/marko-php/marko/pull/486
+* fix!: return only aggregate counts from the amphp health endpoint by @markshust in https://github.com/marko-php/marko/pull/488
+* fix!: verify tls by default for pgsql, mysql, pubsub and rabbitmq transports by @markshust in https://github.com/marko-php/marko/pull/490
+* fix!: store media on the configured disk and verify uploaded tmp paths by @markshust in https://github.com/marko-php/marko/pull/491
+* fix!: enforce admin section permissions and class-level requirespermission by @markshust in https://github.com/marko-php/marko/pull/496
+* fix!: send security headers globally without overriding route headers by @markshust in https://github.com/marko-php/marko/pull/497
+* fix!: harden rate limiter against ipv6 rotation, cache fail-open and proxy ranges by @markshust in https://github.com/marko-php/marko/pull/498
+* fix!: allowlist mcp console commands, refuse production serving, tail logs by @markshust in https://github.com/marko-php/marko/pull/499
+* fix!: bound page cache key flooding and make tag indexing o(1) by @markshust in https://github.com/marko-php/marko/pull/500
+* fix!: derive hmac subkeys and bind cache macs to their key by @markshust in https://github.com/marko-php/marko/pull/501
+* feat!: add associated data, key rotation and per-cipher key length to encryption by @markshust in https://github.com/marko-php/marko/pull/502
+* fix!: expire remember-me tokens server-side and rotate session and csrf token on login and logout by @markshust in https://github.com/marko-php/marko/pull/503
+* fix!: remove config keys nothing reads and guard against new ones by @markshust in https://github.com/marko-php/marko/pull/504
+* fix!: verify #[WebhookEndpoint] routes and harden webhook replay, queue secrets and body parsing by @markshust in https://github.com/marko-php/marko/pull/505
+* fix!: add queue worker timeout, memory and job limits, and graceful shutdown by @markshust in https://github.com/marko-php/marko/pull/507
+* fix!: rehash passwords on login and back authentication with marko/hashing by @markshust in https://github.com/marko-php/marko/pull/508
+* feat!: throttle login attempts with lockout and exponential backoff by @markshust in https://github.com/marko-php/marko/pull/509
+### Bug Fixes
+* fix: reject truncated gcm auth tags and wrong-length ivs in openssl decrypt by @markshust in https://github.com/marko-php/marko/pull/439
+* fix: pass inner denials through layout middleware by @markshust in https://github.com/marko-php/marko/pull/440
+* fix: split sse data on every line terminator and reject nul in fields by @markshust in https://github.com/marko-php/marko/pull/443
+* fix: reject path traversal in template names by @markshust in https://github.com/marko-php/marko/pull/447
+* fix: enforce dimension and decompression-bomb limits in gd image processor by @markshust in https://github.com/marko-php/marko/pull/460
+* fix: read session rows from the primary on read/write split connections by @markshust in https://github.com/marko-php/marko/pull/462
+* fix: reject poison rabbitmq messages and ack only after a confirmed republish by @markshust in https://github.com/marko-php/marko/pull/474
+* fix: encode s3 copy source, reject unsafe paths, bound temporary url expiry by @markshust in https://github.com/marko-php/marko/pull/476
+* fix: resolve rollback migration names against known migration files by @markshust in https://github.com/marko-php/marko/pull/480
+* fix: render generated migration sql as escaped string literals by @markshust in https://github.com/marko-php/marko/pull/481
+* fix: validate devai orphan-skill names before recursive cleanup by @markshust in https://github.com/marko-php/marko/pull/485
+* fix: return 403 from pusher auth for channels with no authorizer by @markshust in https://github.com/marko-php/marko/pull/487
+* fix: mask credential headers and harden error handler fallbacks by @markshust in https://github.com/marko-php/marko/pull/489
+* fix: strip all secret-looking keys from failed login event credentials by @markshust in https://github.com/marko-php/marko/pull/492
+* fix: make discovery skips of files referencing missing marko classes visible by @markshust in https://github.com/marko-php/marko/pull/493
+* fix: harden devai supply chain by @markshust in https://github.com/marko-php/marko/pull/494
+* fix: quote smtp display names and validate envelope addresses by @markshust in https://github.com/marko-php/marko/pull/495
+### Testing
+* test: fix amphp token tests after channel charset change by @markshust in https://github.com/marko-php/marko/pull/471
+* test: fix csrf rotation encryptor fake after aad interface change by @markshust in https://github.com/marko-php/marko/pull/506
+* test: fix roadrunner e2e session-cookie assertion after global csrf by @markshust in https://github.com/marko-php/marko/pull/510
+### CI
+* fix: send packagist token in authorization header instead of url by @markshust in https://github.com/marko-php/marko/pull/483
+
+
 ## [0.9.0] - 2026-10-06
 
 ### Breaking Changes
