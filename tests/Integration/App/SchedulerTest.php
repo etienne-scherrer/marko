@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Marko\Scheduler\Mutex\FileTaskMutex;
 use Marko\Scheduler\Schedule;
 use Marko\Scheduler\ScheduledTask;
+use Psr\Clock\ClockInterface;
 
 /*
  * The scheduler through the real `schedule:run` command, with the tasks the
@@ -33,7 +34,10 @@ it('skips a scheduled task whose previous run is still in progress', function ()
 
     // A second mutex on the same directory stands in for the earlier run,
     // which would be another process holding the lock file.
-    $previousRun = new FileTaskMutex(directory: $this->project . '/storage/framework');
+    $previousRun = new FileTaskMutex(
+        directory: $this->project . '/storage/framework',
+        clock: $this->app->container->get(ClockInterface::class),
+    );
 
     expect($tasks)->toHaveCount(1)
         ->and($previousRun->acquire($tasks[0], 3600))->toBeTrue();
