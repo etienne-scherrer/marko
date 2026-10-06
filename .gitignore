@@ -28,3 +28,6 @@ vendor/
 # dev conveniences, never committed.
 /rr
 /.rr.yaml
+
+# Claude Code agent worktrees
+.claude/worktrees/
