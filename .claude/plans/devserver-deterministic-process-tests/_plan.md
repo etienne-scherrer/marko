@@ -46,6 +46,7 @@ Closes #219
 | 002 | Replace fixed sleeps in ProcessManagerTest with polling | 001 | completed |
 | 003 | Document stop semantics | 001 | completed |
 | 004 | Polling start() probe (found by stress run) | 001 | completed |
+| 005 | exec the setsid wrapper so the PID is the session leader (found by CI) | 001 | completed |
 
 ## Architecture Notes
 - The process group id equals the leader PID because the wrapper calls `posix_setsid()` before `pcntl_exec()`.
